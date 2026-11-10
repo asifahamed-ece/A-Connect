@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A+ Connect</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Custom Titlebar (matching O+ Connect style) -->
+  <div class="titlebar">
+    <div class="titlebar-drag">
+      <img src="../assets/icon.png" alt="A+ Connect" class="titlebar-icon">
+      <span class="titlebar-title">A+ Connect</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="titlebar-btn minimize" onclick="window.api.minimizeWindow()">
+        <svg width="12" height="1" viewBox="0 0 12 1"><rect width="12" height="1" fill="currentColor"/></svg>
+      </button>
+      <button class="titlebar-btn close" onclick="window.api.closeWindow()">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- Main Device Card -->
+    <div id="device-card" class="device-card" style="display: none;">
+      <div class="device-header">
+        <div class="device-brand" id="device-brand">OPPO</div>
+        <div class="device-model" id="device-model">Reno 14 5G</div>
+      </div>
+
+      <div class="device-telemetry">
+        <div class="telemetry-item">
+          <div class="telemetry-icon">🔋</div>
+          <div class="telemetry-value" id="battery-level">100%</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-icon">📱</div>
+          <div class="telemetry-value" id="coloros-version">ColorOS 16</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-icon">🌐</div>
+          <div class="telemetry-value" id="device-connection">Wi-Fi</div>
+        </div>
+      </div>
+
+      <div class="device-actions">
+        <button class="action-btn primary" id="btn-mirror" onclick="toggleMirroring()">
+          <span class="btn-icon">🖥</span>
+          <span class="btn-label">Screen Mirror</span>
+        </button>
+        <button class="action-btn" id="btn-files" onclick="showFileTransfer()">
+          <span class="btn-icon">📂</span>
+          <span class="btn-label">Files</span>
+        </button>
+        <button class="action-btn" id="btn-notifications" onclick="showNotifications()">
+          <span class="btn-icon">🔔</span>
+          <span class="btn-label">Notifications</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Connection Setup Panel -->
+    <div id="connection-panel" class="connection-panel">
+      <div class="connection-header">
+        <h2>Connect Your Device</h2>
+        <p class="connection-subtitle">Connect via Wi-Fi for wireless freedom</p>
+      </div>
+
+      <div class="connection-modes">
+        <div class="mode-card active" id="mode-wifi" onclick="selectMode('wifi')">
+          <div class="mode-icon">📡</div>
+          <div class="mode-title">Wi-Fi Connection</div>
+          <div class="mode-desc">Wireless, fast & seamless</div>
+        </div>
+        <div class="mode-card" id="mode-usb" onclick="selectMode('usb')">
+          <div class="mode-icon">🔌</div>
+          <div class="mode-title">USB Direct</div>
+          <div class="mode-desc">Plug & play (auto-detect)</div>
+        </div>
+      </div>
+
+      <div id="wifi-setup" class="setup-section">
+        <div class="setup-step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <p>On your <strong>Oppo Reno 14 5G</strong>, enable <strong>Wireless debugging</strong>:</p>
+            <p class="step-detail">Settings → Developer options → Wireless debugging → ON</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <p>Tap <strong>"Pair device with pairing code"</strong> to get the IP, Port, and 6-digit code.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <p>Enter pairing details below:</p>
+            <div class="input-group">
+              <input type="text" id="pair-ip" placeholder="IP (e.g. 192.168.1.100)" class="input-field">
+              <input type="text" id="pair-port" placeholder="Port (e.g. 37853)" class="input-field small">
+              <input type="text" id="pair-code" placeholder="6-digit code" class="input-field small" maxlength="6">
+            </div>
+            <button class="btn-connect" id="btn-pair" onclick="pairDevice()">
+              <span>🔐 Pair Device</span>
+            </button>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <p>Once paired, connect using the IP shown under <strong>"Wireless debugging"</strong>:</p>
+            <div class="input-group">
+              <input type="text" id="connect-ip" placeholder="IP Address (e.g. 192.168.1.100)" class="input-field">
+              <input type="text" id="connect-port" placeholder="Port (default: 5555)" class="input-field small" value="5555">
+            </div>
+            <button class="btn-connect primary" id="btn-connect" onclick="connectWifi()">
+              <span>✨ Connect via Wi-Fi</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="usb-setup" class="setup-section" style="display: none;">
+        <div class="usb-status">
+          <div class="usb-icon">🔌</div>
+          <p>Plug your device into a USB port and it will be detected automatically.</p>
+          <p class="usb-note">Ensure USB debugging is enabled on your device.</p>
+        </div>
+        <button class="btn-connect" onclick="checkUsbDevices()">
+          <span>🔍 Check USB Devices</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- File Transfer Panel -->
+    <div id="file-panel" class="feature-panel" style="display: none;">
+      <div class="panel-header">
+        <button class="back-btn" onclick="showHome()">← Back</button>
+        <h2>File Transfer</h2>
+      </div>
+      <div class="file-drop-zone" id="drop-zone">
+        <div class="drop-icon">📂</div>
+        <p class="drop-text">Drag files here or click to browse</p>
+        <p class="drop-hint">Photos, videos, documents → straight to Downloads</p>
+        <button class="btn-browse" onclick="browseFiles()">Browse Files</button>
+      </div>
+      <div class="transfer-log" id="transfer-log"></div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div id="notifications-panel" class="feature-panel" style="display: none;">
+      <div class="panel-header">
+        <button class="back-btn" onclick="showHome()">← Back</button>
+        <h2>Notifications</h2>
+        <button class="btn-clear" onclick="clearNotifications()">Clear All</button>
+      </div>
+      <div class="notifications-list" id="notifications-list">
+        <div class="empty-state">No notifications yet</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

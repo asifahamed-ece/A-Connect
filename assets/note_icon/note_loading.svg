@@ -1,0 +1,15 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 定义旋转动画 -->
+    <style>
+      @keyframes rotate {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </defs>
+  <rect width="40" height="40" rx="6" fill="#D4D4D4" fill-opacity="0.2"/>
+  <path d="M26.3337 20.0003C26.3337 16.5025 23.4981 13.667 20.0003 13.667C16.5025 13.667 13.667 16.5025 13.667 20.0003C13.667 23.4981 16.5025 26.3337 20.0003 26.3337" 
+        stroke="black" stroke-opacity="0.54" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"
+        style="animation: rotate 1s linear infinite; transform-origin: 20px 20px;" />
+</svg>
