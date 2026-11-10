@@ -1,0 +1,22 @@
+{
+  "name": "a-plus-connect",
+  "version": "1.0.0",
+  "description": "Seamless Linux companion for OPPO Reno & ColorOS devices (O+ Connect Linux Alternative)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --disable-vulkan",
+    "dev": "electron . --disable-vulkan"
+  },
+  "keywords": [
+    "oppo",
+    "coloros",
+    "scrcpy",
+    "screen-mirroring",
+    "kde",
+    "plasma",
+    "linux",
+    "oplus"
+  ],
+  "author": "Asif Ahamed",
+  "license": "MIT"
+}
