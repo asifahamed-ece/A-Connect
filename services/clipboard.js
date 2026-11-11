@@ -59,6 +59,49 @@ class ClipboardSyncService extends EventEmitter {
     this.lastDesktopText = '';
     this.lastPhoneText = '';
     this.history = [];
+    this.companion = null;
+  }
+
+  setCompanion(companion) {
+    if (this.companion === companion) return;
+    this.companion = companion;
+
+    companion.on('clipboard', ({ text }) => {
+      void this.receiveFromPhone(text);
+    });
+
+    companion.on('status', () => {
+      this.updateStatusFromSources();
+      this.ensurePolling();
+    });
+
+    this.updateStatusFromSources();
+    this.ensurePolling();
+  }
+
+  ensurePolling() {
+    const hasTarget = Boolean(this.child || (this.companion && this.companion.isConnected));
+    if (this.enabled && hasTarget) {
+      if (!this.pollTimer) {
+        this.pollTimer = setInterval(() => this.pollDesktopClipboard(), this.pollInterval);
+      }
+    } else if (this.pollTimer && !hasTarget) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  updateStatusFromSources() {
+    if (this.companion && this.companion.isConnected) {
+      const device = this.companion.connectedClients[0];
+      this.setStatus('syncing', device?.deviceName || 'Companion');
+    } else if (this.child) {
+      this.setStatus('syncing', this.deviceId);
+    } else if (this.companion && this.companion.status === 'listening') {
+      this.setStatus('idle', `Companion ready (Code: ${this.companion.pairingCode})`);
+    } else {
+      this.setStatus('idle');
+    }
   }
 
   setStatus(status, detail) {
@@ -67,7 +110,7 @@ class ClipboardSyncService extends EventEmitter {
   }
 
   async start(deviceId) {
-    this.stop();
+    this.stopBridge();
     this.deviceId = deviceId;
     this.lastPhoneText = '';
 
@@ -77,16 +120,10 @@ class ClipboardSyncService extends EventEmitter {
     if (this.deviceId !== deviceId) return; // stopped while the read was in flight
 
     this.spawnBridge();
-
-    this.pollTimer = setInterval(() => this.pollDesktopClipboard(), this.pollInterval);
+    this.ensurePolling();
   }
 
-  stop() {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-
+  stopBridge() {
     if (this.child) {
       const child = this.child;
       this.child = null;
@@ -100,7 +137,17 @@ class ClipboardSyncService extends EventEmitter {
     }
 
     this.deviceId = null;
-    this.setStatus('idle');
+    this.updateStatusFromSources();
+    this.ensurePolling();
+  }
+
+  stop() {
+    this.stopBridge();
+    if (this.pollTimer && (!this.companion || !this.companion.isConnected)) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.updateStatusFromSources();
   }
 
   async setEnabled(enabled) {
@@ -310,7 +357,8 @@ class ClipboardSyncService extends EventEmitter {
     // would race each other and report the same value more than once. Polls are
     // also suspended while a write is in flight, so a half-applied write cannot
     // be mistaken for a fresh user copy.
-    if (!this.enabled || !this.child || this.polling || this.writing > 0) return;
+    const hasTarget = Boolean(this.child || (this.companion && this.companion.isConnected));
+    if (!this.enabled || !hasTarget || this.polling || this.writing > 0) return;
 
     this.polling = true;
     try {
@@ -325,12 +373,26 @@ class ClipboardSyncService extends EventEmitter {
       if (text.length > this.maxTextLength) return;
 
       this.lastPhoneText = text;
-      try {
-        this.child.send({ cmd: 'set', text });
+      let sent = false;
+
+      if (this.companion && this.companion.isConnected) {
+        if (this.companion.sendClipboard(text)) {
+          sent = true;
+        }
+      }
+
+      if (this.child) {
+        try {
+          this.child.send({ cmd: 'set', text });
+          sent = true;
+        } catch {
+          // Bridge died between the check and the send.
+        }
+      }
+
+      if (sent) {
         this.record('desktop-to-phone', text);
         this.emit('synced', { direction: 'desktop-to-phone', text });
-      } catch {
-        // Bridge died between the check and the send.
       }
     } finally {
       this.polling = false;
@@ -339,16 +401,28 @@ class ClipboardSyncService extends EventEmitter {
 
   pushToPhone(text) {
     if (typeof text !== 'string' || !text) return false;
-    if (!this.child) return false;
-    try {
-      this.child.send({ cmd: 'set', text });
+    let sent = false;
+
+    if (this.companion && this.companion.isConnected) {
+      if (this.companion.sendClipboard(text)) {
+        sent = true;
+      }
+    }
+
+    if (this.child) {
+      try {
+        this.child.send({ cmd: 'set', text });
+        sent = true;
+      } catch {}
+    }
+
+    if (sent) {
       this.lastPhoneText = text;
       this.record('desktop-to-phone', text);
       this.emit('synced', { direction: 'desktop-to-phone', text });
       return true;
-    } catch {
-      return false;
     }
+    return false;
   }
 
   record(direction, text) {

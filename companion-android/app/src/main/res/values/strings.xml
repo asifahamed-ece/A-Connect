@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">A+ Connect Companion</string>
+    <string name="watcher_label">A+ Connect clipboard watcher</string>
+    <string name="watcher_description">Notices when you copy something, so A+ Connect can send it to your computer. It cannot see the contents of your screen.</string>
+</resources>

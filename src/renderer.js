@@ -82,8 +82,8 @@ const VIEWS = ['empty', 'device', 'files', 'notifications', 'clipboard'];
 function showView(name) {
   if (!VIEWS.includes(name)) return;
 
-  // Without a device, the only useful screen is the empty state.
-  if (!state.device && name !== 'empty') {
+  // Without a device or companion, only the empty screen is available (clipboard is allowed if companion is active)
+  if (!state.device && !state.companionConnected && name !== 'empty') {
     name = 'empty';
   }
 
@@ -764,6 +764,62 @@ async function refreshClipboardStatus() {
   }
 }
 
+async function refreshCompanionInfo() {
+  try {
+    if (!window.api.getCompanionInfo) return;
+    const info = await window.api.getCompanionInfo();
+    applyCompanionInfo(info);
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyCompanionInfo(info) {
+  if (!info) return;
+  state.companionConnected = Boolean(info.connected);
+  const pill = $('companion-pill');
+  const detail = $('companion-detail');
+  const badge = $('companion-badge');
+  const codeEl = $('companion-code');
+  const destEl = $('companion-dest-path');
+
+  if (codeEl) codeEl.textContent = info.code || '099368';
+  if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
+
+  if (info.connected) {
+    const client = info.clients?.[0];
+    if (pill) {
+      pill.textContent = 'Connected';
+      pill.className = 'pill syncing';
+    }
+    if (detail) {
+      detail.textContent = `Connected to ${client?.deviceName || 'Phone'} (${client?.ip || info.address}) over TLS 1.3`;
+    }
+    if (badge) {
+      badge.innerHTML = `🔒 <strong>TLS Pinned</strong>`;
+    }
+  } else if (info.status === 'listening') {
+    if (pill) {
+      pill.textContent = 'Listening';
+      pill.className = 'pill idle';
+    }
+    if (detail) {
+      detail.textContent = `Ready on ${info.address}:${info.port}. Enter pairing code on phone.`;
+    }
+    if (badge) {
+      badge.innerHTML = `Code: <strong id="companion-code">${info.code || '099368'}</strong>`;
+    }
+  } else {
+    if (pill) {
+      pill.textContent = 'Offline';
+      pill.className = 'pill disconnected';
+    }
+    if (detail) {
+      detail.textContent = 'Companion TLS server is not running.';
+    }
+  }
+}
+
 async function loadClipboardHistory() {
   try {
     state.clipboard = await window.api.getClipboardHistory();
@@ -1149,6 +1205,38 @@ function initClipboard() {
       toast('Could not copy', 'err');
     }
   });
+
+  const btnOpenDest = $('btn-open-dest');
+  if (btnOpenDest) {
+    btnOpenDest.addEventListener('click', () => {
+      window.api.openCompanionDestinationDir?.();
+    });
+  }
+  const btnChangeDest = $('btn-change-dest');
+  if (btnChangeDest) {
+    btnChangeDest.addEventListener('click', async () => {
+      const newDir = await window.api.selectCompanionDestinationDir?.();
+      if (newDir) {
+        const destEl = $('companion-dest-path');
+        if (destEl) destEl.textContent = newDir;
+        toast(`Destination set to ${newDir}`);
+      }
+    });
+  }
+
+  if (window.api.onCompanionStatus) {
+    window.api.onCompanionStatus(() => refreshCompanionInfo());
+  }
+  if (window.api.onCompanionPaired) {
+    window.api.onCompanionPaired((d) => {
+      toast(`Phone paired: ${d.deviceName || d.deviceId}`);
+      refreshCompanionInfo();
+    });
+  }
+  if (window.api.onCompanionDisconnected) {
+    window.api.onCompanionDisconnected(() => refreshCompanionInfo());
+  }
+  refreshCompanionInfo();
 }
 
 function initDeviceEvents() {

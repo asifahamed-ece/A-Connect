@@ -326,12 +326,36 @@
           <div class="card row-card">
             <div>
               <div class="row-title">Sync clipboard with phone</div>
-              <div class="row-sub">Works without any app on the phone, over the active connection.</div>
+              <div class="row-sub">Bidirectional clipboard sync over active connection or TLS companion.</div>
             </div>
             <label class="switch">
               <input type="checkbox" id="clip-toggle">
               <span class="switch-track" aria-hidden="true"></span>
             </label>
+          </div>
+
+          <div class="card row-card" id="companion-card" style="margin-top: 10px;">
+            <div>
+              <div class="row-title" style="display: flex; align-items: center; gap: 8px;">
+                <span>Companion TLS Sync</span>
+                <span class="pill" id="companion-pill">Starting…</span>
+              </div>
+              <div class="row-sub" id="companion-detail">Pure TLS client: no open debugging ports, seamless LAN sync.</div>
+            </div>
+            <div id="companion-badge" style="font-family: monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.5px;">
+              Code: <strong id="companion-code">099368</strong>
+            </div>
+          </div>
+
+          <div class="card row-card" id="destination-card" style="margin-top: 10px;">
+            <div>
+              <div class="row-title">Save received files to</div>
+              <div class="row-sub" id="companion-dest-path" style="font-family: monospace; font-size: 12px;">~/Downloads</div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-ghost" id="btn-open-dest" style="padding: 6px 12px; font-size: 12px;">Open</button>
+              <button class="btn btn-secondary" id="btn-change-dest" style="padding: 6px 12px; font-size: 12px;">Change…</button>
+            </div>
           </div>
 
           <div class="list" id="clipboard-list">
