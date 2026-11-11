@@ -258,6 +258,21 @@ function setupServiceEvents() {
     updateTrayMenu();
     sendToRenderer('event:companion-disconnected', data);
   });
+
+  companion.on('file-transfer-start', (data) => {
+    sendToRenderer('event:transfer-progress', { status: 'transferring', progress: 0, ...data });
+  });
+
+  companion.on('file-transfer-progress', (data) => {
+    sendToRenderer('event:transfer-progress', { status: 'transferring', ...data });
+  });
+
+  companion.on('file-transfer-done', (data) => {
+    sendToRenderer('event:transfer-progress', { status: 'completed', progress: 100, ...data });
+    try {
+      execFile('notify-send', ['-a', 'A+ Connect', 'File Received', `${data.name} saved to Downloads`]);
+    } catch {}
+  });
 }
 
 // IPC Handlers
@@ -378,6 +393,29 @@ function setupIpcHandlers() {
     companion.pairingCode = code;
     companion.saveSettings();
     return companion.getInfo();
+  });
+  ipcMain.handle('companion:setDestinationDir', async (_, dirPath) => {
+    return companion.setDestinationDir(dirPath);
+  });
+  ipcMain.handle('companion:selectDestinationDir', async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Destination Folder for Received Files',
+      defaultPath: companion.destinationDir,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!result.canceled && result.filePaths.length > 0) {
+      return companion.setDestinationDir(result.filePaths[0]);
+    }
+    return companion.destinationDir;
+  });
+  ipcMain.handle('companion:openDestinationDir', async () => {
+    const { shell } = require('electron');
+    if (fs.existsSync(companion.destinationDir)) {
+      shell.openPath(companion.destinationDir);
+      return true;
+    }
+    return false;
   });
 
   ipcMain.handle('ui:confirm', async (_, options = {}) => {

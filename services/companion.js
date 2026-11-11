@@ -33,6 +33,7 @@ class CompanionService extends EventEmitter {
     this.pairedDevices = {};
     this.pairingCode = null;
     this.pairingCodeExpiresAt = 0;
+    this.destinationDir = options.destinationDir || path.join(os.homedir(), 'Downloads');
 
     this.loadPairedDevices();
     this.generatePairingCode();
@@ -178,6 +179,12 @@ class CompanionService extends EventEmitter {
     });
 
     socket.on('close', () => {
+      if (socket.activeTransfers) {
+        for (const t of socket.activeTransfers.values()) {
+          try { t.stream.destroy(); } catch {}
+        }
+        socket.activeTransfers.clear();
+      }
       this.clients.delete(socket);
       if (socket.handshakeDone) {
         console.log(`[companion] phone disconnected: ${socket.deviceName || socket.clientIp}`);
@@ -291,6 +298,21 @@ class CompanionService extends EventEmitter {
       return;
     }
 
+    if (message.type === protocol.TYPES.FILE_START) {
+      this.handleFileStart(socket, message.payload);
+      return;
+    }
+
+    if (message.type === protocol.TYPES.FILE_CHUNK) {
+      this.handleFileChunk(socket, message.payload);
+      return;
+    }
+
+    if (message.type === protocol.TYPES.FILE_DONE) {
+      this.handleFileDone(socket, message.payload);
+      return;
+    }
+
     if (message.type === protocol.TYPES.PING) {
       socket.write(
         protocol.encode({
@@ -302,6 +324,94 @@ class CompanionService extends EventEmitter {
         })
       );
     }
+  }
+
+  setDestinationDir(dirPath) {
+    if (typeof dirPath === 'string' && dirPath.trim()) {
+      this.destinationDir = dirPath.trim();
+      if (!fs.existsSync(this.destinationDir)) {
+        try { fs.mkdirSync(this.destinationDir, { recursive: true }); } catch {}
+      }
+      this.emit('destination-dir-updated', this.destinationDir);
+      return this.destinationDir;
+    }
+    return this.destinationDir;
+  }
+
+  handleFileStart(socket, payload) {
+    const { id, name, size } = payload;
+    const destDir = this.destinationDir || path.join(os.homedir(), 'Downloads');
+    if (!fs.existsSync(destDir)) {
+      try { fs.mkdirSync(destDir, { recursive: true }); } catch {}
+    }
+
+    let safeName = path.basename(name || 'transfer').replace(/[^a-zA-Z0-9._-]/g, '_');
+    let targetPath = path.join(destDir, safeName);
+    let counter = 1;
+    const ext = path.extname(safeName);
+    const base = path.basename(safeName, ext);
+    while (fs.existsSync(targetPath)) {
+      safeName = `${base} (${counter++})${ext}`;
+      targetPath = path.join(destDir, safeName);
+    }
+
+    const stream = fs.createWriteStream(targetPath);
+    if (!socket.activeTransfers) socket.activeTransfers = new Map();
+    socket.activeTransfers.set(id, {
+      id,
+      name: safeName,
+      targetPath,
+      size,
+      received: 0,
+      stream,
+      startedAt: Date.now(),
+    });
+
+    console.log(`[companion] incoming file from ${socket.deviceName}: ${safeName} (${size} bytes)`);
+    this.emit('file-transfer-start', {
+      id,
+      name: safeName,
+      size,
+      deviceName: socket.deviceName
+    });
+  }
+
+  handleFileChunk(socket, payload) {
+    const { id, chunkIndex, data } = payload;
+    const transfer = socket.activeTransfers?.get(id);
+    if (!transfer) return;
+
+    try {
+      const buffer = Buffer.from(data, 'base64');
+      transfer.stream.write(buffer);
+      transfer.received += buffer.length;
+      this.emit('file-transfer-progress', {
+        id,
+        received: transfer.received,
+        total: transfer.size,
+        progress: transfer.size > 0 ? transfer.received / transfer.size : 0,
+      });
+    } catch (e) {
+      console.error(`[companion] error writing file chunk for ${id}:`, e.message);
+    }
+  }
+
+  handleFileDone(socket, payload) {
+    const { id } = payload;
+    const transfer = socket.activeTransfers?.get(id);
+    if (!transfer) return;
+
+    transfer.stream.end(() => {
+      console.log(`[companion] file saved successfully to ${transfer.targetPath}`);
+      socket.activeTransfers.delete(id);
+      this.emit('file-transfer-done', {
+        id,
+        name: transfer.name,
+        path: transfer.targetPath,
+        size: transfer.received,
+        deviceName: socket.deviceName,
+      });
+    });
   }
 
   sendClipboard(text) {
@@ -381,6 +491,7 @@ class CompanionService extends EventEmitter {
       connected: this.isConnected,
       clients: this.connectedClients,
       pairedDevices: Object.values(this.pairedDevices),
+      destinationDir: this.destinationDir,
     };
   }
 }

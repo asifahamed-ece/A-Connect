@@ -781,8 +781,10 @@ function applyCompanionInfo(info) {
   const detail = $('companion-detail');
   const badge = $('companion-badge');
   const codeEl = $('companion-code');
+  const destEl = $('companion-dest-path');
 
   if (codeEl) codeEl.textContent = info.code || '099368';
+  if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
 
   if (info.connected) {
     const client = info.clients?.[0];
@@ -1203,6 +1205,24 @@ function initClipboard() {
       toast('Could not copy', 'err');
     }
   });
+
+  const btnOpenDest = $('btn-open-dest');
+  if (btnOpenDest) {
+    btnOpenDest.addEventListener('click', () => {
+      window.api.openCompanionDestinationDir?.();
+    });
+  }
+  const btnChangeDest = $('btn-change-dest');
+  if (btnChangeDest) {
+    btnChangeDest.addEventListener('click', async () => {
+      const newDir = await window.api.selectCompanionDestinationDir?.();
+      if (newDir) {
+        const destEl = $('companion-dest-path');
+        if (destEl) destEl.textContent = newDir;
+        toast(`Destination set to ${newDir}`);
+      }
+    });
+  }
 
   if (window.api.onCompanionStatus) {
     window.api.onCompanionStatus(() => refreshCompanionInfo());

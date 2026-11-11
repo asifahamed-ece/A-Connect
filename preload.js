@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('api', {
   setCompanionCode: (code) => ipcRenderer.invoke('companion:setCode', code),
   startCompanion: (port) => ipcRenderer.invoke('companion:start', port),
   stopCompanion: () => ipcRenderer.invoke('companion:stop'),
+  setCompanionDestinationDir: (dir) => ipcRenderer.invoke('companion:setDestinationDir', dir),
+  selectCompanionDestinationDir: () => ipcRenderer.invoke('companion:selectDestinationDir'),
+  openCompanionDestinationDir: () => ipcRenderer.invoke('companion:openCompanionDestinationDir'),
 
   // System & Window
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
