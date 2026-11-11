@@ -216,6 +216,120 @@ class FileTransferService extends EventEmitter {
     return { success: true };
   }
 
+  /**
+   * Parse one `content query` row: "Row: 0 key=value, key=value, ...".
+   * Values may contain commas and equals signs, so keys are located by name
+   * instead of splitting on ", ".
+   */
+  parseContentRow(line) {
+    const body = line.match(/^Row: \d+ (.*)$/)?.[1];
+    if (!body) return null;
+
+    const keys = ['_display_name', '_data', '_size', 'date_modified', 'mime_type'];
+    const found = [];
+    for (const key of keys) {
+      const idx = body.indexOf(`${key}=`);
+      if (idx >= 0) found.push({ key, idx });
+    }
+    found.sort((a, b) => a.idx - b.idx);
+    if (found.length === 0) return null;
+
+    const row = {};
+    for (let i = 0; i < found.length; i++) {
+      const { key, idx } = found[i];
+      const start = idx + key.length + 1;
+      const end = i + 1 < found.length ? found[i + 1].idx - 2 : body.length;
+      row[key] = body.slice(start, end);
+    }
+    return row;
+  }
+
+  /** Turn MediaStore rows into browser entries, deduped by path. */
+  mapMediaRows(stdout, limit) {
+    const seen = new Set();
+    const entries = [];
+
+    for (const line of stdout.split('\n')) {
+      const row = this.parseContentRow(line);
+      if (!row?._data) continue;
+
+      // MediaStore reports /storage/emulated/0; the browser speaks /sdcard.
+      const path = row._data.replace(/^\/storage\/emulated\/\d+/, '/sdcard');
+      if (seen.has(path)) continue;
+      seen.add(path);
+
+      const name = row._display_name || path.split('/').pop();
+      const mime = row.mime_type || '';
+      entries.push({
+        name,
+        path,
+        size: Number(row._size) || 0,
+        mtime: (Number(row.date_modified) || 0) * 1000,
+        mime,
+        // Folder rows carry no MIME type in the files table.
+        isDir: mime === 'NULL' || mime === '',
+      });
+    }
+
+    entries.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+
+    return entries.slice(0, limit);
+  }
+
+  /**
+   * Search the phone by filename. Uses MediaStore (the phone's own media
+   * index, ~30k rows here) because it answers in ~2s; a recursive `find` over
+   * the same tree takes 23s, which is unusable while typing.
+   */
+  async searchFiles(deviceId, query, limit = 200) {
+    const term = String(query || '').trim();
+    if (!term) return [];
+
+    const escaped = term.replace(/'/g, "''");
+    const args = [];
+    if (deviceId) args.push('-s', deviceId);
+    args.push(
+      'shell',
+      'content query --uri content://media/external/file' +
+        ' --projection _display_name:_data:_size:date_modified:mime_type' +
+        ` --where "_display_name LIKE '%${escaped}%'"`
+    );
+
+    const { stdout } = await execFileAsync(this.adbPath, args, {
+      timeout: 30000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+
+    return this.mapMediaRows(stdout, limit);
+  }
+
+  /** Files added or changed in the last `days` days, newest first. */
+  async recentFiles(deviceId, days = 30, limit = 200) {
+    const since = Math.floor(Date.now() / 1000) - days * 86400;
+    const args = [];
+    if (deviceId) args.push('-s', deviceId);
+    args.push(
+      'shell',
+      'content query --uri content://media/external/file' +
+        ' --projection _display_name:_data:_size:date_modified:mime_type' +
+        ` --where "date_modified > ${since}"` +
+        " --sort 'date_modified DESC'"
+    );
+
+    const { stdout } = await execFileAsync(this.adbPath, args, {
+      timeout: 30000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+
+    // mapMediaRows sorts by name; recent must stay newest-first.
+    return this.mapMediaRows(stdout, Number.MAX_SAFE_INTEGER)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, limit);
+  }
+
   async listRecentPhotos(deviceId, limit = 20) {
     const args = [];
     if (deviceId) args.push('-s', deviceId);
