@@ -1,8 +1,16 @@
 const { spawn, execFile } = require('child_process');
+const { promisify } = require('util');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const EventEmitter = require('events');
+
+const execFileAsync = promisify(execFile);
+
+// Single-quote a path for the device shell, so names with spaces survive.
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
 
 class FileTransferService extends EventEmitter {
   constructor(adbPath = 'adb') {
@@ -86,8 +94,10 @@ class FileTransferService extends EventEmitter {
           const targetPath = `${remoteDestDir.replace(/\/$/, '')}/${filename}`;
           await this.triggerMediaScan(deviceId, targetPath).catch(() => {});
 
-          // Show notification on phone that file was received
-          await this.sendNotificationToDevice(deviceId, '📂 A+ Connect', `File received: ${filename}`).catch(() => {});
+          // Deliberately no `cmd notification post` here: shell-owned
+          // notifications show up as "Shell" and cannot carry a tap intent, so
+          // they could never open the file. The media scan is what makes the
+          // file appear in Downloads / Photos.
 
           this.emit('transfer-completed', {
             id: transferId,
@@ -129,16 +139,81 @@ class FileTransferService extends EventEmitter {
     });
   }
 
-  async sendNotificationToDevice(deviceId, title, message) {
+  async sendNotificationToDevice(deviceId, title, message, tag = 'aplus_connect') {
     const args = [];
     if (deviceId) args.push('-s', deviceId);
-    args.push('shell', 'cmd', 'notification', 'post', '-t', title, 'aplus_connect', message);
+    // One shell string with quoting: passing argv separately lets adb re-split
+    // the title, so "Screen mirroring is active" becomes four arguments.
+    args.push(
+      'shell',
+      `cmd notification post -t ${shellQuote(title)} ${shellQuote(tag)} ${shellQuote(message)}`
+    );
 
     return new Promise((resolve) => {
       execFile(this.adbPath, args, { timeout: 3000 }, (error) => {
         resolve(!error);
       });
     });
+  }
+
+  /**
+   * Directory listing through the adb sync protocol (`adb ls`), not the device
+   * shell: the output is "mode size mtime name" with the three numeric fields in
+   * hex and the name last, so names containing spaces are unambiguous.
+   */
+  async listDirectory(deviceId, remotePath = '/sdcard') {
+    const args = [];
+    if (deviceId) args.push('-s', deviceId);
+    args.push('ls', remotePath);
+
+    const { stdout } = await execFileAsync(this.adbPath, args, {
+      timeout: 10000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+
+    const entries = [];
+    for (const line of stdout.split('\n')) {
+      const match = line.match(/^([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s([\s\S]*)$/);
+      if (!match) continue;
+
+      const mode = parseInt(match[1], 16);
+      const size = parseInt(match[2], 16);
+      const mtime = parseInt(match[3], 16) * 1000;
+      const name = match[4];
+      if (!name || name === '.' || name === '..') continue;
+
+      entries.push({
+        name,
+        size,
+        mtime,
+        isDir: (mode & 0o170000) === 0o040000,
+        isLink: (mode & 0o170000) === 0o120000,
+        path: remotePath.replace(/\/$/, '') + '/' + name,
+      });
+    }
+
+    entries.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+
+    return entries;
+  }
+
+  async deletePath(deviceId, remotePath) {
+    const args = [];
+    if (deviceId) args.push('-s', deviceId);
+    args.push('shell', `rm -rf ${shellQuote(remotePath)}`);
+    await execFileAsync(this.adbPath, args, { timeout: 15000 });
+    return { success: true };
+  }
+
+  async makeDirectory(deviceId, remotePath) {
+    const args = [];
+    if (deviceId) args.push('-s', deviceId);
+    args.push('shell', `mkdir -p ${shellQuote(remotePath)}`);
+    await execFileAsync(this.adbPath, args, { timeout: 8000 });
+    return { success: true };
   }
 
   async listRecentPhotos(deviceId, limit = 20) {
@@ -188,13 +263,13 @@ class FileTransferService extends EventEmitter {
 
         if (this.cancelled.has(transferId)) {
           this.cancelled.delete(transferId);
-          this.emit('transfer-cancelled', { id: transferId, type: 'pull' });
+          this.emit('transfer-cancelled', { id: transferId, filename, type: 'pull' });
           resolve({ success: false, cancelled: true });
           return;
         }
 
         if (code === 0) {
-          this.emit('transfer-completed', { id: transferId, type: 'pull', localTarget });
+          this.emit('transfer-completed', { id: transferId, type: 'pull', filename, localTarget });
           resolve({ success: true, localTarget });
         } else {
           const err = new Error(`File pull failed with exit code ${code}`);
