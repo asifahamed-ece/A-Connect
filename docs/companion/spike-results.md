@@ -37,52 +37,77 @@ the app supplies its own ground truth instead of guessing.
 | ColourOS install/update of an app with an **enabled** accessibility service | `INSTALL_FAILED_VERIFICATION_FAILURE` — the accessibility service has to be disabled before the app can be updated. |
 | `am force-stop` | Unbinds the accessibility service and leaves the package stopped, so its components do not start. Development-only concern. |
 
-## What this means for the design
+## What the literature says (searched after the measurement)
 
-The clipboard privilege on Android 16 has exactly two doors an app can walk through:
+The measurement was checked against the platform documentation and against what real
+apps do, because it contradicts what the design assumed.
 
-1. **Be the default keyboard.** Android grants the default IME privileged clipboard
-   access, and that privilege belongs to the whole app UID — so the background
-   foreground service reads the clipboard normally, with no focus and no visible window.
-   This is what the measurement proves.
-2. **Have input focus.** The app must be on screen when it reads.
+**There is no clipboard role.** Google was asked for one — AOSP issue 135471818, "offer
+'clipboard manager' role", which would let clipboard managers read in the background. It
+was closed as *Won't Fix (Obsolete)*. `android.permission.READ_CLIPBOARD_IN_BACKGROUND`
+exists, but its protection level is `signature|role`: on this device it is granted only
+to apps signed with the platform key (one holder was found,
+`com.microsoftsdk.crossdeviceservicebroker`), and no role can be assigned to a normal
+app. `cmd role add-role-holder android.app.role.CLIPBOARD` fails with
+`Unknown role: android.app.role.CLIPBOARD` — the role does not exist.
 
-An accessibility service, however carefully configured, is not a third door on this build.
+**The rule is documented and matches the measurement exactly.** From the platform
+behaviour: *"Unless your app is the default input method editor (IME) or is the app that
+currently has focus, your app cannot access clipboard data on Android 10 or higher."*
+The accessibility service is **not** one of the two doors. That matches what this device
+did with the service enabled, bound, with and without window-content access.
 
-That splits the two directions of the sync:
+**What real apps do instead** — KDE Connect, the reference implementation, uses a
+three-part trick for the phone → PC direction:
 
-| Direction | Background feasibility | Why |
+1. It watches for the *event* of a copy rather than polling the clipboard. Historically
+   that meant running `logcat` and looking for the system's clipboard access messages,
+   which needs the privileged `READ_LOGS` permission granted through adb. Newer versions
+   can use Shizuku for the same job instead of adb.
+2. When a copy is detected it launches `ClipboardFloatingActivity` — a transparent,
+   non-touchable activity with `FLAG_NOT_TOUCH_MODAL` that raises over other apps and
+   takes focus.
+3. Because it now has focus, the clipboard read succeeds. It forwards the content and
+   finishes immediately.
+
+KDE Connect also puts a **"Send clipboard" action on its persistent notification** as the
+manual fallback, which is what most users end up using.
+
+**The PC → phone direction needs no privilege at all**, because the OS allows background
+clipboard *writes*. This matches the measurement exactly, and matches the report that
+KDE Connect's clipboard flow works "out of the box" in that direction.
+
+### Consequences for the companion app
+
+| Direction | Mechanism | Privilege needed |
 |---|---|---|
-| **PC → phone** (the PC writes, the phone receives) | **Seamless** | Background clipboard writes work; no privilege needed at all |
-| **Phone → PC** (the phone reads, the PC receives) | **Needs the default-IME role** | Background reads are refused otherwise |
+| PC → phone | Background clipboard write | **None** — works today, measured |
+| Phone → PC | Detect the copy event, then raise a transparent activity that takes focus, read, forward, finish | Accessibility service for the event, focus for the read |
+| Phone → PC (alternative) | Be the default keyboard | Default-IME role — measured working, but the user must type with our keyboard |
+| Phone → PC (manual) | A "Copy to PC" action on the notification | None — the tap gives the app focus |
 
-### The options for phone → PC
+The accessibility service is therefore still worth having, but for a different reason
+than the one the plan assumed: not as a privilege, but as a **copy-event detector**.
 
-- **Default keyboard** — seamless, measured working. The user selects the companion app as
-  their keyboard. It is a real ask, and typing becomes awkward if the app is a poor
-  keyboard, so the app would have to be a genuinely usable keyboard or delegate to the
-  previous one.
-- **Tap to sync** — a notification with a "Copy to PC" action opens the app, the app reads
-  the clipboard while it has focus, forwards it, and closes. No privileges, no keyboard
-  change, but every copy needs a tap. This is what KDE Connect does on Android 10+.
-- **Foreground only** — the phone app stays open; not viable for a background relay.
+### Honest comparison with the ADB path we have today
 
-### The consequence for the project
+The scrcpy server runs as the `shell` UID, which Android exempts from the clipboard
+restriction outright. That gives today's app a read with no focus stealing, no
+accessibility service, no notification and no keyboard change. The companion app trades
+that reliability for the thing it was built for: **the phone exposes no listening port on
+the network**, so a campus Wi-Fi has nothing to attack.
 
-The A+ Connect companion app is only worth building if the phone → PC direction can be
-seamless, because that is the direction that needs the privilege. The default-IME route
-makes it seamless, and it does so with **no accessibility service at all** — which also
-removes the ColourOS install friction, the permission-screen awkwardness, and the
-"enable an accessibility service" warning that users rightly distrust.
+That is the whole trade: the ADB path is smoother; the companion path is safer.
 
-The PC → phone direction needs nothing and works in the background today.
 
 ## Decision
 
 - Detection mechanism: the foreground service polls the clipboard every 2 seconds and
   compares the SHA-256 with the last value it sent.
-- Privilege mechanism: **default IME**, not an accessibility service. The accessibility
-  service is dropped from the design entirely.
+- Privilege mechanism: **not** the accessibility service, which grants nothing here.
+  The phone → PC read happens in a transparent activity that takes focus, triggered by a
+  copy event; a "Copy to PC" notification action is the manual fallback; the default-IME
+  role is an alternative for a user who prefers it.
 - Poll interval chosen: 2 seconds — a read costs a few milliseconds, and 2 s is below the
   threshold where a copied text arriving late is noticeable.
 - Foreground service type: `connectedDevice` — accepted, evidence above.
