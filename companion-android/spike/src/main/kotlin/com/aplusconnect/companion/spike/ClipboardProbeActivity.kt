@@ -35,6 +35,9 @@ class ClipboardProbeActivity : ComponentActivity() {
                 addView(start)
             }
         )
+
+        // The spike starts itself, so it can be driven from the shell.
+        startProbe()
     }
 
     private fun startProbe() {

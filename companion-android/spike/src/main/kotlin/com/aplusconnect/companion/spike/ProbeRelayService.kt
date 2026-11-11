@@ -9,30 +9,26 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
-import java.security.MessageDigest
 
 /**
- * Spike only: measures whether the app can read the clipboard in the
- * background, and proves it by writing a value of its own and reading it
- * back.
+ * Spike only: proves that a clipboard *change* is signalled to a background
+ * app, and that a transparent activity can then read the clipboard by taking
+ * focus.
  *
- * It never overwrites a clipboard that already has content: the probe only
- * fills an empty one, so it cannot destroy what the user just copied.
+ * It never writes to the clipboard, so it cannot destroy what the user
+ * copied.
  */
 class ProbeRelayService : Service() {
 
-    private val handler = Handler(Looper.getMainLooper())
-    private var cycleCount = 0
-
-    private val poller = object : Runnable {
-        override fun run() {
-            cycle()
-            handler.postDelayed(this, CYCLE_INTERVAL_MS)
-        }
+    private val listener = ClipboardManager.OnPrimaryClipChangedListener {
+        Log.i(TAG, "clipboard change signalled to the background app")
+        // The content is not readable yet; a focused window can read it.
+        startActivity(
+            Intent(this, ClipboardReadActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     override fun onCreate() {
@@ -59,67 +55,19 @@ class ProbeRelayService : Service() {
         }
         Log.i(TAG, "probe foreground service started")
 
-        handler.postDelayed(poller, CYCLE_INTERVAL_MS)
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.addPrimaryClipChangedListener(listener)
+        Log.i(TAG, "clipboard change listener registered")
     }
 
     override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
+        try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.removePrimaryClipChangedListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not remove the listener: ${e.message}")
+        }
         super.onDestroy()
-    }
-
-    /**
-     * One measurement cycle: write a value that is unique to this cycle, read
-     * the clipboard back, and compare. If the read returns what we just wrote,
-     * clipboard access is granted; if it returns nothing, access is refused.
-     * The clipboard being empty and the read being refused look identical from
-     * the outside, so the app supplies its own ground truth.
-     */
-    private fun cycle() {
-        cycleCount++
-        val current = readClipboard()
-
-        // Only ever fill an empty clipboard, so the probe cannot destroy what
-        // the user copied.
-        if (current == null) {
-            val value = "aplus-cycle-$cycleCount"
-            val written = writeValue(value)
-            handler.postDelayed({ readAndCompare(value, written) }, 800)
-            return
-        }
-
-        Log.i(TAG, "cycle $cycleCount: clipboard already has content, left alone")
-    }
-
-    /** The clipboard content, or null when there is none or it cannot be read. */
-    private fun readClipboard(): String? = try {
-        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = manager.primaryClip
-        if (clip == null || clip.itemCount == 0) {
-            null
-        } else {
-            clip.getItemAt(0).coerceToText(this).toString()
-        }
-    } catch (e: Exception) {
-        null
-    }
-
-    private fun writeValue(value: String): Boolean = try {
-        val manager = getSystemService(ClipboardManager::class.java)
-        manager.setPrimaryClip(android.content.ClipData.newPlainText("aplus", value))
-        true
-    } catch (e: Exception) {
-        Log.w(TAG, "write failed: ${e.message}")
-        false
-    }
-
-    private fun readAndCompare(expected: String, written: Boolean) {
-        val text = readClipboard()
-        val result = when {
-            text == null -> "NOTHING"
-            text == expected -> "MATCH"
-            else -> "OTHER len=${text.length}"
-        }
-        Log.i(TAG, "cycle $cycleCount: wrote=$written read=$result expected=${expected.take(20)}")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -128,10 +76,10 @@ class ProbeRelayService : Service() {
         const val TAG = "AplusProbe"
         const val CHANNEL_ID = "aplus_probe"
         const val NOTIFICATION_ID = 41
-        private const val CYCLE_INTERVAL_MS = 5000L
 
+        /** SHA-256 of the value, truncated for the log. Never the content. */
         fun sha256(value: String): String {
-            val digest = MessageDigest.getInstance("SHA-256")
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
                 .digest(value.toByteArray(Charsets.UTF_8))
             return digest.joinToString("") { "%02x".format(it) }
         }

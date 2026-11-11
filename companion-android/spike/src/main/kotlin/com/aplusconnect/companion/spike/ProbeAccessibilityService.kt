@@ -1,68 +1,56 @@
 package com.aplusconnect.companion.spike
 
 import android.accessibilityservice.AccessibilityService
-import android.content.ClipboardManager
-import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
+import android.view.accessibility.AccessibilityEvent
 
 /**
- * Spike only: this service exists so it can be *enabled*, and it also reads
- * the clipboard itself. That distinguishes two very different outcomes:
+ * Spike only: measures what an accessibility service can observe when the
+ * user copies something.
  *
- *  - if the accessibility service can read but the foreground service cannot,
- *    the exemption is scoped to the accessibility service component;
- *  - if neither can read, an enabled accessibility service is not enough.
+ * The clipboard change *listener* is gated by the same access check as the
+ * clipboard itself, so it never fires for a background app. The accessibility
+ * service is the remaining signal: it sees UI events, including the toast an
+ * app shows when the user copies, without needing clipboard access.
  *
- * The measurement on the target device was that neither can read, so the
- * accessibility service is not a privilege at all on Android 16.
+ * This logs what arrives so the trigger rule can be designed from a
+ * measurement instead of a guess.
  */
 class ProbeAccessibilityService : AccessibilityService() {
 
-    private val handler = Handler(Looper.getMainLooper())
-
-    private val poller = object : Runnable {
-        override fun run() {
-            readOnce()
-            handler.postDelayed(this, POLL_INTERVAL_MS)
-        }
-    }
-
     override fun onServiceConnected() {
         Log.i(ProbeRelayService.TAG, "a11y service connected")
-        handler.postDelayed(poller, POLL_INTERVAL_MS)
     }
 
-    override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) {
-        // Not used by the spike.
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+
+        val type = eventTypeName(event.eventType)
+        val pkg = event.packageName?.toString() ?: "?"
+        val cls = event.className?.toString() ?: "?"
+
+        // Only the toast-ish text, and only a short prefix: this is a
+        // measurement, not a clipboard log.
+        val text = (event.text?.joinToString(" ") { it.toString() } ?: "").take(60)
+
+        Log.i(
+            ProbeRelayService.TAG,
+            "event type=$type pkg=$pkg class=$cls text=[$text]"
+        )
     }
 
     override fun onInterrupt() {
     }
 
-    override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        super.onDestroy()
-    }
-
-    private fun readOnce() {
-        val result = try {
-            val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = manager.primaryClip
-            if (clip == null || clip.itemCount == 0) {
-                "NOTHING"
-            } else {
-                val text = clip.getItemAt(0).coerceToText(this).toString()
-                "OK len=${text.length} sha=${ProbeRelayService.sha256(text).take(12)}"
-            }
-        } catch (e: Exception) {
-            "DENIED ${e.javaClass.simpleName}: ${e.message}"
-        }
-        Log.i(ProbeRelayService.TAG, "a11y read result: $result")
-    }
-
-    companion object {
-        private const val POLL_INTERVAL_MS = 2000L
+    /** The event type as a name, so the log can be read by a human. */
+    private fun eventTypeName(type: Int): String = when (type) {
+        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "WINDOW_STATE_CHANGED"
+        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "WINDOW_CONTENT_CHANGED"
+        AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> "VIEW_TEXT_SELECTION_CHANGED"
+        AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> "NOTIFICATION_STATE_CHANGED"
+        AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "VIEW_TEXT_CHANGED"
+        AccessibilityEvent.TYPE_VIEW_CLICKED -> "VIEW_CLICKED"
+        AccessibilityEvent.TYPE_VIEW_SELECTED -> "VIEW_SELECTED"
+        else -> "TYPE_$type"
     }
 }
