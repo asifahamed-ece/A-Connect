@@ -11,7 +11,11 @@ const state = {
   clipboard: [],
   clipboardStatus: { status: 'idle', enabled: true },
   casting: false,
+  browse: { path: '/sdcard', entries: [], loading: false },
 };
+
+const THEME_KEY = 'aplus-theme';
+const CAST_CONFIRM_KEY = 'aplus-cast-confirm';
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,6 +48,20 @@ function toast(message, kind = 'ok') {
   el.innerHTML = `${icon(kind === 'err' ? 'info' : 'check')}<span>${escapeHtml(message)}</span>`;
   host.appendChild(el);
   setTimeout(() => el.remove(), 3200);
+}
+
+/* ---------- Theme ---------- */
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = saved || (prefersDark ? 'dark' : 'light');
+
+  $('theme-toggle').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem(THEME_KEY, next);
+  });
 }
 
 /* ---------- Views ---------- */
@@ -80,6 +98,9 @@ function showView(name) {
   }
   if (name === 'device') {
     renderDevice();
+  }
+  if (name === 'files' && state.device) {
+    loadDirectory(state.browse.path);
   }
 }
 
@@ -197,7 +218,7 @@ function upsertTransfer(patch) {
   renderTransfers();
 }
 
-async function sendFiles(paths) {
+async function sendFiles(paths, destDir = '/sdcard/Download/') {
   if (!state.device) {
     toast('Connect a device first', 'err');
     return;
@@ -205,7 +226,7 @@ async function sendFiles(paths) {
   if (!paths || paths.length === 0) return;
 
   for (const filePath of paths) {
-    window.api.pushFile(state.device.id, filePath, '/sdcard/Download/').catch((err) => {
+    window.api.pushFile(state.device.id, filePath, destDir).catch((err) => {
       toast(`Send failed: ${err.message}`, 'err');
     });
   }
@@ -218,6 +239,167 @@ async function browseFiles() {
   }
   const paths = await window.api.openFileDialog();
   await sendFiles(paths);
+}
+
+/* ---------- Phone storage browser ---------- */
+
+function parentPath(current) {
+  const trimmed = current.replace(/\/+$/, '');
+  if (!trimmed) return '/';
+  const idx = trimmed.lastIndexOf('/');
+  if (idx <= 0) return '/';
+  return trimmed.slice(0, idx);
+}
+
+function joinPath(base, name) {
+  return `${base.replace(/\/+$/, '')}/${name}`;
+}
+
+function renderDirectory() {
+  const list = $('browser-list');
+  const { path, entries, loading } = state.browse;
+  $('browse-path').textContent = path;
+
+  if (loading) {
+    list.innerHTML = '<div class="list-empty">Loading…</div>';
+    return;
+  }
+  if (!entries.length) {
+    list.innerHTML = '<div class="list-empty">This folder is empty</div>';
+    return;
+  }
+
+  list.innerHTML = entries
+    .map(
+      (entry) => `
+      <div class="browse-row ${entry.isDir ? 'dir' : 'file'}" data-path="${escapeHtml(entry.path)}" data-dir="${entry.isDir ? '1' : '0'}">
+        ${icon(entry.isDir ? 'folder' : 'file')}
+        <div class="browse-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
+        <div class="browse-meta">${entry.isDir ? 'Folder' : formatBytes(entry.size)}</div>
+        ${
+          entry.isDir
+            ? ''
+            : `<button class="icon-btn sm" data-download="${escapeHtml(entry.path)}" title="Download">
+                 <svg class="icon"><use href="#i-download"/></svg>
+               </button>`
+        }
+        <button class="icon-btn sm danger" data-delete="${escapeHtml(entry.path)}" title="Delete">
+          <svg class="icon"><use href="#i-trash"/></svg>
+        </button>
+      </div>`,
+    )
+    .join('');
+}
+
+async function loadDirectory(path) {
+  if (!state.device) return;
+
+  state.browse.path = path;
+  state.browse.loading = true;
+  renderDirectory();
+
+  try {
+    state.browse.entries = await window.api.listDirectory(state.device.id, path);
+  } catch {
+    state.browse.entries = [];
+    toast(`Cannot open ${path}`, 'err');
+  } finally {
+    state.browse.loading = false;
+    renderDirectory();
+  }
+}
+
+async function downloadEntry(remotePath) {
+  try {
+    const result = await window.api.pullFile(state.device.id, remotePath);
+    if (result && result.success) return result.localTarget;
+  } catch (err) {
+    toast(`Download failed: ${err.message}`, 'err');
+  }
+  return null;
+}
+
+// Clicking a file pulls it to ~/Downloads/A+Connect and opens it with the
+// desktop's default application.
+async function openEntry(remotePath) {
+  if (!state.device) return;
+
+  const name = remotePath.split('/').pop();
+  const localPath = await downloadEntry(remotePath);
+  if (!localPath) return;
+
+  const opened = await window.api.openLocalFile(localPath);
+  if (opened && opened.success) {
+    toast(`Opened ${name}`);
+  } else {
+    toast(`Saved to ${localPath} (no application registered for this type)`, 'err');
+  }
+}
+
+async function deleteEntry(remotePath) {
+  const name = remotePath.split('/').pop();
+  const confirmed = await window.api.confirmAction({
+    message: `Delete "${name}" from the phone?`,
+    detail: 'This cannot be undone.',
+    confirmLabel: 'Delete',
+  });
+  if (!confirmed) return;
+
+  try {
+    await window.api.deletePath(state.device.id, remotePath);
+    toast(`Deleted ${name}`);
+    loadDirectory(state.browse.path);
+  } catch (err) {
+    toast(`Delete failed: ${err.message}`, 'err');
+  }
+}
+
+/* Simple text prompt (Electron has no window.prompt). */
+function askText(title, placeholder) {
+  return new Promise((resolve) => {
+    const input = $('prompt-input');
+    $('prompt-title').textContent = title;
+    input.value = '';
+    input.placeholder = placeholder || '';
+    openModal('modal-prompt');
+    input.focus();
+
+    const finish = (value) => {
+      $('prompt-ok').removeEventListener('click', onOk);
+      input.removeEventListener('keydown', onKey);
+      closeModal('modal-prompt');
+      resolve(value);
+    };
+    const onOk = () => finish(input.value.trim() || null);
+    const onKey = (e) => {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') finish(null);
+    };
+
+    $('prompt-ok').addEventListener('click', onOk);
+    input.addEventListener('keydown', onKey);
+  });
+}
+
+async function createFolder() {
+  if (!state.device) return;
+  const name = await askText('New folder', 'Folder name');
+  if (!name) return;
+
+  try {
+    await window.api.makeDirectory(state.device.id, joinPath(state.browse.path, name));
+    toast(`Created ${name}`);
+    loadDirectory(state.browse.path);
+  } catch (err) {
+    toast(`Could not create folder: ${err.message}`, 'err');
+  }
+}
+
+async function uploadHere() {
+  if (!state.device) return;
+  const paths = await window.api.openFileDialog();
+  await sendFiles(paths, state.browse.path);
+  setTimeout(() => loadDirectory(state.browse.path), 1200);
 }
 
 /* ---------- Notifications ---------- */
@@ -239,6 +421,9 @@ function renderNotifications() {
           ${n.message ? `<div class="notif-message">${escapeHtml(n.message)}</div>` : ''}
           <div class="notif-meta"><span>${escapeHtml(n.app || n.pkg || '')}</span>${n.time ? `<span>·</span><span>${escapeHtml(n.time)}</span>` : ''}</div>
         </div>
+        <button class="icon-btn sm" data-notif-dismiss="${escapeHtml(n.id)}" title="Remove from history" aria-label="Remove notification">
+          <svg class="icon"><use href="#i-close"/></svg>
+        </button>
       </div>`,
     )
     .join('');
@@ -391,15 +576,21 @@ function initDeviceActions() {
     toast('Disconnected');
   });
 
-  $('btn-cast').addEventListener('click', async () => {
+  $('btn-cast').addEventListener('click', () => {
     if (!state.device) return;
-    const result = await window.api.startMirroring(state.device.id);
-    if (result && result.success === false) {
-      toast(result.message || 'Could not start casting', 'err');
+    if (localStorage.getItem(CAST_CONFIRM_KEY) === 'off') {
+      startCast();
       return;
     }
-    state.casting = true;
-    renderCast();
+    openModal('modal-cast');
+  });
+
+  $('btn-cast-confirm').addEventListener('click', () => {
+    if ($('cast-confirm-skip').checked) {
+      localStorage.setItem(CAST_CONFIRM_KEY, 'off');
+    }
+    closeModal('modal-cast');
+    startCast();
   });
 
   $('btn-cast-stop').addEventListener('click', async () => {
@@ -408,6 +599,18 @@ function initDeviceActions() {
     renderCast();
   });
 
+  renderCast();
+}
+
+async function startCast() {
+  if (!state.device) return;
+
+  const result = await window.api.startMirroring(state.device.id);
+  if (result && result.success === false) {
+    toast(result.message || 'Could not start casting', 'err');
+    return;
+  }
+  state.casting = true;
   renderCast();
 }
 
@@ -513,15 +716,51 @@ function initFiles() {
 
   $('btn-cancel-all').addEventListener('click', () => window.api.cancelAllTransfers());
 
+  // Phone storage browser
+  $('browse-up').addEventListener('click', () => loadDirectory(parentPath(state.browse.path)));
+  $('browse-refresh').addEventListener('click', () => loadDirectory(state.browse.path));
+  $('browse-newfolder').addEventListener('click', createFolder);
+  $('browse-upload').addEventListener('click', uploadHere);
+
+  $('browser-list').addEventListener('click', (e) => {
+    const download = e.target.closest('[data-download]');
+    if (download) {
+      downloadEntry(download.dataset.download);
+      return;
+    }
+
+    const del = e.target.closest('[data-delete]');
+    if (del) {
+      deleteEntry(del.dataset.delete);
+      return;
+    }
+
+    const row = e.target.closest('.browse-row');
+    if (!row) return;
+
+    if (row.dataset.dir === '1') {
+      loadDirectory(row.dataset.path);
+    } else {
+      openEntry(row.dataset.path);
+    }
+  });
+
   window.api.onTransferProgress((data) => {
     switch (data.status) {
       case 'started':
         upsertTransfer({ id: data.id, filename: data.filename, size: data.size, status: 'active' });
         break;
-      case 'completed':
-        upsertTransfer({ id: data.id, filename: data.filename, targetPath: data.targetPath, status: 'done' });
-        toast(`Sent ${data.filename}`);
+      case 'completed': {
+        const name = data.filename || String(data.targetPath || data.localTarget || '').split('/').pop();
+        upsertTransfer({
+          id: data.id,
+          filename: name,
+          targetPath: data.targetPath || data.localTarget,
+          status: 'done',
+        });
+        toast(data.type === 'pull' ? `Downloaded ${name}` : `Sent ${name}`);
         break;
+      }
       case 'failed':
         upsertTransfer({ id: data.id, status: 'failed', error: data.error });
         break;
@@ -548,6 +787,16 @@ function initNotifications() {
   $('btn-clear-notifs').addEventListener('click', async () => {
     await window.api.clearNotificationHistory();
     state.notifications = [];
+    renderNotifications();
+  });
+
+  // Remove a single notification from the history.
+  $('notifications-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-notif-dismiss]');
+    if (!btn) return;
+    const id = btn.dataset.notifDismiss;
+    await window.api.dismissNotification(id);
+    state.notifications = state.notifications.filter((n) => n.id !== id);
     renderNotifications();
   });
 }
@@ -623,6 +872,7 @@ function initDeviceEvents() {
 }
 
 function init() {
+  initTheme();
   initWindowControls();
   initNavigation();
   initDeviceActions();
