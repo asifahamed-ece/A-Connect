@@ -23,17 +23,35 @@ function ensureCertificate(dir = DEFAULT_DIR) {
 
   const certPath = path.join(dir, 'cert.pem');
   const keyPath = path.join(dir, 'key.pem');
+  const hasCert = fs.existsSync(certPath);
+  const hasKey = fs.existsSync(keyPath);
 
-  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
-    execFileSync('openssl', [
-      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-      '-keyout', keyPath,
-      '-out', certPath,
-      '-days', '3650',
-      // No spaces and no "+" in the subject: OpenSSL 4 parses a space as the
-      // end of an RDN and "+" as a multi-valued RDN separator.
-      '-subj', '/CN=APlusConnectCompanion',
-    ], { stdio: 'ignore' });
+  if (hasCert !== hasKey) {
+    // Regenerating here would change the PC's identity, and the phone pins the
+    // fingerprint, so it would refuse every later connection. Say so instead.
+    throw new Error(
+      `the companion certificate and key are out of step in ${dir}; ` +
+        'delete both and pair again'
+    );
+  }
+
+  if (!hasCert) {
+    try {
+      execFileSync('openssl', [
+        'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+        '-keyout', keyPath,
+        '-out', certPath,
+        '-days', '3650',
+        // No spaces and no "+" in the subject: OpenSSL 4 parses a space as the
+        // end of an RDN and "+" as a multi-valued RDN separator.
+        '-subj', '/CN=APlusConnectCompanion',
+      ], { stdio: 'ignore' });
+    } catch (err) {
+      throw new Error(
+        `could not create the companion certificate: ${err.message}. ` +
+          'OpenSSL has to be installed.'
+      );
+    }
   }
 
   return { certPath, keyPath, fingerprint: fingerprintOfFile(certPath) };

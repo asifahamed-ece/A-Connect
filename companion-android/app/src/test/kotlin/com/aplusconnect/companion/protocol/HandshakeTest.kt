@@ -7,9 +7,19 @@ import org.junit.Test
 
 class HandshakeTest {
 
+    private companion object {
+        /** A fingerprint is 32 colon separated uppercase hex bytes. */
+        const val FINGERPRINT =
+            "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:" +
+                "88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+        const val OTHER_FINGERPRINT =
+            "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:" +
+                "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00"
+    }
+
     private fun helloAck(
         pcId: String = "pc-1",
-        fingerprint: String = "AA:BB:CC",
+        fingerprint: String = FINGERPRINT,
         nonce: String = "nonce-1",
         type: String = Protocol.TYPE_HELLO_ACK,
     ) = ProtocolMessage(
@@ -41,7 +51,7 @@ class HandshakeTest {
 
         assertTrue(result is HandshakeResult.Success)
         result as HandshakeResult.Success
-        assertEquals("AA:BB:CC", result.fingerprint)
+        assertEquals(FINGERPRINT, result.fingerprint)
         assertEquals("pc-1", result.pcId)
     }
 
@@ -49,7 +59,7 @@ class HandshakeTest {
     fun `the paired computer reconnects with the same certificate`() {
         val result = Handshake.verifyHelloAck(
             helloAck(),
-            pinned = Pairing("pc-1", "AA:BB:CC")
+            pinned = Pairing("pc-1", FINGERPRINT)
         )
 
         assertTrue(result is HandshakeResult.Success)
@@ -58,8 +68,8 @@ class HandshakeTest {
     @Test
     fun `a changed certificate is refused`() {
         val result = Handshake.verifyHelloAck(
-            helloAck(fingerprint = "11:22:33"),
-            pinned = Pairing("pc-1", "AA:BB:CC")
+            helloAck(fingerprint = OTHER_FINGERPRINT),
+            pinned = Pairing("pc-1", FINGERPRINT)
         )
 
         assertEquals(
@@ -71,8 +81,8 @@ class HandshakeTest {
     @Test
     fun `a second pairing is refused`() {
         val result = Handshake.verifyHelloAck(
-            helloAck(pcId = "pc-2", fingerprint = "11:22:33"),
-            pinned = Pairing("pc-1", "AA:BB:CC")
+            helloAck(pcId = "pc-2", fingerprint = OTHER_FINGERPRINT),
+            pinned = Pairing("pc-1", FINGERPRINT)
         )
 
         assertEquals(
@@ -85,7 +95,7 @@ class HandshakeTest {
     fun `a nonce that does not match the hello is refused`() {
         val result = Handshake.verifyHelloAck(
             helloAck(nonce = "other-nonce"),
-            pinned = Pairing("pc-1", "AA:BB:CC"),
+            pinned = Pairing("pc-1", FINGERPRINT),
             expectedNonce = "nonce-1"
         )
 
@@ -104,6 +114,58 @@ class HandshakeTest {
 
         assertEquals(
             Protocol.REASON_BAD_CODE,
+            (result as HandshakeResult.Failed).reason
+        )
+    }
+
+    @Test
+    fun `an ack without a fingerprint is refused instead of pinning nothing`() {
+        val result = Handshake.verifyHelloAck(
+            helloAck(fingerprint = ""),
+            pinned = null
+        )
+
+        assertEquals(
+            Protocol.REASON_BAD_FINGERPRINT,
+            (result as HandshakeResult.Failed).reason
+        )
+    }
+
+    @Test
+    fun `a malformed fingerprint is refused`() {
+        val result = Handshake.verifyHelloAck(
+            helloAck(fingerprint = "not-a-fingerprint"),
+            pinned = null
+        )
+
+        assertEquals(
+            Protocol.REASON_BAD_FINGERPRINT,
+            (result as HandshakeResult.Failed).reason
+        )
+    }
+
+    @Test
+    fun `an ack without a pc id is refused`() {
+        val result = Handshake.verifyHelloAck(
+            helloAck(pcId = ""),
+            pinned = null
+        )
+
+        assertEquals(
+            Protocol.REASON_BAD_FINGERPRINT,
+            (result as HandshakeResult.Failed).reason
+        )
+    }
+
+    @Test
+    fun `an unsupported protocol version is refused`() {
+        val result = Handshake.verifyHelloAck(
+            helloAck().copy(version = Protocol.VERSION + 1),
+            pinned = null
+        )
+
+        assertEquals(
+            Protocol.REASON_PROTOCOL_VERSION,
             (result as HandshakeResult.Failed).reason
         )
     }

@@ -81,7 +81,7 @@ phone is a client and there is nothing for an attacker to connect to.
 | `net/CompanionClient.kt` | TLS socket lifecycle, reconnect with exponential backoff. |
 | `net/CertificatePinner.kt` | Trust-on-first-use fingerprint store. |
 | `clip/ClipboardGateway.kt` | Read/write the system clipboard; content hashing; dedupe. |
-| `clip/ClipboardAccessibilityService.kt` | Accessibility service; grants the privileged exemption; drives event-triggered reads. |
+| `clip/ClipboardAccessibilityService.kt` | Accessibility service; detects copy events. It grants no privilege — see 7.3. |
 | `service/CompanionService.kt` | Foreground service; owns the client; posts the status notification. |
 | `ui/` | Compose screens: Status, Pair, Settings, plus the design system. |
 | `data/` | Room or DataStore for settings + paired PCs. (DataStore + JSON is enough for v1.) |
@@ -100,8 +100,9 @@ phone is a client and there is nothing for an attacker to connect to.
 ### 4.2 Data flow — phone → PC
 
 1. User copies text on the phone.
-2. The accessibility service observes a window/content change (user activity) and reads
-   the clipboard **once**; a low-frequency poll (2 s) is the safety net.
+2. The accessibility service observes the copy event (the toast Android shows when the
+   user copies). The app then brings up a transparent activity that takes focus, reads
+   the clipboard **once**, and closes. A notification action is the manual fallback.
 3. `ClipboardGateway` hashes the text (SHA-256) and compares it with the last value sent.
    Unchanged → nothing is sent.
 4. The service sends `clipboard-set` with the text and the hash.
@@ -113,9 +114,8 @@ phone is a client and there is nothing for an attacker to connect to.
 
 1. The user copies on the PC; the desktop clipboard listener fires.
 2. `services/clipboard.js` asks the companion service to deliver it.
-3. The phone receives `clipboard-set`, and the accessibility service writes it to the
-   system clipboard (writing from the background is permitted because the app holds the
-   accessibility exemption).
+3. The phone receives `clipboard-set` and writes it to the system clipboard. Writing from
+   the background needs no privilege at all — that direction works today.
 4. The phone does **not** echo it back: the hash of what it just wrote is recorded, so the
    change detector ignores its own write.
 
@@ -143,7 +143,9 @@ Bluetooth pairing screens.
 containing the certificate fingerprint. The fingerprint is what the phone pins; the
 transport security itself comes from TLS.
 The phone stores the fingerprint; every later connection must present a matching
-certificate or the connection is refused.
+certificate or the connection is refused. A reply without a well-formed fingerprint is
+refused outright: pinning an empty string would wedge the phone, refusing every later
+connection with no way back.
 
 **Discovery.** **Not in v1.** Automatic discovery needs the phone to bind a UDP socket, which
 breaks the "nothing listening on the phone" property that is the point of this project.
@@ -155,7 +157,10 @@ exactly zero inbound ports.
 ## 6. Wire protocol
 
 **Framing.** 4-byte big-endian unsigned length, then that many bytes of UTF-8 JSON.
-Maximum frame 1 MiB; larger payloads are rejected and the connection is dropped.
+Maximum frame **2 MiB**; a longer length header is rejected by the codec, and the
+transport closes the connection. The clipboard budget is 256 KiB of UTF-8 bytes, which is
+what the 2 MiB frame has to allow for: a control character escapes to six bytes, so the
+worst case is 1.5 MiB of JSON plus the envelope.
 
 **Envelope.**
 
@@ -166,17 +171,28 @@ Maximum frame 1 MiB; larger payloads are rejected and the connection is dropped.
 | Type | Direction | Payload |
 |------|-----------|---------|
 | `hello` | phone → PC | `{ deviceId, deviceName, code, nonce, protocolVersion }` |
-| `hello-ack` | PC → phone | `{ sessionId, fingerprint, nonce }` |
-| `hello-error` | PC → phone | `{ reason }` — `bad-code`, `fingerprint-mismatch`, `protocol-version` |
-| `clipboard-set` | both | `{ text, hash }` |
+| `hello-ack` | PC → phone | `{ sessionId, pcId, fingerprint, nonce }` |
+| `hello-error` | PC → phone | `{ reason }` — `bad-code`, `bad-fingerprint`, `fingerprint-mismatch`, `already-paired`, `nonce-mismatch`, `protocol-version` |
+| `clipboard-set` | both | `{ text, hash, truncated }` |
 | `ping` / `pong` | both | `{ ts }` |
 | `bye` | both | `{ reason }` |
 
-**Versioning.** `v` is checked on `hello`. An unknown major version is refused with a
-clear reason rather than a dropped connection.
+`pcId` identifies the computer, `fingerprint` identifies its certificate. The two are
+separate on purpose: a different `pcId` means another computer is trying to pair, while
+the same `pcId` with a different fingerprint means the paired computer's certificate was
+regenerated. Those two failures need different messages, so they must be
+distinguishable.
 
-**Limits.** Clipboard payloads are capped at 256 KiB of text (larger content is truncated
-and flagged, so a copied 10 MB file does not wedge the link).
+**Versioning.** `v` is checked on `hello`. An unknown major version is refused with
+`protocol-version` rather than a dropped connection. The codec keeps the version on
+every message so it can be checked at any point.
+
+**Clipboard payloads.** `hash` is the SHA-256 of `text` — the text that is actually
+transmitted, after truncation. `truncated` says whether the byte budget cut it. The
+budget is in **bytes of UTF-8**, not characters, and the cut never splits a code point,
+so the phone and the PC hash exactly the same string. Unpaired surrogates are replaced
+with U+FFFD on both sides before hashing, because the JVM and Node encode them
+differently.
 
 ## 7. Android app design
 
@@ -211,20 +227,34 @@ language.)
 - The foreground-service notification is required for the service to survive Doze and
   background restrictions. The app explains this in the UI rather than hiding it.
 
-### 7.3 Clipboard mechanics (the risky part — measured, not assumed)
+### 7.3 Clipboard mechanics (measured, not assumed)
 
-Two facts must be established empirically on Android 16 before the mechanism is frozen:
+The spike on the target device (Android 16, ColorOS) settled this, and the answer is not
+what the first draft of this document assumed:
 
-1. **Does an enabled accessibility service exempt the whole app UID from the
-   background-clipboard restriction?** (Believed yes; the exemption is granted by UID.)
-2. **Does a background clipboard read produce a system toast?** If yes, a naive 1 s poll
-   would spam toasts. Mitigation in the design: reads are **event-triggered** (the
-   accessibility service's window-change events, i.e. when the user is actually
-   interacting) with a 2 s poll only as a safety net, plus SHA-256 dedupe so the PC never
-   receives the same content twice.
+- **Background clipboard reads are refused** for an app that is neither the default
+  keyboard nor the app with input focus. An enabled accessibility service does **not**
+  change that, with or without window-content access, with or without a visible
+  foreground-service notification.
+- **Background clipboard writes work.** So the PC → phone direction needs no privilege
+  at all.
+- The **default keyboard** is granted privileged access, and that privilege extends to
+  the whole app UID.
 
-If the spike shows a toast per read, the polling fallback is dropped and detection relies
-on accessibility events alone.
+The phone → PC direction therefore has three possible mechanisms, and the shipping app
+must implement at least one:
+
+1. **Copy-event detection → a transparent activity that takes focus → read → forward.**
+   The accessibility service is useful here as an *event detector*, not as a privilege:
+   it sees the toast Android shows when the user copies. This is the approach KDE
+   Connect uses, and it needs no keyboard change.
+2. **A "Copy to PC" action on the persistent notification.** The tap gives the app
+   focus, so the read succeeds. No privileges, one tap.
+3. **Being the default keyboard.** Seamless, but the user would have to type with the
+   app's keyboard, so the app must ship a genuinely usable one.
+
+Which of these ships is decided by the P2 plan, and it is a product decision, not a
+technical one.
 
 ### 7.4 UI design language
 
@@ -351,9 +381,9 @@ code is verified (launch the app, drive it over CDP).
 
 | Level | What | How |
 |-------|-------|-----|
-| Unit (JVM) | framing, handshake, hashing, dedupe | `./gradlew test` — pure Kotlin, no device needed |
-| Unit (Node) | framing, pairing, cert pinning on the PC | small harness script |
-| Spike | **does the a11y exemption work on Android 16; does a read toast** | install the spike APK, read the clipboard, observe `dumpsys` and the screen |
+| Unit (JVM) | framing, envelope versioning, clipboard payload rules, handshake and fingerprint validation | `./gradlew testDebugUnitTest` — pure Kotlin, no device needed (30 tests) |
+| Conformance | the two implementations agree on the wire format and on the clipboard rules | `node scripts/protocol-check.js` — decodes the shared fixture, round-trips every frame and checks that a clipboard frame's hash really is the hash of its text |
+| Spike | **does the a11y exemption work on Android 16; does a read toast** | the `:spike` module, installed under its own application id so it can never reach a phone that has the real app |
 | Integration | phone ⇄ PC clipboard over a real network | app on the device + PC app, verified over CDP |
 | End-to-end | pairing over hostile Wi-Fi | verify with `tcpdump` that the phone has no listening socket and the traffic is TLS |
 
@@ -379,10 +409,11 @@ that P2 is built on.
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| The accessibility exemption does not cover the whole UID on Android 16 | The whole approach fails | P0 spike runs first; fallback is an IME service (a bigger ask of the user) |
+| The accessibility service turns out not to grant clipboard access | The whole approach fails | **Measured: it does not.** The app uses the copy-event → focus → read route, with a notification tap as the manual fallback, and the default-IME role as an option. |
+| Background reads produce a toast per read | Unusable UX | Event-driven reads, and the spike measured the toast behaviour |
 | Background reads produce a toast per read | Unusable UX | Event-driven reads + 2 s fallback poll; the spike measures this |
 | Android 16 FGS restrictions block the `connectedDevice` type | The relay dies in the background | `specialUse` fallback; the spike verifies the service survives Doze |
-| The user must enable an accessibility service | Perceived as invasive | `canRetrieveWindowContent=false`, plain-language explanation, a status card that shows exactly what is granted |
+| The user must enable an accessibility service | Perceived as invasive | It is only used to spot copy events, never to read screen content: `canRetrieveWindowContent=false`, a plain-language explanation, and a status card that says exactly what it is for. The alternative — a notification tap — needs no permission at all |
 | The PC's TLS server is a new attack surface on the PC | The PC is exposed | It listens on all interfaces but requires the pinned fingerprint; the paired PC's address can be restricted to the tethering interface |
 
 ## 13. Future work (explicitly out of v1)

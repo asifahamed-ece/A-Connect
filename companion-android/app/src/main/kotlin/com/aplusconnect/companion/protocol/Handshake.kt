@@ -19,6 +19,9 @@ sealed class HandshakeResult {
  */
 object Handshake {
 
+    /** A fingerprint is 32 colon separated uppercase hex bytes. */
+    private val FINGERPRINT = Regex("^([0-9A-F]{2}:){31}[0-9A-F]{2}$")
+
     fun buildHello(deviceId: String, deviceName: String, code: String, nonce: String): ProtocolMessage =
         ProtocolMessage(
             type = Protocol.TYPE_HELLO,
@@ -45,12 +48,24 @@ object Handshake {
         if (message.type != Protocol.TYPE_HELLO_ACK) {
             return HandshakeResult.Failed(Protocol.REASON_PROTOCOL_VERSION)
         }
+        if (!Protocol.isSupportedVersion(message.version)) {
+            return HandshakeResult.Failed(Protocol.REASON_PROTOCOL_VERSION)
+        }
         if (expectedNonce != null && message.payload.optString("nonce") != expectedNonce) {
             return HandshakeResult.Failed(Protocol.REASON_NONCE_MISMATCH)
         }
 
         val pcId = message.payload.optString("pcId")
         val fingerprint = message.payload.optString("fingerprint")
+
+        // A missing or malformed fingerprint must never become the pin: an
+        // empty pin would wedge the phone, refusing every later connection.
+        if (pcId.isEmpty()) {
+            return HandshakeResult.Failed(Protocol.REASON_BAD_FINGERPRINT)
+        }
+        if (!FINGERPRINT.matches(fingerprint)) {
+            return HandshakeResult.Failed(Protocol.REASON_BAD_FINGERPRINT)
+        }
 
         if (pinned != null) {
             if (pcId != pinned.pcId) return HandshakeResult.Failed(Protocol.REASON_ALREADY_PAIRED)

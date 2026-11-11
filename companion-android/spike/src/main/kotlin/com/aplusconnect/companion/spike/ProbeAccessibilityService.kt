@@ -12,10 +12,11 @@ import android.util.Log
  * the clipboard itself. That distinguishes two very different outcomes:
  *
  *  - if the accessibility service can read but the foreground service cannot,
- *    the exemption is scoped to the accessibility service component and the
- *    shipping app has to do its reading there;
- *  - if neither can read, an enabled accessibility service is not enough on
- *    this Android version.
+ *    the exemption is scoped to the accessibility service component;
+ *  - if neither can read, an enabled accessibility service is not enough.
+ *
+ * The measurement on the target device was that neither can read, so the
+ * accessibility service is not a privilege at all on Android 16.
  */
 class ProbeAccessibilityService : AccessibilityService() {
 
@@ -40,12 +41,17 @@ class ProbeAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
     }
 
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
     private fun readOnce() {
         val result = try {
             val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = manager.primaryClip
             if (clip == null || clip.itemCount == 0) {
-                "EMPTY (refused)"
+                "NOTHING"
             } else {
                 val text = clip.getItemAt(0).coerceToText(this).toString()
                 "OK len=${text.length} sha=${ProbeRelayService.sha256(text).take(12)}"

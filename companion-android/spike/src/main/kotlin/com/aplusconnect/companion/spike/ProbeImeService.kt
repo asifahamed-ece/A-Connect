@@ -7,9 +7,14 @@ import android.view.inputmethod.EditorInfo
 
 /**
  * Spike only: Android grants the default IME privileged access to the
- * clipboard even in the background. This service exists to test whether that
- * privilege extends to the whole app UID - which would let the foreground
- * service read the clipboard without the app ever being in the foreground.
+ * clipboard, and the measurement showed that privilege extends to the whole
+ * app UID - so the background service can read the clipboard while the app
+ * holds the IME role.
+ *
+ * This service is a measuring tool, not a keyboard: it renders nothing and
+ * must never be left as the user's default input method, because a keyboard
+ * that renders nothing makes the phone unusable. The shipping app has to
+ * either ship a real keyboard or not use this route at all.
  */
 class ProbeImeService : InputMethodService() {
 

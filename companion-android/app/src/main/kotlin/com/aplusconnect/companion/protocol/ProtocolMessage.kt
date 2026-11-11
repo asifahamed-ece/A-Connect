@@ -14,13 +14,22 @@ object Protocol {
     const val TYPE_PONG = "pong"
     const val TYPE_BYE = "bye"
 
-    const val MAX_CLIPBOARD_CHARS = 256 * 1024
+    /**
+     * The clipboard cap is a byte budget, not a character budget: 256 KiB of
+     * UTF-8. A character cap would let a 256 KiB payload of control characters
+     * escape to six bytes each and blow past the frame limit.
+     */
+    const val MAX_CLIPBOARD_BYTES = 256 * 1024
 
     const val REASON_BAD_CODE = "bad-code"
+    const val REASON_BAD_FINGERPRINT = "bad-fingerprint"
     const val REASON_FINGERPRINT_MISMATCH = "fingerprint-mismatch"
     const val REASON_ALREADY_PAIRED = "already-paired"
     const val REASON_NONCE_MISMATCH = "nonce-mismatch"
     const val REASON_PROTOCOL_VERSION = "protocol-version"
+
+    /** Only the current major version is understood. */
+    fun isSupportedVersion(version: Int): Boolean = version == VERSION
 }
 
 /** One protocol envelope. */
@@ -29,9 +38,10 @@ data class ProtocolMessage(
     val id: String,
     val ts: Long,
     val payload: JSONObject,
+    val version: Int = Protocol.VERSION,
 ) {
     fun toJson(): JSONObject = JSONObject()
-        .put("v", Protocol.VERSION)
+        .put("v", version)
         .put("type", type)
         .put("id", id)
         .put("ts", ts)
@@ -43,6 +53,7 @@ data class ProtocolMessage(
             id = json.getString("id"),
             ts = json.getLong("ts"),
             payload = json.optJSONObject("payload") ?: JSONObject(),
+            version = json.optInt("v", Protocol.VERSION),
         )
     }
 }

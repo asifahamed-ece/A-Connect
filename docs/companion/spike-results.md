@@ -102,15 +102,23 @@ That is the whole trade: the ADB path is smoother; the companion path is safer.
 
 ## Decision
 
-- Detection mechanism: the foreground service polls the clipboard every 2 seconds and
-  compares the SHA-256 with the last value it sent.
-- Privilege mechanism: **not** the accessibility service, which grants nothing here.
-  The phone → PC read happens in a transparent activity that takes focus, triggered by a
-  copy event; a "Copy to PC" notification action is the manual fallback; the default-IME
-  role is an alternative for a user who prefers it.
-- Poll interval chosen: 2 seconds — a read costs a few milliseconds, and 2 s is below the
-  threshold where a copied text arriving late is noticeable.
+- Detection mechanism: the phone → PC direction is driven by a **copy event**, not by a
+  poll: the accessibility service sees the toast Android shows when the user copies, and
+  the app then raises a transparent activity that takes focus, reads the clipboard once,
+  and closes. A **"Copy to PC"** action on the persistent notification is the manual
+  fallback, and the **default-IME role** is an option for a user who prefers it.
+- The polling fallback is dropped: the accessibility service grants no clipboard access on
+  this build, so a background poll could only ever read an empty clipboard.
+- The clipboard rules themselves (byte budget, code point safe truncation, surrogate
+  normalisation, SHA-256) live in the protocol layer and are shared by both sides.
 - Foreground service type: `connectedDevice` — accepted, evidence above.
 - The shipping app must request `POST_NOTIFICATIONS` at runtime, because without a visible
   notification the foreground service is not "visible" to the system and the notification
   is not shown at all.
+
+## Where the probe lives now
+
+The spike is its own Gradle module (`companion-android/spike/`) with its own application
+id (`com.aplusconnect.companion.spike`), so the shipping APK cannot contain it. The
+probe only ever fills an **empty** clipboard — it will not overwrite what the user just
+copied — and its service clears its callbacks when it is destroyed.

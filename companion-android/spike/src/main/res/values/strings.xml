@@ -1,0 +1,5 @@
+<resources>
+    <string name="spike_app_name">A+ Connect probe (dev)</string>
+    <string name="probe_service_label">A+ Connect Clipboard Probe</string>
+    <string name="probe_service_description">Reads and writes the clipboard so A+ Connect can sync it with your computer.</string>
+</resources>

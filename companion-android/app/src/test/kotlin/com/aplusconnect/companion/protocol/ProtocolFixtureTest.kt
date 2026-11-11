@@ -41,6 +41,31 @@ class ProtocolFixtureTest {
     }
 
     @Test
+    fun `the kotlin encoder round trips every fixture frame to the same values`() {
+        // The canonical bytes are written by Node, because the JVM's org.json
+        // and Node's JSON.stringify order object keys differently. What has to
+        // hold is that both implementations carry the same values.
+        for (frame in frames("/fixtures/protocol-frames.json")) {
+            val json = frame.getJSONObject("json")
+            val message = ProtocolMessage(
+                type = json.getString("type"),
+                id = json.getString("id"),
+                ts = json.getLong("ts"),
+                payload = json.getJSONObject("payload"),
+                version = json.getInt("v"),
+            )
+
+            val decoded = FrameCodec.decode(FrameCodec.encode(message))
+
+            assertEquals(json.getString("type"), decoded.type)
+            assertEquals(json.getString("id"), decoded.id)
+            assertEquals(json.getLong("ts"), decoded.ts)
+            assertEquals(json.getInt("v"), decoded.version)
+            assertEquals(json.getJSONObject("payload").toString(), decoded.payload.toString())
+        }
+    }
+
+    @Test
     fun `a frame produced by the node side decodes here too`() {
         val nodeFrames = frames("/fixtures/protocol-frames-node.json")
         if (nodeFrames.isEmpty()) return // not generated yet

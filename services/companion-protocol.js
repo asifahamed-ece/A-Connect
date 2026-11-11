@@ -11,8 +11,20 @@
 const crypto = require('crypto');
 
 const PROTOCOL_VERSION = 1;
-const MAX_FRAME_BYTES = 1024 * 1024;
-const MAX_CLIPBOARD_CHARS = 256 * 1024;
+
+/**
+ * Two mebibytes, so that the worst case of a clipboard payload fits: the
+ * clipboard budget is 256 KiB of UTF-8, and a control character escapes to
+ * six bytes, which is 1.5 MiB of JSON plus the envelope.
+ */
+const MAX_FRAME_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The clipboard cap is a byte budget, not a character budget: 256 KiB of
+ * UTF-8. A character cap would let a 256 KiB payload of control characters
+ * escape to six bytes each and blow past the frame limit.
+ */
+const MAX_CLIPBOARD_BYTES = 256 * 1024;
 
 const TYPES = {
   HELLO: 'hello',
@@ -26,11 +38,17 @@ const TYPES = {
 
 const REASONS = {
   BAD_CODE: 'bad-code',
+  BAD_FINGERPRINT: 'bad-fingerprint',
   FINGERPRINT_MISMATCH: 'fingerprint-mismatch',
   ALREADY_PAIRED: 'already-paired',
   NONCE_MISMATCH: 'nonce-mismatch',
   PROTOCOL_VERSION: 'protocol-version',
 };
+
+/** Only the current major version is understood. */
+function isSupportedVersion(version) {
+  return version === PROTOCOL_VERSION;
+}
 
 function encode(message) {
   const body = Buffer.from(JSON.stringify(toJson(message)), 'utf8');
@@ -50,7 +68,24 @@ function decode(frame) {
     throw new Error(`illegal frame length: ${length}`);
   }
   if (frame.length < 4 + length) throw new Error('truncated frame');
-  const parsed = JSON.parse(frame.subarray(4, 4 + length).toString('utf8'));
+
+  let parsed;
+  try {
+    parsed = JSON.parse(frame.subarray(4, 4 + length).toString('utf8'));
+  } catch (err) {
+    throw new Error('frame is not valid JSON');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('frame is not a JSON object');
+  }
+  if (
+    typeof parsed.type !== 'string' ||
+    typeof parsed.id !== 'string' ||
+    typeof parsed.ts !== 'number'
+  ) {
+    throw new Error('frame is missing required fields');
+  }
+
   return {
     version: parsed.v,
     type: parsed.type,
@@ -70,14 +105,18 @@ function toJson(message) {
   };
 }
 
-/** The clipboard rules, identical to ClipboardPayloads.kt on the phone. */
+/**
+ * The clipboard rules, identical to ClipboardPayloads.kt on the phone: the
+ * same byte budget, the same code point safe truncation, the same
+ * normalisation of unpaired surrogates, the same hash.
+ */
 function buildClipboardPayload(text) {
-  const truncated = text.length > MAX_CLIPBOARD_CHARS;
-  const body = truncated ? text.substring(0, MAX_CLIPBOARD_CHARS) : text;
+  const normalized = normalize(text);
+  const body = truncateToBytes(normalized, MAX_CLIPBOARD_BYTES);
   return {
     text: body,
     hash: crypto.createHash('sha256').update(body, 'utf8').digest('hex'),
-    truncated,
+    truncated: body.length !== normalized.length,
   };
 }
 
@@ -86,14 +125,32 @@ function shouldSendClipboard(payload, lastSentHash) {
   return payload.hash !== lastSentHash;
 }
 
+/** Replaces unpaired surrogates with U+FFFD, exactly as the JVM does. */
+function normalize(text) {
+  return Buffer.from(text, 'utf8').toString('utf8');
+}
+
+/** Cuts the text to a byte budget without splitting a character. */
+function truncateToBytes(text, maxBytes) {
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= maxBytes) return text;
+  let end = maxBytes;
+  // A continuation byte means we are inside a character: back up to its start.
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+  return buf.subarray(0, end).toString('utf8');
+}
+
 module.exports = {
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
-  MAX_CLIPBOARD_CHARS,
+  MAX_CLIPBOARD_BYTES,
   TYPES,
   REASONS,
+  isSupportedVersion,
   encode,
   decode,
   buildClipboardPayload,
   shouldSendClipboard,
+  normalize,
+  truncateToBytes,
 };
