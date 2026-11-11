@@ -33,6 +33,18 @@ class CompanionService : Service() {
     object Status {
         @Volatile
         var state: String = "Not connected"
+
+        @Volatile
+        var isConnected: Boolean = false
+
+        @Volatile
+        var lastSyncedText: String? = null
+
+        @Volatile
+        var lastSyncedTime: Long = 0L
+
+        @Volatile
+        var lastDirection: String? = null // "phone_to_pc" or "pc_to_phone"
     }
 
     private lateinit var settings: CompanionSettings
@@ -89,6 +101,16 @@ class CompanionService : Service() {
         client = null
         oldClient?.close()
 
+        val customName = settings.deviceName
+        val resolvedName = if (customName.isNotEmpty()) {
+            customName
+        } else {
+            val systemName = try {
+                android.provider.Settings.Global.getString(contentResolver, "device_name")
+            } catch (_: Exception) { null }
+            systemName?.ifEmpty { null } ?: android.os.Build.MODEL
+        }
+
         var thisClient: CompanionClient? = null
         thisClient = CompanionClient(
             host = host,
@@ -96,7 +118,7 @@ class CompanionService : Service() {
             deviceId = settings.deviceId.ifEmpty {
                 UUID.randomUUID().toString().also { settings.deviceId = it }
             },
-            deviceName = android.os.Build.MODEL,
+            deviceName = resolvedName,
             code = settings.pairingCode,
             pairing = settings.pairing,
             onPaired = { pcId, fingerprint ->
@@ -105,6 +127,7 @@ class CompanionService : Service() {
             onReady = {
                 if (client === thisClient) {
                     Log.i(TAG, "connected to the computer")
+                    Status.isConnected = true
                     Status.state = "Connected to ${settings.host}"
                     updateNotification("Connected to ${settings.host}")
                     flushPending()
@@ -113,6 +136,7 @@ class CompanionService : Service() {
             onClosed = { reason ->
                 if (client === thisClient) {
                     Log.i(TAG, "disconnected: $reason")
+                    Status.isConnected = false
                     Status.state = "Disconnected · retrying"
                     updateNotification("Disconnected · retrying")
                     scheduleReconnect()
@@ -130,6 +154,18 @@ class CompanionService : Service() {
         if (text.isEmpty()) return
         val payload = ClipboardPayloads.build(text)
         lastSentHash = payload.hash
+
+        Status.lastSyncedText = payload.text
+        Status.lastSyncedTime = System.currentTimeMillis()
+        Status.lastDirection = "pc_to_phone"
+        settings.addHistory(
+            com.aplusconnect.companion.data.ClipHistoryEntry(
+                id = UUID.randomUUID().toString(),
+                text = payload.text,
+                direction = "pc_to_phone",
+                timestamp = System.currentTimeMillis()
+            )
+        )
 
         Handler(Looper.getMainLooper()).post {
             try {
@@ -156,6 +192,18 @@ class CompanionService : Service() {
         val payload = ClipboardPayloads.build(text)
         if (payload.text.isEmpty()) return
         if (payload.hash == lastSentHash) return
+
+        Status.lastSyncedText = payload.text
+        Status.lastSyncedTime = System.currentTimeMillis()
+        Status.lastDirection = "phone_to_pc"
+        settings.addHistory(
+            com.aplusconnect.companion.data.ClipHistoryEntry(
+                id = UUID.randomUUID().toString(),
+                text = payload.text,
+                direction = "phone_to_pc",
+                timestamp = System.currentTimeMillis()
+            )
+        )
 
         val c = client
         if (c != null && c.sendClipboard(payload.text)) {
@@ -242,6 +290,107 @@ class CompanionService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "could not start the service: ${e.message}")
             }
+        }
+
+        /** Manually re-establishes the connection to the computer. */
+        fun reconnect(context: Context) {
+            val running = instance
+            if (running != null) {
+                running.client?.close()
+                running.client = null
+                running.connect()
+            } else {
+                start(context)
+            }
+        }
+
+        /** Disconnects and stops the background service. */
+        fun stop(context: Context) {
+            val running = instance
+            if (running != null) {
+                running.client?.close()
+                running.client = null
+                Status.isConnected = false
+                Status.state = "Stopped"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    running.stopForeground(STOP_FOREGROUND_REMOVE)
+                }
+                running.stopSelf()
+            }
+        }
+
+        /** Streams a chosen file to the PC's Downloads directory over TLS. */
+        fun sendFile(
+            context: Context,
+            uri: android.net.Uri,
+            onProgress: (Float) -> Unit,
+            onComplete: (Boolean, String?) -> Unit
+        ) {
+            val active = instance?.client
+            if (active == null || !active.isReady) {
+                onComplete(false, "Not connected to PC")
+                return
+            }
+
+            Thread {
+                try {
+                    val cr = context.contentResolver
+                    var fileName = "file_${System.currentTimeMillis()}"
+                    var fileSize = 0L
+                    val mimeType = cr.getType(uri) ?: "application/octet-stream"
+
+                    cr.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (cursor.moveToFirst()) {
+                            if (nameIndex != -1) cursor.getString(nameIndex)?.let { fileName = it }
+                            if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
+                        }
+                    }
+
+                    val inputStream = cr.openInputStream(uri) ?: throw Exception("Could not open file")
+                    val transferId = "f_${UUID.randomUUID().toString().take(8)}"
+
+                    if (!active.sendFileStart(transferId, fileName, fileSize, mimeType)) {
+                        onComplete(false, "PC rejected file transfer")
+                        return@Thread
+                    }
+
+                    val buffer = ByteArray(128 * 1024)
+                    var bytesRead: Int
+                    var totalSent = 0L
+                    var chunkIndex = 0
+
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        val chunkBase64 = android.util.Base64.encodeToString(
+                            buffer,
+                            0,
+                            bytesRead,
+                            android.util.Base64.NO_WRAP
+                        )
+                        if (!active.sendFileChunk(transferId, chunkIndex++, chunkBase64)) {
+                            onComplete(false, "Connection broke while sending")
+                            return@Thread
+                        }
+                        totalSent += bytesRead
+                        val progress = if (fileSize > 0) totalSent.toFloat() / fileSize else 0f
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            onProgress(progress)
+                        }
+                    }
+                    inputStream.close()
+
+                    active.sendFileDone(transferId)
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        onProgress(1f)
+                        onComplete(true, null)
+                    }
+                } catch (e: Exception) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        onComplete(false, e.message)
+                    }
+                }
+            }.start()
         }
     }
 }

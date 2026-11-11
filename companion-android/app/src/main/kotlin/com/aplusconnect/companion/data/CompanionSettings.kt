@@ -3,6 +3,31 @@ package com.aplusconnect.companion.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.aplusconnect.companion.protocol.Pairing
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** One item in the phone's synced clipboard history. */
+data class ClipHistoryEntry(
+    val id: String,
+    val text: String,
+    val direction: String, // "phone_to_pc" or "pc_to_phone"
+    val timestamp: Long,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id)
+        .put("text", text)
+        .put("dir", direction)
+        .put("ts", timestamp)
+
+    companion object {
+        fun fromJson(obj: JSONObject): ClipHistoryEntry = ClipHistoryEntry(
+            id = obj.optString("id"),
+            text = obj.optString("text"),
+            direction = obj.optString("dir"),
+            timestamp = obj.optLong("ts"),
+        )
+    }
+}
 
 /**
  * What the phone remembers about the computer it is paired with.
@@ -33,6 +58,11 @@ class CompanionSettings(context: Context) {
         get() = prefs.getString(KEY_DEVICE_ID, "") ?: ""
         set(value) = prefs.edit().putString(KEY_DEVICE_ID, value).apply()
 
+    /** Optional custom device name chosen by the user. */
+    var deviceName: String
+        get() = prefs.getString(KEY_DEVICE_NAME, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
+
     /** The paired computer, or null when this phone is not paired yet. */
     var pairing: Pairing?
         get() {
@@ -60,12 +90,43 @@ class CompanionSettings(context: Context) {
         pairing = null
     }
 
+    fun getHistory(): List<ClipHistoryEntry> {
+        val raw = prefs.getString(KEY_HISTORY, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).map { i ->
+                ClipHistoryEntry.fromJson(array.getJSONObject(i))
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    @Synchronized
+    fun addHistory(entry: ClipHistoryEntry) {
+        val current = getHistory().toMutableList()
+        // Deduplicate recent if same text
+        if (current.isNotEmpty() && current.first().text == entry.text) return
+        current.add(0, entry)
+        while (current.size > 50) current.removeAt(current.size - 1)
+        val array = JSONArray()
+        for (item in current) array.put(item.toJson())
+        prefs.edit().putString(KEY_HISTORY, array.toString()).apply()
+    }
+
+    @Synchronized
+    fun clearHistory() {
+        prefs.edit().remove(KEY_HISTORY).apply()
+    }
+
     companion object {
         private const val KEY_HOST = "host"
         private const val KEY_PORT = "port"
         private const val KEY_CODE = "code"
         private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_PC_ID = "pc_id"
         private const val KEY_FINGERPRINT = "fingerprint"
+        private const val KEY_HISTORY = "clip_history"
     }
 }

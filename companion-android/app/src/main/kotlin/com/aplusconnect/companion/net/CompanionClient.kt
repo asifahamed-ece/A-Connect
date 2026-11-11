@@ -101,6 +101,79 @@ class CompanionClient(
         }
     }
 
+    fun sendFileStart(id: String, name: String, size: Long, mime: String): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
+        val payload = org.json.JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("size", size)
+            .put("mime", mime)
+        val message = ProtocolMessage(
+            type = Protocol.TYPE_FILE_START,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload
+        )
+        return try {
+            synchronized(stream) {
+                stream.write(FrameCodec.encode(message))
+                stream.flush()
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to send file start: ${e.message}")
+            false
+        }
+    }
+
+    fun sendFileChunk(id: String, chunkIndex: Int, dataBase64: String): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
+        val payload = org.json.JSONObject()
+            .put("id", id)
+            .put("chunkIndex", chunkIndex)
+            .put("data", dataBase64)
+        val message = ProtocolMessage(
+            type = Protocol.TYPE_FILE_CHUNK,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload
+        )
+        return try {
+            synchronized(stream) {
+                stream.write(FrameCodec.encode(message))
+                stream.flush()
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to send file chunk: ${e.message}")
+            false
+        }
+    }
+
+    fun sendFileDone(id: String): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
+        val payload = org.json.JSONObject().put("id", id)
+        val message = ProtocolMessage(
+            type = Protocol.TYPE_FILE_DONE,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload
+        )
+        return try {
+            synchronized(stream) {
+                stream.write(FrameCodec.encode(message))
+                stream.flush()
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to send file done: ${e.message}")
+            false
+        }
+    }
+
     private fun readLoop() {
         var reason: String? = null
         try {
