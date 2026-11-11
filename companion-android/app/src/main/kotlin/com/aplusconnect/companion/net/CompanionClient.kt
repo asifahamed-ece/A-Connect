@@ -36,6 +36,7 @@ class CompanionClient(
     private val onPaired: (pcId: String, fingerprint: String) -> Unit,
     private val onReady: () -> Unit,
     private val onClosed: (String) -> Unit,
+    private val onClipboardReceived: (String) -> Unit = {},
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -147,6 +148,14 @@ class CompanionClient(
                     Log.i(TAG, "the computer closed the session")
                     reason = "the computer closed the session"
                     break
+                }
+                if (message.type == Protocol.TYPE_CLIPBOARD_SET) {
+                    val text = message.payload.optString("text")
+                    if (text.isNotEmpty()) {
+                        Log.i(TAG, "received ${text.length} characters from computer")
+                        onClipboardReceived(text)
+                    }
+                    continue
                 }
             }
         } catch (e: Exception) {

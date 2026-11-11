@@ -4,11 +4,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.net.CompanionClient
@@ -45,14 +49,16 @@ class CompanionService : Service() {
         manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "A+ Connect", NotificationManager.IMPORTANCE_LOW)
         )
-        startForeground(NOTIFICATION_ID, notification("Connecting…"))
+        startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
 
         connect()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_CONNECT) {
-            connect()
+            if (client == null || client?.isReady != true) {
+                connect()
+            }
         }
         val text = intent?.getStringExtra(EXTRA_CLIPBOARD)
         if (text != null) send(text)
@@ -100,7 +106,7 @@ class CompanionService : Service() {
                 if (client === thisClient) {
                     Log.i(TAG, "connected to the computer")
                     Status.state = "Connected to ${settings.host}"
-                    notification("Connected to ${settings.host}")
+                    updateNotification("Connected to ${settings.host}")
                     flushPending()
                 }
             },
@@ -108,13 +114,33 @@ class CompanionService : Service() {
                 if (client === thisClient) {
                     Log.i(TAG, "disconnected: $reason")
                     Status.state = "Disconnected · retrying"
-                    notification("Disconnected · retrying")
+                    updateNotification("Disconnected · retrying")
                     scheduleReconnect()
                 }
+            },
+            onClipboardReceived = { text ->
+                applyIncomingClipboard(text)
             },
         )
         client = thisClient
         thisClient.connect()
+    }
+
+    private fun applyIncomingClipboard(text: String) {
+        if (text.isEmpty()) return
+        val payload = ClipboardPayloads.build(text)
+        lastSentHash = payload.hash
+
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("A+ Connect", payload.text)
+                cm.setPrimaryClip(clip)
+                Log.i(TAG, "applied clipboard from PC (${payload.text.length} chars)")
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to apply incoming clipboard: ${e.message}")
+            }
+        }
     }
 
     private fun scheduleReconnect() {
@@ -156,16 +182,16 @@ class CompanionService : Service() {
         }
     }
 
-    private fun notification(text: String): Notification {
-        val n = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("A+ Connect")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_edit)
-            .setOngoing(true)
-            .build()
+    private fun buildNotification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)
+        .setContentTitle("A+ Connect")
+        .setContentText(text)
+        .setSmallIcon(android.R.drawable.ic_menu_edit)
+        .setOngoing(true)
+        .build()
+
+    private fun updateNotification(text: String) {
         val manager = getSystemService(NotificationManager::class.java)
-        manager?.notify(NOTIFICATION_ID, n)
-        return n
+        manager?.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     companion object {
