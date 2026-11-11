@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   // Device & ADB
   getDevices: () => ipcRenderer.invoke('adb:getDevices'),
+  getConnectedDevice: () => ipcRenderer.invoke('adb:getConnectedDevice'),
   getDeviceInfo: (id) => ipcRenderer.invoke('adb:getDeviceInfo', id),
   connectWifi: (ip, port) => ipcRenderer.invoke('adb:connectWifi', ip, port),
   pairWifi: (ip, port, code) => ipcRenderer.invoke('adb:pairWifi', ip, port, code),
@@ -24,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
   listDirectory: (deviceId, remotePath) => ipcRenderer.invoke('file:listDirectory', deviceId, remotePath),
   deletePath: (deviceId, remotePath) => ipcRenderer.invoke('file:delete', deviceId, remotePath),
   makeDirectory: (deviceId, remotePath) => ipcRenderer.invoke('file:mkdir', deviceId, remotePath),
+  searchFiles: (deviceId, query) => ipcRenderer.invoke('file:search', deviceId, query),
+  listRecentFiles: (deviceId) => ipcRenderer.invoke('file:recent', deviceId),
   openLocalFile: (localPath) => ipcRenderer.invoke('file:openLocal', localPath),
   confirmAction: (options) => ipcRenderer.invoke('ui:confirm', options),
 
