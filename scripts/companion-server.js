@@ -13,15 +13,58 @@
 const fs = require('fs');
 const os = require('os');
 const tls = require('tls');
+const { spawn } = require('child_process');
 
 const protocol = require('../services/companion-protocol');
 const { ensureCertificate } = require('../services/companion-cert');
 
 const PORT = Number(process.argv[2] || 24443);
-const CODE = String(Math.floor(Math.random() * 1e6)).padStart(6, '0');
+const CODE = process.env.PAIRING_CODE || process.argv[3] || '099368';
 const PC_ID = 'pc-test';
 
 const { certPath, keyPath, fingerprint } = ensureCertificate();
+
+function writeDesktopClipboard(text) {
+  if (typeof text !== 'string' || !text) return;
+
+  const env = { ...process.env };
+  if (!env.WAYLAND_DISPLAY) {
+    try {
+      const uid = process.getuid();
+      if (fs.existsSync(`/run/user/${uid}/wayland-1`)) {
+        env.WAYLAND_DISPLAY = 'wayland-1';
+      } else if (fs.existsSync(`/run/user/${uid}/wayland-0`)) {
+        env.WAYLAND_DISPLAY = 'wayland-0';
+      }
+    } catch {}
+  }
+
+  const isWayland = Boolean(env.WAYLAND_DISPLAY);
+  const binary = isWayland ? 'wl-copy' : 'xclip';
+  const args = isWayland ? [] : ['-i', '-selection', 'clipboard'];
+
+  try {
+    const child = spawn(binary, args, { env, detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    child.on('error', (err) => console.log(`[clipboard error] ${err.message}`));
+    child.stdin.on('error', () => {});
+    child.on('spawn', () => {
+      child.stdin.end(text);
+      child.unref();
+      console.log(`[server] copied to PC clipboard (${text.length} chars)`);
+    });
+  } catch (err) {
+    console.log(`[clipboard error] ${err.message}`);
+  }
+
+  try {
+    const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+    spawn('notify-send', ['-a', 'A+ Connect', '-i', 'edit-copy', 'Clipboard Synced', preview], {
+      env,
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  } catch {}
+}
 
 function localAddress() {
   const nets = os.networkInterfaces();
@@ -85,7 +128,9 @@ const server = tls.createServer(
         }
 
         if (message.type === protocol.TYPES.CLIPBOARD_SET) {
-          console.log(`[server] clipboard: ${JSON.stringify(message.payload.text)}`);
+          const text = message.payload.text;
+          console.log(`[server] clipboard: ${JSON.stringify(text)}`);
+          writeDesktopClipboard(text);
           continue;
         }
 
