@@ -40,6 +40,12 @@ contextBridge.exposeInMainWorld('api', {
   clearNotificationHistory: () => ipcRenderer.invoke('notifications:clearHistory'),
   dismissNotification: (id) => ipcRenderer.invoke('notifications:dismiss', id),
 
+  // Companion
+  getCompanionInfo: () => ipcRenderer.invoke('companion:getInfo'),
+  setCompanionCode: (code) => ipcRenderer.invoke('companion:setCode', code),
+  startCompanion: (port) => ipcRenderer.invoke('companion:start', port),
+  stopCompanion: () => ipcRenderer.invoke('companion:stop'),
+
   // System & Window
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   toggleMaximize: () => ipcRenderer.send('window:maximize'),
@@ -56,5 +62,8 @@ contextBridge.exposeInMainWorld('api', {
   onTransferProgress: (callback) => ipcRenderer.on('event:transfer-progress', (_, data) => callback(data)),
   onClipboardStatus: (callback) => ipcRenderer.on('event:clipboard-status', (_, data) => callback(data)),
   onClipboardSynced: (callback) => ipcRenderer.on('event:clipboard-synced', (_, data) => callback(data)),
-  onClipboardHistory: (callback) => ipcRenderer.on('event:clipboard-history', (_, data) => callback(data))
+  onClipboardHistory: (callback) => ipcRenderer.on('event:clipboard-history', (_, data) => callback(data)),
+  onCompanionStatus: (callback) => ipcRenderer.on('event:companion-status', (_, data) => callback(data)),
+  onCompanionPaired: (callback) => ipcRenderer.on('event:companion-paired', (_, data) => callback(data)),
+  onCompanionDisconnected: (callback) => ipcRenderer.on('event:companion-disconnected', (_, data) => callback(data))
 });

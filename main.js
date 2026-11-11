@@ -7,6 +7,7 @@ const ScrcpyService = require('./services/scrcpy');
 const FileTransferService = require('./services/file-transfer');
 const ClipboardSyncService = require('./services/clipboard');
 const NotificationService = require('./services/notifications');
+const CompanionService = require('./services/companion');
 
 let mainWindow = null;
 let tray = null;
@@ -18,6 +19,10 @@ const scrcpy = new ScrcpyService();
 const fileTransfer = new FileTransferService();
 const clipboardSync = new ClipboardSyncService();
 const notifications = new NotificationService();
+const companion = new CompanionService();
+
+// Connect companion to clipboard sync
+clipboardSync.setCompanion(companion);
 
 // The renderer can reload or be destroyed while a backend event is in flight;
 // sending at that moment throws "Render frame was disposed". Route every
@@ -91,18 +96,27 @@ function updateTrayMenu() {
   if (!tray) return;
 
   const device = adb.connectedDevice;
-  const isConnected = !!device;
+  const isCompanionConnected = companion.isConnected;
+  const isConnected = !!device || isCompanionConnected;
   const isMirroring = scrcpy.isRunning;
+
+  let deviceLabel = '📱 No Device Connected';
+  if (device) {
+    deviceLabel = `📱 ${device.model} (${device.battery?.level || 0}%)`;
+  } else if (isCompanionConnected) {
+    const compDevice = companion.connectedClients[0];
+    deviceLabel = `📱 ${compDevice?.deviceName || 'Phone'} (Companion)`;
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: isConnected ? `📱 ${device.model} (${device.battery?.level || 0}%)` : '📱 No Device Connected',
+      label: deviceLabel,
       enabled: false
     },
     { type: 'separator' },
     {
       label: isMirroring ? '⏹ Stop Screen Mirroring' : '🖥 Start Screen Mirroring',
-      enabled: isConnected,
+      enabled: !!device,
       click: () => {
         if (isMirroring) {
           scrcpy.stop();
@@ -113,7 +127,7 @@ function updateTrayMenu() {
     },
     {
       label: '📂 Open File Drop',
-      enabled: isConnected,
+      enabled: !!device,
       click: () => {
         if (mainWindow) {
           mainWindow.show();
@@ -125,7 +139,7 @@ function updateTrayMenu() {
       label: '📋 Clipboard Sync',
       type: 'checkbox',
       checked: clipboardSync.enabled,
-      enabled: isConnected,
+      enabled: true,
       click: (item) => {
         clipboardSync.setEnabled(item.checked);
       }
@@ -222,6 +236,27 @@ function setupServiceEvents() {
 
   fileTransfer.on('transfer-cancelled', (data) => {
     sendToRenderer('event:transfer-progress', { status: 'cancelled', ...data });
+  });
+
+  companion.on('listening', (data) => {
+    sendToRenderer('event:companion-listening', data);
+  });
+
+  companion.on('status', (data) => {
+    updateTrayMenu();
+    sendToRenderer('event:companion-status', data);
+  });
+
+  companion.on('client-paired', (data) => {
+    console.log(`[companion] paired phone: ${data.deviceName} (${data.deviceId})`);
+    updateTrayMenu();
+    sendToRenderer('event:companion-paired', data);
+  });
+
+  companion.on('client-disconnected', (data) => {
+    console.log(`[companion] disconnected phone: ${data.deviceId}`);
+    updateTrayMenu();
+    sendToRenderer('event:companion-disconnected', data);
   });
 }
 
@@ -329,6 +364,22 @@ function setupIpcHandlers() {
     success: notifications.dismiss(id)
   }));
 
+  // Companion IPC Handlers
+  ipcMain.handle('companion:getInfo', async () => companion.getInfo());
+  ipcMain.handle('companion:start', async (_, port) => {
+    companion.start(port);
+    return companion.getInfo();
+  });
+  ipcMain.handle('companion:stop', async () => {
+    companion.stop();
+    return companion.getInfo();
+  });
+  ipcMain.handle('companion:setCode', async (_, code) => {
+    companion.pairingCode = code;
+    companion.saveSettings();
+    return companion.getInfo();
+  });
+
   ipcMain.handle('ui:confirm', async (_, options = {}) => {
     if (!mainWindow) return false;
     const result = await dialog.showMessageBox(mainWindow, {
@@ -349,8 +400,9 @@ app.whenReady().then(() => {
   setupServiceEvents();
   setupIpcHandlers();
 
-  // Start continuous device discovery
+  // Start continuous device discovery and companion server
   adb.startPolling(2500);
+  companion.start();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -361,6 +413,7 @@ app.on('before-quit', () => {
   isQuitting = true;
   adb.stopPolling();
   scrcpy.stop();
+  companion.stop();
   clipboardSync.stop();
   notifications.stop();
 });
