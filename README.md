@@ -103,15 +103,33 @@ cd "A+ Connect"
 npm start
 ```
 
-### First-Time Setup (Enable Wireless Debugging)
+### First-Time Setup (One-Command USB Auto-Setup)
 
-On your **Oppo Reno 14 5G (ColorOS 16/17)**:
+**No Developer Options Needed!** Just run this once:
 
-1. Enable **Developer Options**:
-   - Settings → About Phone → Tap "Build Number" 7 times
-2. Enable **Wireless Debugging**:
-   - Settings → System Settings → Developer options → Wireless debugging → ON
-3. Connect to the **same Wi-Fi network** as your Linux desktop
+```bash
+# 1. Connect your Reno 14 5G via USB
+# 2. Enable "USB debugging" when prompted on your phone (one-time permission)
+# 3. Run the setup script:
+./setup-usb.sh
+
+# That's it! The script will:
+# - Auto-enable wireless ADB on your phone
+# - Get your phone's Wi-Fi IP address
+# - Connect wirelessly
+# - Tell you when you can unplug the USB cable
+
+# From now on, as long as both devices are on the same Wi-Fi:
+npm start  # Just launch - your phone auto-connects!
+```
+
+The USB setup script eliminates the need to:
+- Enable Developer Options manually
+- Navigate to Wireless Debugging settings
+- Enter pairing codes
+- Remember IP addresses
+
+Just plug USB once, run the script, unplug, and you're wireless forever.
 
 ### Connecting Your Device
 
