@@ -34,6 +34,13 @@
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".7" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v6M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0z"/><path d="M12 18v3"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a7 7 0 1 0 10.5 10.5z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2a2 2 0 0 1 1.6.8l.9 1.2H18.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6"/><path d="M20 5v6h-6"/></symbol>
+    <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2a2 2 0 0 1 1.6.8l.9 1.2H18.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 11v5M9.5 13.5h5"/></symbol>
   </svg>
 
   <div class="app">
@@ -46,6 +53,10 @@
       </div>
       <div class="titlebar-drag"></div>
       <div class="window-controls">
+        <button class="win-btn" id="theme-toggle" aria-label="Toggle dark theme" title="Toggle dark theme">
+          <svg class="icon theme-icon-light"><use href="#i-moon"/></svg>
+          <svg class="icon theme-icon-dark"><use href="#i-sun"/></svg>
+        </button>
         <button class="win-btn" id="win-min" aria-label="Minimize"><svg class="icon"><use href="#i-min"/></svg></button>
         <button class="win-btn" id="win-max" aria-label="Maximize"><svg class="icon"><use href="#i-max"/></svg></button>
         <button class="win-btn danger" id="win-close" aria-label="Close"><svg class="icon"><use href="#i-close"/></svg></button>
@@ -107,21 +118,21 @@
             <svg class="empty-art" viewBox="0 0 320 200" aria-hidden="true">
               <defs>
                 <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stop-color="#E8F0FF"/><stop offset="1" stop-color="#D6E4FF"/>
+                  <stop offset="0" stop-color="var(--art-a)"/><stop offset="1" stop-color="var(--art-b)"/>
                 </linearGradient>
               </defs>
-              <rect x="52" y="34" width="150" height="96" rx="8" fill="url(#g1)" stroke="#BBD3FF" stroke-width="2"/>
-              <rect x="66" y="48" width="122" height="68" rx="4" fill="#fff" stroke="#D6E4FF"/>
-              <circle cx="127" cy="76" r="13" fill="#C7DAFF"/>
-              <path d="M108 104c4-11 11-16 19-16s15 5 19 16z" fill="#C7DAFF"/>
-              <path d="M127 130v14" stroke="#BBD3FF" stroke-width="3"/>
-              <rect x="96" y="144" width="62" height="6" rx="3" fill="#BBD3FF"/>
-              <rect x="186" y="60" width="66" height="120" rx="12" fill="#fff" stroke="#BBD3FF" stroke-width="2"/>
-              <rect x="194" y="74" width="50" height="88" rx="6" fill="#F1F6FF"/>
-              <circle cx="219" cy="90" r="9" fill="#C7DAFF"/>
-              <path d="M205 118c3-8 8-12 14-12s11 4 14 12z" fill="#C7DAFF"/>
-              <rect x="228" y="140" width="46" height="62" rx="10" fill="#fff" stroke="#BBD3FF" stroke-width="2"/>
-              <rect x="235" y="150" width="32" height="44" rx="5" fill="#F1F6FF"/>
+              <rect x="52" y="34" width="150" height="96" rx="8" fill="url(#g1)" stroke="var(--art-line)" stroke-width="2"/>
+              <rect x="66" y="48" width="122" height="68" rx="4" fill="var(--art-body)" stroke="var(--art-line)"/>
+              <circle cx="127" cy="76" r="13" fill="var(--art-fill)"/>
+              <path d="M108 104c4-11 11-16 19-16s15 5 19 16z" fill="var(--art-fill)"/>
+              <path d="M127 130v14" stroke="var(--art-line)" stroke-width="3"/>
+              <rect x="96" y="144" width="62" height="6" rx="3" fill="var(--art-line)"/>
+              <rect x="186" y="60" width="66" height="120" rx="12" fill="var(--art-body)" stroke="var(--art-line)" stroke-width="2"/>
+              <rect x="194" y="74" width="50" height="88" rx="6" fill="var(--art-screen)"/>
+              <circle cx="219" cy="90" r="9" fill="var(--art-fill)"/>
+              <path d="M205 118c3-8 8-12 14-12s11 4 14 12z" fill="var(--art-fill)"/>
+              <rect x="228" y="140" width="46" height="62" rx="10" fill="var(--art-body)" stroke="var(--art-line)" stroke-width="2"/>
+              <rect x="235" y="150" width="32" height="44" rx="5" fill="var(--art-screen)"/>
             </svg>
             <h1 class="empty-title">No devices found</h1>
             <p class="empty-sub">
@@ -182,13 +193,13 @@
               </div>
             </div>
             <svg class="cast-art" viewBox="0 0 180 220" aria-hidden="true">
-              <rect x="40" y="10" width="100" height="200" rx="16" fill="#fff" stroke="#D6E4FF" stroke-width="2"/>
-              <rect x="50" y="26" width="80" height="150" rx="8" fill="#EFF5FF"/>
-              <circle cx="90" cy="54" r="12" fill="#C7DAFF"/>
-              <path d="M68 106c4-13 12-19 22-19s18 6 22 19z" fill="#C7DAFF"/>
-              <rect x="66" y="120" width="48" height="8" rx="4" fill="#DCE8FF"/>
-              <rect x="74" y="136" width="32" height="8" rx="4" fill="#DCE8FF"/>
-              <path d="M90 186h0" stroke="#2563EB" stroke-width="4" stroke-linecap="round"/>
+              <rect x="40" y="10" width="100" height="200" rx="16" fill="var(--art-body)" stroke="var(--art-line)" stroke-width="2"/>
+              <rect x="50" y="26" width="80" height="150" rx="8" fill="var(--art-screen)"/>
+              <circle cx="90" cy="54" r="12" fill="var(--art-fill)"/>
+              <path d="M68 106c4-13 12-19 22-19s18 6 22 19z" fill="var(--art-fill)"/>
+              <rect x="66" y="120" width="48" height="8" rx="4" fill="var(--art-fill)"/>
+              <rect x="74" y="136" width="32" height="8" rx="4" fill="var(--art-fill)"/>
+              <path d="M90 186h0" stroke="var(--brand)" stroke-width="4" stroke-linecap="round"/>
             </svg>
           </div>
 
@@ -228,6 +239,27 @@
             <svg class="icon icon-lg"><use href="#i-upload"/></svg>
             <div class="dropzone-title">Drop files here</div>
             <div class="dropzone-sub">or click to browse your computer</div>
+          </div>
+
+          <div class="browser card">
+            <div class="browser-bar">
+              <button class="icon-btn" id="browse-up" aria-label="Parent folder">
+                <svg class="icon"><use href="#i-up"/></svg>
+              </button>
+              <div class="breadcrumb" id="browse-path">/sdcard</div>
+              <button class="icon-btn" id="browse-refresh" aria-label="Refresh folder">
+                <svg class="icon"><use href="#i-refresh"/></svg>
+              </button>
+              <button class="btn-ghost btn-sm" id="browse-newfolder">
+                <svg class="icon"><use href="#i-folder-plus"/></svg><span>New folder</span>
+              </button>
+              <button class="btn-ghost btn-sm" id="browse-upload">
+                <svg class="icon"><use href="#i-upload"/></svg><span>Upload here</span>
+              </button>
+            </div>
+            <div class="browser-list" id="browser-list">
+              <div class="list-empty">Loading phone storage…</div>
+            </div>
           </div>
 
           <div class="list" id="transfer-list">
@@ -359,6 +391,42 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cast confirmation -->
+  <div class="modal-root" id="modal-cast" hidden>
+    <div class="modal-scrim" data-close-modal></div>
+    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="modal-cast-title">
+      <button class="modal-close" data-close-modal aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+      <h2 class="modal-title" id="modal-cast-title">Start casting?</h2>
+      <p class="modal-sub">
+        Your phone screen will be streamed to this PC and you will be able to control it.
+        A notification appears on the phone for as long as casting is active.
+      </p>
+      <label class="check-row">
+        <input type="checkbox" id="cast-confirm-skip">
+        <span>Don't ask again</span>
+      </label>
+      <div class="modal-actions">
+        <button class="btn-ghost" data-close-modal>Cancel</button>
+        <button class="btn-primary" id="btn-cast-confirm">Start casting</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Text prompt -->
+  <div class="modal-root" id="modal-prompt" hidden>
+    <div class="modal-scrim" data-close-modal></div>
+    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+      <h2 class="modal-title" id="prompt-title">New folder</h2>
+      <input class="input" id="prompt-input" placeholder="Name" autocomplete="off">
+      <div class="modal-actions" style="margin-top: 16px;">
+        <button class="btn-ghost" data-close-modal>Cancel</button>
+        <button class="btn-primary" id="prompt-ok">Create</button>
       </div>
     </div>
   </div>
