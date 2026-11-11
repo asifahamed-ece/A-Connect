@@ -238,6 +238,10 @@ function setupIpcHandlers() {
 
   // ADB Handlers
   ipcMain.handle('adb:getDevices', async () => adb.getDevices());
+  // The renderer can be reloaded (devtools, crash) while the main process
+  // keeps the connection, so it asks for the current device instead of
+  // waiting for an event that already happened.
+  ipcMain.handle('adb:getConnectedDevice', async () => adb.connectedDevice);
   ipcMain.handle('adb:getDeviceInfo', async (_, id) => adb.getDeviceInfo(id));
   ipcMain.handle('adb:connectWifi', async (_, ip, port) => adb.connectWifi(ip, port));
   ipcMain.handle('adb:pairWifi', async (_, ip, port, code) => adb.pairWifi(ip, port, code));
@@ -284,6 +288,12 @@ function setupIpcHandlers() {
   });
   ipcMain.handle('file:mkdir', async (_, deviceId, remotePath) => {
     return fileTransfer.makeDirectory(deviceId, remotePath);
+  });
+  ipcMain.handle('file:search', async (_, deviceId, query) => {
+    return fileTransfer.searchFiles(deviceId, query);
+  });
+  ipcMain.handle('file:recent', async (_, deviceId) => {
+    return fileTransfer.recentFiles(deviceId);
   });
   ipcMain.handle('file:openLocal', async (_, localPath) => {
     const error = await shell.openPath(localPath);
