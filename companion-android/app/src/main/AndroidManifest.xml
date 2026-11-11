@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
@@ -13,5 +18,43 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Spike only: exported so the shell can start them for measurement.
+             The shipping manifest in phase P2 sets these back to false. -->
+        <activity
+            android:name=".spike.ClipboardProbeActivity"
+            android:exported="true" />
+
+        <service
+            android:name=".spike.ProbeAccessibilityService"
+            android:exported="true"
+            android:label="@string/probe_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".spike.ProbeRelayService"
+            android:exported="true"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Spike only: the default IME is the one role Android grants
+             privileged clipboard access to. -->
+        <service
+            android:name=".spike.ProbeImeService"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
     </application>
 </manifest>
