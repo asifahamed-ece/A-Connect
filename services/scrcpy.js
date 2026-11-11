@@ -1,12 +1,15 @@
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const EventEmitter = require('events');
 
 class ScrcpyService extends EventEmitter {
-  constructor(scrcpyPath = 'scrcpy') {
+  constructor(scrcpyPath = 'scrcpy', adbPath = 'adb') {
     super();
     this.scrcpyPath = scrcpyPath;
+    this.adbPath = adbPath;
     this.process = null;
+    this.deviceId = null;
     this.isRunning = false;
+    this.stopping = false;
   }
 
   start(deviceId, options = {}) {
@@ -15,7 +18,10 @@ class ScrcpyService extends EventEmitter {
     }
 
     const {
-      turnScreenOff = true,
+      // `--turn-screen-off` blanks the phone while casting. It is opt-in here
+      // because it is the pair with --power-off-on-close that used to leave the
+      // phone stuck on a black screen after stopping.
+      turnScreenOff = false,
       stayAwake = true,
       maxFps = 60,
       bitRate = '16M',
@@ -65,8 +71,9 @@ class ScrcpyService extends EventEmitter {
     if (alwaysOnTop) args.push('--always-on-top');
     if (fullscreen) args.push('--fullscreen');
 
-    // Disable display on start (saves power)
-    args.push('--power-off-on-close');
+    // NOTE: deliberately no --power-off-on-close. That flag powers the phone
+    // display off when the client exits, and when we stop with SIGTERM the
+    // phone was left on a black screen (and then dropped off Wi-Fi ADB).
 
     // Clipboard synchronization is enabled by default in scrcpy 5.x
     // Auto-syncs between Linux X11/Wayland clipboard and Android clipboard
@@ -88,6 +95,8 @@ class ScrcpyService extends EventEmitter {
       });
 
       this.isRunning = true;
+      this.deviceId = deviceId || null;
+      this.stopping = false;
       this.emit('started', { deviceId, args });
 
       this.process.stdout.on('data', (data) => {
@@ -103,7 +112,16 @@ class ScrcpyService extends EventEmitter {
       this.process.on('close', (code) => {
         this.isRunning = false;
         this.process = null;
-        this.emit('stopped', { code });
+        const device = this.deviceId;
+        this.deviceId = null;
+
+        // Always leave the phone awake and usable, however the client ended.
+        this.restoreDevice(device);
+
+        if (!this.stopping) {
+          this.stopping = false;
+          this.emit('stopped', { code });
+        }
       });
 
       this.process.on('error', (err) => {
@@ -120,15 +138,38 @@ class ScrcpyService extends EventEmitter {
     }
   }
 
+  // Wake the display and undo scrcpy's --stay-awake, so stopping a cast can
+  // never strand the phone on a black screen.
+  restoreDevice(deviceId) {
+    if (!deviceId) return;
+
+    const run = (args) => {
+      execFile(this.adbPath, ['-s', deviceId, 'shell', ...args], { timeout: 5000 }, () => {});
+    };
+
+    // KEYCODE_WAKEUP (224) is a no-op when the screen is already on.
+    run(['input', 'keyevent', '224']);
+    run(['svc', 'power', 'stayon', 'false']);
+  }
+
   stop() {
-    if (this.process) {
+    if (!this.process) return { success: false, message: 'Not running' };
+
+    this.stopping = true;
+    try {
       this.process.kill('SIGTERM');
-      this.isRunning = false;
-      this.process = null;
-      this.emit('stopped', { code: 0 });
-      return { success: true };
-    }
-    return { success: false, message: 'Not running' };
+      // If the client ignores SIGTERM, make sure it cannot linger.
+      setTimeout(() => {
+        try {
+          this.process?.kill('SIGKILL');
+        } catch {}
+      }, 2500).unref?.();
+    } catch {}
+
+    this.isRunning = false;
+    this.process = null;
+    this.emit('stopped', { code: 0 });
+    return { success: true };
   }
 }
 
