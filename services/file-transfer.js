@@ -9,17 +9,53 @@ class FileTransferService extends EventEmitter {
     super();
     this.adbPath = adbPath;
     this.activeTransfers = new Map();
+    this.cancelled = new Set();
+  }
+
+  /** Stop an in-flight push/pull. Resolves the original promise as cancelled. */
+  cancelTransfer(transferId) {
+    const proc = this.activeTransfers.get(transferId);
+    if (!proc) return false;
+
+    this.cancelled.add(transferId);
+    this.activeTransfers.delete(transferId);
+    try {
+      proc.kill('SIGTERM');
+      // adb sometimes needs a firmer nudge.
+      setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {}
+      }, 1500).unref?.();
+    } catch {}
+
+    this.emit('transfer-cancelled', { id: transferId });
+    return true;
+  }
+
+  cancelAll() {
+    let count = 0;
+    for (const id of [...this.activeTransfers.keys()]) {
+      if (this.cancelTransfer(id)) count += 1;
+    }
+    return count;
   }
 
   async pushFile(deviceId, localFilePath, remoteDestDir = '/sdcard/Download/') {
     const filename = path.basename(localFilePath);
     const transferId = `push_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+    let size = 0;
+    try {
+      size = fs.statSync(localFilePath).size;
+    } catch {}
+
     return new Promise((resolve, reject) => {
       this.emit('transfer-started', {
         id: transferId,
         type: 'push',
         filename,
+        size,
         localFilePath,
         remoteDestDir
       });
@@ -37,6 +73,14 @@ class FileTransferService extends EventEmitter {
 
       proc.on('close', async (code) => {
         this.activeTransfers.delete(transferId);
+
+        if (this.cancelled.has(transferId)) {
+          this.cancelled.delete(transferId);
+          this.emit('transfer-cancelled', { id: transferId, filename, type: 'push' });
+          resolve({ success: false, cancelled: true });
+          return;
+        }
+
         if (code === 0) {
           // Trigger ColorOS media scanner so new files appear in Photos / File Manager immediately
           const targetPath = `${remoteDestDir.replace(/\/$/, '')}/${filename}`;
@@ -62,6 +106,11 @@ class FileTransferService extends EventEmitter {
 
       proc.on('error', (err) => {
         this.activeTransfers.delete(transferId);
+        if (this.cancelled.delete(transferId)) {
+          this.emit('transfer-cancelled', { id: transferId, filename, type: 'push' });
+          resolve({ success: false, cancelled: true });
+          return;
+        }
         this.emit('transfer-failed', { id: transferId, error: err.message });
         reject(err);
       });
@@ -136,6 +185,14 @@ class FileTransferService extends EventEmitter {
 
       proc.on('close', (code) => {
         this.activeTransfers.delete(transferId);
+
+        if (this.cancelled.has(transferId)) {
+          this.cancelled.delete(transferId);
+          this.emit('transfer-cancelled', { id: transferId, type: 'pull' });
+          resolve({ success: false, cancelled: true });
+          return;
+        }
+
         if (code === 0) {
           this.emit('transfer-completed', { id: transferId, type: 'pull', localTarget });
           resolve({ success: true, localTarget });
@@ -144,6 +201,17 @@ class FileTransferService extends EventEmitter {
           this.emit('transfer-failed', { id: transferId, error: err.message });
           reject(err);
         }
+      });
+
+      proc.on('error', (err) => {
+        this.activeTransfers.delete(transferId);
+        if (this.cancelled.delete(transferId)) {
+          this.emit('transfer-cancelled', { id: transferId, type: 'pull' });
+          resolve({ success: false, cancelled: true });
+          return;
+        }
+        this.emit('transfer-failed', { id: transferId, error: err.message });
+        reject(err);
       });
 
       proc.on('error', (err) => {
