@@ -19,6 +19,20 @@ const fileTransfer = new FileTransferService();
 const clipboardSync = new ClipboardSyncService();
 const notifications = new NotificationService();
 
+// The renderer can reload or be destroyed while a backend event is in flight;
+// sending at that moment throws "Render frame was disposed". Route every
+// main -> renderer message through here so a dead window can never break a
+// running sync loop.
+function sendToRenderer(channel, payload) {
+  if (!mainWindow) return;
+  if (mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send(channel, payload);
+  } catch (e) {
+    console.error(`Failed to send ${channel} to renderer:`, e.message);
+  }
+}
+
 function createWindow() {
   const iconPath = path.join(__dirname, 'assets', 'icon.png');
 
@@ -103,8 +117,17 @@ function updateTrayMenu() {
       click: () => {
         if (mainWindow) {
           mainWindow.show();
-          mainWindow.webContents.send('route:navigate', 'files');
+          sendToRenderer('route:navigate', 'files');
         }
+      }
+    },
+    {
+      label: '📋 Clipboard Sync',
+      type: 'checkbox',
+      checked: clipboardSync.enabled,
+      enabled: isConnected,
+      click: (item) => {
+        clipboardSync.setEnabled(item.checked);
       }
     },
     { type: 'separator' },
@@ -133,10 +156,12 @@ function updateTrayMenu() {
 function setupServiceEvents() {
   adb.on('device-connected', (device) => {
     console.log('Device connected:', device.model);
-    clipboardSync.start(device.id);
+    clipboardSync.start(device.id).catch((e) => {
+      console.error('Clipboard sync failed to start:', e.message);
+    });
     notifications.start(device.id);
     updateTrayMenu();
-    if (mainWindow) mainWindow.webContents.send('event:device-connected', device);
+    sendToRenderer('event:device-connected', device);
   });
 
   adb.on('device-disconnected', (device) => {
@@ -145,38 +170,58 @@ function setupServiceEvents() {
     notifications.stop();
     scrcpy.stop();
     updateTrayMenu();
-    if (mainWindow) mainWindow.webContents.send('event:device-disconnected', device);
+    sendToRenderer('event:device-disconnected', device);
   });
 
   adb.on('telemetry-updated', (device) => {
     updateTrayMenu();
-    if (mainWindow) mainWindow.webContents.send('event:telemetry-updated', device);
+    sendToRenderer('event:telemetry-updated', device);
   });
 
   scrcpy.on('started', (data) => {
     updateTrayMenu();
-    if (mainWindow) mainWindow.webContents.send('event:mirror-started', data);
+    sendToRenderer('event:mirror-started', data);
   });
 
   scrcpy.on('stopped', (data) => {
     updateTrayMenu();
-    if (mainWindow) mainWindow.webContents.send('event:mirror-stopped', data);
+    sendToRenderer('event:mirror-stopped', data);
   });
 
   notifications.on('notification-received', (notif) => {
-    if (mainWindow) mainWindow.webContents.send('event:notification-received', notif);
+    sendToRenderer('event:notification-received', notif);
+  });
+
+  clipboardSync.on('status', (state) => {
+    console.log('Clipboard sync status:', state.status, state.detail ? `- ${state.detail}` : '');
+    updateTrayMenu();
+    sendToRenderer('event:clipboard-status', state);
+  });
+
+  clipboardSync.on('synced', (entry) => {
+    const preview = entry.text.length > 40 ? `${entry.text.slice(0, 40)}…` : entry.text;
+    console.log(`Clipboard ${entry.direction}: ${JSON.stringify(preview)}`);
+    sendToRenderer('event:clipboard-synced', entry);
+  });
+
+  clipboardSync.on('history-updated', (entry) => {
+    sendToRenderer('event:clipboard-history', entry);
   });
 
   fileTransfer.on('transfer-started', (data) => {
-    if (mainWindow) mainWindow.webContents.send('event:transfer-progress', { status: 'started', ...data });
+    sendToRenderer('event:transfer-progress', { status: 'started', ...data });
   });
 
   fileTransfer.on('transfer-completed', (data) => {
-    if (mainWindow) mainWindow.webContents.send('event:transfer-progress', { status: 'completed', ...data });
+    sendToRenderer('event:transfer-progress', { status: 'completed', ...data });
   });
 
   fileTransfer.on('transfer-failed', (data) => {
-    if (mainWindow) mainWindow.webContents.send('event:transfer-progress', { status: 'failed', ...data });
+    sendToRenderer('event:transfer-progress', { status: 'failed', ...data });
+  });
+
+  fileTransfer.on('transfer-cancelled', (data) => {
+    sendToRenderer('event:transfer-progress', { status: 'cancelled', ...data });
   });
 }
 
@@ -184,6 +229,11 @@ function setupServiceEvents() {
 function setupIpcHandlers() {
   // Window controls
   ipcMain.on('window:minimize', () => { if (mainWindow) mainWindow.minimize(); });
+  ipcMain.on('window:maximize', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+  });
   ipcMain.on('window:close', () => { if (mainWindow) mainWindow.close(); });
 
   // ADB Handlers
@@ -217,10 +267,29 @@ function setupIpcHandlers() {
     });
     return result.filePaths;
   });
+  ipcMain.handle('file:cancel', async (_, transferId) => ({
+    success: fileTransfer.cancelTransfer(transferId)
+  }));
+  ipcMain.handle('file:cancelAll', async () => ({ cancelled: fileTransfer.cancelAll() }));
 
   // Clipboard & Notifications
   ipcMain.handle('clipboard:toggle', async (_, enabled) => {
     clipboardSync.setEnabled(enabled);
+    return { success: true, enabled: clipboardSync.enabled };
+  });
+  ipcMain.handle('clipboard:getStatus', async () => ({
+    status: clipboardSync.status,
+    enabled: clipboardSync.enabled,
+    deviceId: clipboardSync.deviceId
+  }));
+  ipcMain.handle('clipboard:getHistory', async () => clipboardSync.getHistory());
+  ipcMain.handle('clipboard:clearHistory', async () => {
+    clipboardSync.clearHistory();
+    return { success: true };
+  });
+  ipcMain.handle('clipboard:sendToPhone', async (_, text) => {
+    if (typeof text !== 'string' || !text) return { success: false };
+    clipboardSync.pushToPhone(text);
     return { success: true };
   });
   ipcMain.handle('notifications:getHistory', async () => notifications.history);
