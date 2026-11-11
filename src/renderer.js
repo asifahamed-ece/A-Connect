@@ -1,407 +1,645 @@
-// Renderer Process - UI Logic
-let currentDevice = null;
-let isMirroring = false;
-let currentView = 'connection';
+/* A+ Connect — renderer
+   Single source of truth for the UI. No inline handlers, no duplicated
+   listeners: every signal is wired exactly once in init(). */
 
-// Initialize app on load
-window.addEventListener('DOMContentLoaded', () => {
-  console.log('A+ Connect initializing...');
-  setupEventListeners();
-  checkForDevices();
-  setupFileDrop();
+const state = {
+  device: null,
+  view: 'empty',
+  transfers: new Map(),
+  notifications: [],
+  unreadNotifications: 0,
+  clipboard: [],
+  clipboardStatus: { status: 'idle', enabled: true },
+  casting: false,
+};
 
-  // Poll for device discovery every 3 seconds
-  setInterval(checkForDevices, 3000);
-});
+const $ = (id) => document.getElementById(id);
 
-// Setup IPC event listeners from main process
-function setupEventListeners() {
-  window.api.onDeviceConnected((device) => {
-    console.log('Device connected:', device);
-    currentDevice = device;
-    showDeviceCard();
+/* ---------- Small helpers ---------- */
+
+function icon(name, cls = 'icon') {
+  return `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function toast(message, kind = 'ok') {
+  const host = $('toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${kind === 'err' ? 'err' : ''}`;
+  el.innerHTML = `${icon(kind === 'err' ? 'info' : 'check')}<span>${escapeHtml(message)}</span>`;
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+/* ---------- Views ---------- */
+
+const VIEWS = ['empty', 'device', 'files', 'notifications', 'clipboard'];
+
+function showView(name) {
+  if (!VIEWS.includes(name)) return;
+
+  // Without a device, the only useful screen is the empty state.
+  if (!state.device && name !== 'empty') {
+    name = 'empty';
+  }
+
+  state.view = name;
+
+  for (const view of VIEWS) {
+    const el = $(`view-${view}`);
+    if (el) el.hidden = view !== name;
+  }
+
+  document.querySelectorAll('.nav-item[data-view]').forEach((el) => {
+    el.classList.toggle('active', el.dataset.view === name);
   });
 
-  window.api.onDeviceDisconnected((device) => {
-    console.log('Device disconnected');
-    currentDevice = null;
-    showConnectionPanel();
-  });
-
-  window.api.onTelemetryUpdated((device) => {
-    currentDevice = device;
-    updateTelemetry(device);
-  });
-
-  window.api.onMirrorStarted(() => {
-    isMirroring = true;
-    updateMirrorButton();
-  });
-
-  window.api.onMirrorStopped(() => {
-    isMirroring = false;
-    updateMirrorButton();
-  });
-
-  window.api.onNotificationReceived((notif) => {
-    addNotificationToList(notif);
-  });
-
-  window.api.onTransferProgress((data) => {
-    updateTransferLog(data);
-  });
-}
-
-async function checkForDevices() {
-  try {
-    const devices = await window.api.getDevices();
-    const activeDevice = devices.find(d => d.state === 'device');
-
-    if (activeDevice && !currentDevice) {
-      const info = await window.api.getDeviceInfo(activeDevice.id);
-      currentDevice = info;
-      showDeviceCard();
-    } else if (!activeDevice && currentDevice) {
-      currentDevice = null;
-      showConnectionPanel();
-    }
-  } catch (err) {
-    console.error('Error checking devices:', err);
+  if (name === 'notifications') {
+    state.unreadNotifications = 0;
+    renderBadges();
+    loadNotificationHistory();
+  }
+  if (name === 'clipboard') {
+    loadClipboardHistory();
+    refreshClipboardStatus();
+  }
+  if (name === 'device') {
+    renderDevice();
   }
 }
 
-function showDeviceCard() {
-  document.getElementById('connection-panel').style.display = 'none';
-  document.getElementById('device-card').style.display = 'block';
-  document.getElementById('file-panel').style.display = 'none';
-  document.getElementById('notifications-panel').style.display = 'none';
+/* ---------- Device ---------- */
 
-  if (currentDevice) {
-    document.getElementById('device-brand').textContent = currentDevice.brand || 'OPPO';
-    document.getElementById('device-model').textContent = currentDevice.model || 'Reno 14 5G';
-    updateTelemetry(currentDevice);
-  }
+function renderDevice() {
+  const device = state.device;
+  const list = $('device-list');
+  const sub = $('profile-sub');
 
-  currentView = 'device';
-}
-
-function showConnectionPanel() {
-  document.getElementById('device-card').style.display = 'none';
-  document.getElementById('connection-panel').style.display = 'block';
-  document.getElementById('file-panel').style.display = 'none';
-  document.getElementById('notifications-panel').style.display = 'none';
-  currentView = 'connection';
-}
-
-function showHome() {
-  if (currentDevice) {
-    showDeviceCard();
-  } else {
-    showConnectionPanel();
-  }
-}
-
-function updateTelemetry(device) {
-  if (!device) return;
-
-  const batteryEl = document.getElementById('battery-level');
-  const colorosEl = document.getElementById('coloros-version');
-  const connectionEl = document.getElementById('device-connection');
-
-  if (batteryEl) {
-    const level = device.battery?.level || 0;
-    const charging = device.battery?.isCharging ? '⚡' : '';
-    batteryEl.textContent = `${level}% ${charging}`;
-  }
-
-  if (colorosEl) {
-    colorosEl.textContent = device.colorOsVersion || 'ColorOS';
-  }
-
-  if (connectionEl) {
-    connectionEl.textContent = device.isWifi ? '📡 Wi-Fi' : '🔌 USB';
-  }
-}
-
-function updateMirrorButton() {
-  const btn = document.getElementById('btn-mirror');
-  if (btn) {
-    const label = btn.querySelector('.btn-label');
-    if (isMirroring) {
-      label.textContent = 'Stop Mirror';
-      btn.classList.add('active');
-    } else {
-      label.textContent = 'Screen Mirror';
-      btn.classList.remove('active');
-    }
-  }
-}
-
-async function toggleMirroring() {
-  if (!currentDevice) return;
-
-  try {
-    if (isMirroring) {
-      await window.api.stopMirroring();
-    } else {
-      await window.api.startMirroring(currentDevice.id, {
-        turnScreenOff: true,
-        stayAwake: true,
-        maxFps: 60,
-        bitRate: '16M',
-        audio: true,
-        windowTitle: `${currentDevice.model} - A+ Connect`,
-        alwaysOnTop: false
-      });
-    }
-  } catch (err) {
-    console.error('Mirroring error:', err);
-    alert(`Mirror ${isMirroring ? 'stop' : 'start'} failed: ${err.message}`);
-  }
-}
-
-function selectMode(mode) {
-  document.getElementById('mode-wifi').classList.remove('active');
-  document.getElementById('mode-usb').classList.remove('active');
-
-  if (mode === 'wifi') {
-    document.getElementById('mode-wifi').classList.add('active');
-    document.getElementById('wifi-setup').style.display = 'block';
-    document.getElementById('usb-setup').style.display = 'none';
-  } else {
-    document.getElementById('mode-usb').classList.add('active');
-    document.getElementById('wifi-setup').style.display = 'none';
-    document.getElementById('usb-setup').style.display = 'block';
-  }
-}
-
-async function pairDevice() {
-  const ip = document.getElementById('pair-ip').value.trim();
-  const port = document.getElementById('pair-port').value.trim();
-  const code = document.getElementById('pair-code').value.trim();
-
-  if (!ip || !port || !code) {
-    alert('Please enter IP, port, and pairing code');
+  if (!device) {
+    list.innerHTML = '<div class="device-empty">No device connected</div>';
+    sub.textContent = 'Not connected';
+    showView('empty');
     return;
   }
 
-  const btn = document.getElementById('btn-pair');
-  btn.disabled = true;
-  btn.innerHTML = '<span>🔐 Pairing...</span>';
+  list.innerHTML = `
+    <button class="device-row active" type="button">
+      ${icon('phone')}
+      <span class="device-row-text">
+        <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
+        <span class="device-row-meta">${device.isWifi ? 'Wi-Fi' : 'USB'} · connected</span>
+      </span>
+    </button>`;
 
-  try {
-    const result = await window.api.pairWifi(ip, port, code);
-    if (result.success) {
-      alert(`✅ Pairing successful!\n\n${result.message}\n\nNow proceed to Step 4 to connect.`);
-      // Auto-fill the connect IP
-      document.getElementById('connect-ip').value = ip;
-    } else {
-      alert(`❌ Pairing failed:\n\n${result.message}`);
-    }
-  } catch (err) {
-    alert(`Error: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<span>🔐 Pair Device</span>';
-  }
+  sub.textContent = device.model || 'Connected';
+
+  $('device-title').textContent = device.model || 'Phone';
+  $('device-sub').textContent = `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`;
+
+  const transport = $('device-transport');
+  transport.innerHTML = `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`;
+
+  const battery = device.battery || {};
+  $('t-battery').textContent = battery.level != null ? `${battery.level}%` : '—';
+  $('t-android').textContent = device.androidVersion || '—';
+  $('t-storage').textContent = device.storage?.free || '—';
+  $('t-rom').textContent = device.colorOsVersion || '—';
+
+  $('files-dest-label').textContent = '/sdcard/Download';
 }
 
-async function connectWifi() {
-  const ip = document.getElementById('connect-ip').value.trim();
-  const port = document.getElementById('connect-port').value.trim() || '5555';
+function setDevice(device) {
+  const isSame = state.device && device && state.device.id === device.id;
+  state.device = device;
 
-  if (!ip) {
-    alert('Please enter the device IP address');
+  if (!device) {
+    state.casting = false;
+    renderCast();
+    renderDevice();
     return;
   }
 
-  const btn = document.getElementById('btn-connect');
-  btn.disabled = true;
-  btn.innerHTML = '<span>✨ Connecting...</span>';
+  renderDevice();
+  if (!isSame || state.view === 'empty') showView('device');
+}
 
-  try {
-    const result = await window.api.connectWifi(ip, port);
-    if (result.success) {
-      alert(`✅ Connected!\n\n${result.message}\n\nYour device is now connected wirelessly.`);
-      // The device will be auto-detected within seconds
-    } else {
-      alert(`❌ Connection failed:\n\n${result.message}\n\nMake sure wireless debugging is still enabled and try again.`);
-    }
-  } catch (err) {
-    alert(`Error: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<span>✨ Connect via Wi-Fi</span>';
+function renderCast() {
+  const start = $('btn-cast');
+  const stop = $('btn-cast-stop');
+  const label = $('cast-state');
+
+  start.hidden = state.casting;
+  stop.hidden = !state.casting;
+  label.textContent = state.casting ? 'Casting in a separate window' : 'Not casting';
+}
+
+/* ---------- Files ---------- */
+
+function transferRow(t) {
+  const active = t.status === 'active';
+  const meta =
+    t.status === 'active'
+      ? `${formatBytes(t.size)} · sending…`
+      : t.status === 'done'
+        ? `Sent · ${t.targetPath || ''}`
+        : t.status === 'cancelled'
+          ? 'Cancelled'
+          : `Failed${t.error ? ` · ${escapeHtml(t.error)}` : ''}`;
+
+  return `
+    <div class="transfer" data-id="${escapeHtml(t.id)}">
+      <div class="transfer-icon">${icon(t.status === 'done' ? 'check' : 'upload')}</div>
+      <div class="transfer-body">
+        <div class="transfer-name">${escapeHtml(t.filename)}</div>
+        <div class="transfer-meta">${escapeHtml(meta)}</div>
+        ${active ? '<div class="bar"><span></span></div>' : ''}
+      </div>
+      ${active ? `<button class="link-btn" data-cancel="${escapeHtml(t.id)}">Cancel</button>` : ''}
+    </div>`;
+}
+
+function renderTransfers() {
+  const list = $('transfer-list');
+  const items = [...state.transfers.values()].reverse();
+  const activeCount = items.filter((t) => t.status === 'active').length;
+
+  if (items.length === 0) {
+    list.innerHTML = '<div class="list-empty">No transfers yet</div>';
+  } else {
+    list.innerHTML = items.map(transferRow).join('');
   }
+
+  $('btn-cancel-all').hidden = activeCount === 0;
+
+  const badge = $('badge-files');
+  badge.hidden = activeCount === 0;
+  badge.textContent = String(activeCount);
 }
 
-async function checkUsbDevices() {
-  try {
-    const devices = await window.api.getDevices();
-    const usbDevices = devices.filter(d => !d.isWifi && d.state === 'device');
+function upsertTransfer(patch) {
+  const existing = state.transfers.get(patch.id) || { id: patch.id };
+  state.transfers.set(patch.id, { ...existing, ...patch });
+  renderTransfers();
+}
 
-    if (usbDevices.length > 0) {
-      alert(`✅ Found ${usbDevices.length} USB device(s):\n\n${usbDevices.map(d => `• ${d.model || d.id}`).join('\n')}`);
-    } else {
-      alert('❌ No USB devices found.\n\nMake sure:\n• Device is plugged in\n• USB debugging is enabled\n• You authorized this computer on your device');
-    }
-  } catch (err) {
-    alert(`Error: ${err.message}`);
+async function sendFiles(paths) {
+  if (!state.device) {
+    toast('Connect a device first', 'err');
+    return;
   }
-}
+  if (!paths || paths.length === 0) return;
 
-// File Transfer Panel
-function showFileTransfer() {
-  document.getElementById('device-card').style.display = 'none';
-  document.getElementById('file-panel').style.display = 'block';
-  document.getElementById('notifications-panel').style.display = 'none';
-  currentView = 'files';
-}
-
-function setupFileDrop() {
-  const dropZone = document.getElementById('drop-zone');
-
-  dropZone.addEventListener('click', browseFiles);
-
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('drag-over');
-  });
-
-  dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('drag-over');
-  });
-
-  dropZone.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('drag-over');
-
-    if (!currentDevice) {
-      alert('No device connected');
-      return;
-    }
-
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      await pushFileToDevice(file.path);
-    }
-  });
+  for (const filePath of paths) {
+    window.api.pushFile(state.device.id, filePath, '/sdcard/Download/').catch((err) => {
+      toast(`Send failed: ${err.message}`, 'err');
+    });
+  }
 }
 
 async function browseFiles() {
-  if (!currentDevice) {
-    alert('No device connected');
+  if (!state.device) {
+    toast('Connect a device first', 'err');
+    return;
+  }
+  const paths = await window.api.openFileDialog();
+  await sendFiles(paths);
+}
+
+/* ---------- Notifications ---------- */
+
+function renderNotifications() {
+  const list = $('notifications-list');
+  if (state.notifications.length === 0) {
+    list.innerHTML = '<div class="list-empty">No notifications yet</div>';
     return;
   }
 
-  try {
-    const filePaths = await window.api.openFileDialog();
-    for (const path of filePaths) {
-      await pushFileToDevice(path);
-    }
-  } catch (err) {
-    console.error('Browse error:', err);
-  }
+  list.innerHTML = state.notifications
+    .map(
+      (n) => `
+      <div class="notif">
+        <div class="notif-icon">${icon('bell')}</div>
+        <div class="notif-body">
+          <div class="notif-title">${escapeHtml(n.title || n.app)}</div>
+          ${n.message ? `<div class="notif-message">${escapeHtml(n.message)}</div>` : ''}
+          <div class="notif-meta"><span>${escapeHtml(n.app || n.pkg || '')}</span>${n.time ? `<span>·</span><span>${escapeHtml(n.time)}</span>` : ''}</div>
+        </div>
+      </div>`,
+    )
+    .join('');
 }
 
-async function pushFileToDevice(filePath) {
-  if (!currentDevice) return;
-
-  try {
-    await window.api.pushFile(currentDevice.id, filePath, '/sdcard/Download/');
-  } catch (err) {
-    console.error('Push error:', err);
-  }
-}
-
-function updateTransferLog(data) {
-  const log = document.getElementById('transfer-log');
-
-  if (data.status === 'started') {
-    const item = document.createElement('div');
-    item.className = 'transfer-item';
-    item.id = `transfer-${data.id}`;
-    item.innerHTML = `
-      <span>${data.filename}</span>
-      <span class="transfer-status">Transferring...</span>
-    `;
-    log.prepend(item);
-  } else if (data.status === 'completed') {
-    const item = document.getElementById(`transfer-${data.id}`);
-    if (item) {
-      item.querySelector('.transfer-status').textContent = '✅ Complete';
-      item.querySelector('.transfer-status').classList.add('success');
-    }
-  } else if (data.status === 'failed') {
-    const item = document.getElementById(`transfer-${data.id}`);
-    if (item) {
-      item.querySelector('.transfer-status').textContent = '❌ Failed';
-      item.querySelector('.transfer-status').classList.add('failed');
-    }
-  }
-}
-
-// Notifications Panel
-function showNotifications() {
-  document.getElementById('device-card').style.display = 'none';
-  document.getElementById('file-panel').style.display = 'none';
-  document.getElementById('notifications-panel').style.display = 'block';
-  currentView = 'notifications';
-  loadNotificationHistory();
+function renderBadges() {
+  const badge = $('badge-notifications');
+  badge.hidden = state.unreadNotifications === 0;
+  badge.textContent = state.unreadNotifications > 9 ? '9+' : String(state.unreadNotifications);
 }
 
 async function loadNotificationHistory() {
   try {
-    const history = await window.api.getNotificationHistory();
-    const list = document.getElementById('notifications-list');
+    state.notifications = await window.api.getNotificationHistory();
+    renderNotifications();
+  } catch {
+    /* ignore */
+  }
+}
 
-    if (history.length === 0) {
-      list.innerHTML = '<div class="empty-state">No notifications yet</div>';
+/* ---------- Clipboard ---------- */
+
+function clipRow(entry) {
+  const fromPhone = entry.direction === 'phone-to-desktop';
+  return `
+    <div class="clip">
+      <div class="clip-icon">${icon(fromPhone ? 'download' : 'upload')}</div>
+      <div class="clip-body">
+        <div class="clip-text">${escapeHtml(entry.preview || entry.text || '')}</div>
+        <div class="clip-meta">
+          <span>${fromPhone ? 'From phone' : 'To phone'}</span>
+          ${entry.time ? `<span>·</span><span>${escapeHtml(entry.time)}</span>` : ''}
+        </div>
+      </div>
+      <button class="link-btn" data-copy="${escapeHtml(entry.id)}">Copy</button>
+    </div>`;
+}
+
+function renderClipboard() {
+  const list = $('clipboard-list');
+  if (state.clipboard.length === 0) {
+    list.innerHTML = '<div class="list-empty">Nothing synced yet</div>';
+    return;
+  }
+  list.innerHTML = state.clipboard.map(clipRow).join('');
+}
+
+function applyClipboardStatus(payload) {
+  state.clipboardStatus = { ...state.clipboardStatus, ...payload };
+  const status = state.clipboardStatus.status || 'idle';
+
+  const labels = {
+    syncing: 'Syncing',
+    connecting: 'Connecting…',
+    idle: 'Idle',
+    error: 'Error',
+    disconnected: 'Disconnected',
+  };
+
+  const pill = $('clip-status');
+  pill.textContent = labels[status] || status;
+  pill.className = `pill ${status}`;
+
+  const settingsPill = $('settings-clip-status');
+  settingsPill.textContent = labels[status] || status;
+  settingsPill.className = `pill ${status}`;
+
+  $('settings-clip-detail').textContent = state.clipboardStatus.enabled
+    ? 'Reading and writing the desktop clipboard through wl-paste/wl-copy'
+    : 'Turned off';
+
+  const dot = $('clipboard-dot');
+  dot.className = `status-dot ${status}`;
+
+  const toggle = $('clip-toggle');
+  if (toggle) toggle.checked = state.clipboardStatus.enabled !== false;
+}
+
+async function refreshClipboardStatus() {
+  try {
+    applyClipboardStatus(await window.api.getClipboardStatus());
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadClipboardHistory() {
+  try {
+    state.clipboard = await window.api.getClipboardHistory();
+    renderClipboard();
+  } catch {
+    /* ignore */
+  }
+}
+
+/* ---------- Modals ---------- */
+
+function openModal(id) {
+  $(id).hidden = false;
+  const focusable = $(id).querySelector('input, button');
+  if (focusable) focusable.focus();
+}
+
+function closeModal(id) {
+  $(id).hidden = true;
+}
+
+function closeAllModals() {
+  document.querySelectorAll('.modal-root').forEach((el) => {
+    el.hidden = true;
+  });
+}
+
+/* ---------- Init ---------- */
+
+function initWindowControls() {
+  $('win-min').addEventListener('click', () => window.api.minimizeWindow());
+  $('win-close').addEventListener('click', () => window.api.closeWindow());
+  $('win-max').addEventListener('click', () => window.api.toggleMaximize?.());
+}
+
+function initNavigation() {
+  document.querySelectorAll('[data-view]').forEach((el) => {
+    el.addEventListener('click', () => showView(el.dataset.view));
+  });
+
+  for (const id of ['btn-add-device', 'btn-add-device-2', 'btn-add-device-3']) {
+    const el = $(id);
+    if (el) el.addEventListener('click', () => openModal('modal-device'));
+  }
+
+  $('btn-settings').addEventListener('click', () => {
+    refreshClipboardStatus();
+    openModal('modal-settings');
+  });
+
+  document.querySelectorAll('[data-close-modal]').forEach((el) => {
+    el.addEventListener('click', closeAllModals);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllModals();
+  });
+}
+
+function initDeviceActions() {
+  $('btn-disconnect').addEventListener('click', async () => {
+    if (!state.device) return;
+    await window.api.disconnectDevice(state.device.id);
+    toast('Disconnected');
+  });
+
+  $('btn-cast').addEventListener('click', async () => {
+    if (!state.device) return;
+    const result = await window.api.startMirroring(state.device.id);
+    if (result && result.success === false) {
+      toast(result.message || 'Could not start casting', 'err');
+      return;
+    }
+    state.casting = true;
+    renderCast();
+  });
+
+  $('btn-cast-stop').addEventListener('click', async () => {
+    await window.api.stopMirroring();
+    state.casting = false;
+    renderCast();
+  });
+
+  renderCast();
+}
+
+function initPairing() {
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      $('tab-wireless').hidden = tab.dataset.tab !== 'wireless';
+      $('tab-usb').hidden = tab.dataset.tab !== 'usb';
+    });
+  });
+
+  const note = $('pair-status');
+
+  $('btn-pair').addEventListener('click', async () => {
+    const ip = $('pair-ip').value.trim();
+    const port = $('pair-port').value.trim();
+    const code = $('pair-code').value.trim();
+
+    if (!ip || !port || !code) {
+      note.className = 'modal-note err';
+      note.textContent = 'Enter the IP, port and pairing code shown on the phone.';
       return;
     }
 
-    list.innerHTML = '';
-    for (const notif of history) {
-      addNotificationToList(notif);
+    note.className = 'modal-note';
+    note.textContent = 'Pairing…';
+    const result = await window.api.pairWifi(ip, port, code);
+    note.className = `modal-note ${result.success ? 'ok' : 'err'}`;
+    note.textContent = result.success
+      ? 'Paired. Now enter the connect port from the Wireless debugging screen.'
+      : `Pairing failed: ${result.message}`;
+
+    if (result.success) {
+      $('connect-ip').value = ip;
     }
-  } catch (err) {
-    console.error('Load notifications error:', err);
-  }
+  });
+
+  $('btn-connect-wifi').addEventListener('click', async () => {
+    const ip = $('connect-ip').value.trim();
+    const port = $('connect-port').value.trim() || '5555';
+
+    if (!ip) {
+      note.className = 'modal-note err';
+      note.textContent = 'Enter the IP address shown on the phone.';
+      return;
+    }
+
+    note.className = 'modal-note';
+    note.textContent = 'Connecting…';
+    const result = await window.api.connectWifi(ip, port);
+
+    if (result.success) {
+      note.className = 'modal-note ok';
+      note.textContent = 'Connected.';
+      setTimeout(closeAllModals, 700);
+      toast('Device connected');
+    } else {
+      note.className = 'modal-note err';
+      note.textContent = `Could not connect: ${result.message}`;
+    }
+  });
 }
 
-function addNotificationToList(notif) {
-  const list = document.getElementById('notifications-list');
+function initFiles() {
+  const zone = $('dropzone');
 
-  // Remove empty state
-  const emptyState = list.querySelector('.empty-state');
-  if (emptyState) emptyState.remove();
+  // Exactly one entry point: the zone itself. The button inside it does not
+  // have its own handler, so a click can never open two pickers.
+  zone.addEventListener('click', browseFiles);
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      browseFiles();
+    }
+  });
 
-  const item = document.createElement('div');
-  item.className = 'notification-item';
-  item.innerHTML = `
-    <div class="notif-icon">🔔</div>
-    <div class="notif-content">
-      <div class="notif-title">${notif.title}</div>
-      <div class="notif-message">${notif.message}</div>
-    </div>
-    <div class="notif-time">${notif.time}</div>
-  `;
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
 
-  list.prepend(item);
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
 
-  // Limit to 50 visible notifications
-  const items = list.querySelectorAll('.notification-item');
-  if (items.length > 50) {
-    items[items.length - 1].remove();
-  }
+    const paths = [...e.dataTransfer.files]
+      .map((file) => file.path || window.api.getPathForFile?.(file))
+      .filter(Boolean);
+
+    if (paths.length === 0) {
+      toast('Could not read the dropped files', 'err');
+      return;
+    }
+    sendFiles(paths);
+  });
+
+  $('transfer-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cancel]');
+    if (btn) window.api.cancelTransfer(btn.dataset.cancel);
+  });
+
+  $('btn-cancel-all').addEventListener('click', () => window.api.cancelAllTransfers());
+
+  window.api.onTransferProgress((data) => {
+    switch (data.status) {
+      case 'started':
+        upsertTransfer({ id: data.id, filename: data.filename, size: data.size, status: 'active' });
+        break;
+      case 'completed':
+        upsertTransfer({ id: data.id, filename: data.filename, targetPath: data.targetPath, status: 'done' });
+        toast(`Sent ${data.filename}`);
+        break;
+      case 'failed':
+        upsertTransfer({ id: data.id, status: 'failed', error: data.error });
+        break;
+      case 'cancelled':
+        upsertTransfer({ id: data.id, status: 'cancelled' });
+        break;
+    }
+  });
 }
 
-async function clearNotifications() {
-  try {
+function initNotifications() {
+  window.api.onNotificationReceived((notif) => {
+    state.notifications.unshift(notif);
+    if (state.notifications.length > 50) state.notifications.pop();
+
+    if (state.view === 'notifications') {
+      renderNotifications();
+    } else {
+      state.unreadNotifications += 1;
+      renderBadges();
+    }
+  });
+
+  $('btn-clear-notifs').addEventListener('click', async () => {
     await window.api.clearNotificationHistory();
-    const list = document.getElementById('notifications-list');
-    list.innerHTML = '<div class="empty-state">No notifications yet</div>';
-  } catch (err) {
-    console.error('Clear notifications error:', err);
-  }
+    state.notifications = [];
+    renderNotifications();
+  });
 }
+
+function initClipboard() {
+  window.api.onClipboardStatus(applyClipboardStatus);
+
+  // One subscription owns the list. `clipboard-synced` only drives feedback,
+  // otherwise every sync would be rendered twice.
+  window.api.onClipboardHistory((entry) => {
+    state.clipboard.unshift(entry);
+    if (state.clipboard.length > 50) state.clipboard.pop();
+    if (state.view === 'clipboard') renderClipboard();
+  });
+
+  window.api.onClipboardSynced((entry) => {
+    const label = entry.direction === 'phone-to-desktop' ? 'Copied from phone' : 'Sent to phone';
+    const preview = entry.text.length > 40 ? `${entry.text.slice(0, 40)}…` : entry.text;
+    toast(`${label}: ${preview}`);
+  });
+
+  $('clip-toggle').addEventListener('change', async (e) => {
+    const result = await window.api.setClipboardSync(e.target.checked);
+    applyClipboardStatus({ enabled: result.enabled });
+  });
+
+  $('btn-clear-clip').addEventListener('click', async () => {
+    await window.api.clearClipboardHistory();
+    state.clipboard = [];
+    renderClipboard();
+  });
+
+  $('clipboard-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-copy]');
+    if (!btn) return;
+    const entry = state.clipboard.find((c) => c.id === btn.dataset.copy);
+    if (!entry) return;
+    try {
+      await navigator.clipboard.writeText(entry.text);
+      toast('Copied to clipboard');
+    } catch {
+      toast('Could not copy', 'err');
+    }
+  });
+}
+
+function initDeviceEvents() {
+  window.api.onDeviceConnected((device) => {
+    setDevice(device);
+    toast(`${device.model || 'Device'} connected`);
+  });
+
+  window.api.onDeviceDisconnected(() => {
+    setDevice(null);
+    toast('Device disconnected', 'err');
+  });
+
+  window.api.onTelemetryUpdated((device) => {
+    if (!state.device) return;
+    state.device = { ...state.device, ...device };
+    renderDevice();
+  });
+
+  window.api.onMirrorStarted(() => {
+    state.casting = true;
+    renderCast();
+  });
+
+  window.api.onMirrorStopped(() => {
+    state.casting = false;
+    renderCast();
+  });
+}
+
+function init() {
+  initWindowControls();
+  initNavigation();
+  initDeviceActions();
+  initPairing();
+  initFiles();
+  initNotifications();
+  initClipboard();
+  initDeviceEvents();
+
+  renderBadges();
+  renderTransfers();
+  renderNotifications();
+  renderClipboard();
+  refreshClipboardStatus();
+
+  // Nothing is connected yet: the empty state is the honest default.
+  showView('empty');
+}
+
+window.addEventListener('DOMContentLoaded', init);
