@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.net.CompanionClient
+import com.aplusconnect.companion.protocol.ClipboardPayload
 import com.aplusconnect.companion.protocol.ClipboardPayloads
 import java.util.UUID
 
@@ -33,6 +34,7 @@ class CompanionService : Service() {
     private lateinit var settings: CompanionSettings
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
+    private var pendingPayload: ClipboardPayload? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -40,7 +42,7 @@ class CompanionService : Service() {
         instance = this
 
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
+        manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "A+ Connect", NotificationManager.IMPORTANCE_LOW)
         )
         startForeground(NOTIFICATION_ID, notification("Connecting…"))
@@ -49,6 +51,9 @@ class CompanionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CONNECT) {
+            connect()
+        }
         val text = intent?.getStringExtra(EXTRA_CLIPBOARD)
         if (text != null) send(text)
         return START_STICKY
@@ -56,8 +61,9 @@ class CompanionService : Service() {
 
     override fun onDestroy() {
         instance = null
-        client?.close()
+        val activeClient = client
         client = null
+        activeClient?.close()
         super.onDestroy()
     }
 
@@ -73,8 +79,12 @@ class CompanionService : Service() {
 
         Status.state = "Connecting to $host…"
 
-        client?.close()
-        client = CompanionClient(
+        val oldClient = client
+        client = null
+        oldClient?.close()
+
+        var thisClient: CompanionClient? = null
+        thisClient = CompanionClient(
             host = host,
             port = settings.port,
             deviceId = settings.deviceId.ifEmpty {
@@ -87,18 +97,24 @@ class CompanionService : Service() {
                 if (pcId.isNotEmpty()) settings.remember(pcId, fingerprint)
             },
             onReady = {
-                Log.i(TAG, "connected to the computer")
-                Status.state = "Connected to ${settings.host}"
-                notification("Connected to ${settings.host}")
+                if (client === thisClient) {
+                    Log.i(TAG, "connected to the computer")
+                    Status.state = "Connected to ${settings.host}"
+                    notification("Connected to ${settings.host}")
+                    flushPending()
+                }
             },
             onClosed = { reason ->
-                Log.i(TAG, "disconnected: $reason")
-                Status.state = "Disconnected · retrying"
-                notification("Disconnected · retrying")
-                scheduleReconnect()
+                if (client === thisClient) {
+                    Log.i(TAG, "disconnected: $reason")
+                    Status.state = "Disconnected · retrying"
+                    notification("Disconnected · retrying")
+                    scheduleReconnect()
+                }
             },
         )
-        client?.connect()
+        client = thisClient
+        thisClient.connect()
     }
 
     private fun scheduleReconnect() {
@@ -108,27 +124,56 @@ class CompanionService : Service() {
         android.os.Handler(mainLooper).postDelayed({ connect() }, RECONNECT_DELAY_MS)
     }
 
-    /** Sends the clipboard to the computer, if the content actually changed. */
+    /** Sends the clipboard to the computer, or queues it if not connected yet. */
+    @Synchronized
     private fun send(text: String) {
         val payload = ClipboardPayloads.build(text)
         if (payload.text.isEmpty()) return
         if (payload.hash == lastSentHash) return
-        lastSentHash = payload.hash
-        client?.sendClipboard(payload.text)
+
+        val c = client
+        if (c != null && c.sendClipboard(payload.text)) {
+            lastSentHash = payload.hash
+            pendingPayload = null
+        } else {
+            Log.i(TAG, "connection not ready; queued clipboard (${payload.text.length} chars)")
+            pendingPayload = payload
+        }
     }
 
-    private fun notification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)
-        .setContentTitle("A+ Connect")
-        .setContentText(text)
-        .setSmallIcon(android.R.drawable.ic_menu_edit)
-        .setOngoing(true)
-        .build()
+    @Synchronized
+    private fun flushPending() {
+        val pending = pendingPayload ?: return
+        if (pending.hash == lastSentHash) {
+            pendingPayload = null
+            return
+        }
+        val c = client
+        if (c != null && c.sendClipboard(pending.text)) {
+            Log.i(TAG, "flushed queued clipboard (${pending.text.length} chars)")
+            lastSentHash = pending.hash
+            pendingPayload = null
+        }
+    }
+
+    private fun notification(text: String): Notification {
+        val n = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("A+ Connect")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setOngoing(true)
+            .build()
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.notify(NOTIFICATION_ID, n)
+        return n
+    }
 
     companion object {
         const val TAG = "AplusConnect"
         private const val CHANNEL_ID = "aplus_connect"
         private const val NOTIFICATION_ID = 7
         private const val EXTRA_CLIPBOARD = "clipboard"
+        private const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
         private const val RECONNECT_DELAY_MS = 5000L
 
         private var instance: CompanionService? = null
@@ -136,7 +181,9 @@ class CompanionService : Service() {
 
         /** Starts the service, so it connects to the computer. */
         fun start(context: Context) {
-            val intent = Intent(context, CompanionService::class.java)
+            val intent = Intent(context, CompanionService::class.java).apply {
+                action = ACTION_CONNECT
+            }
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)

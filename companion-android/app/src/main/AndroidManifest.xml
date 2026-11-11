@@ -45,6 +45,7 @@
         <!-- A transparent window that takes focus so the clipboard can be read. -->
         <activity
             android:name=".clip.ClipboardReadActivity"
+            android:taskAffinity=""
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:excludeFromRecents="true"
             android:exported="false"

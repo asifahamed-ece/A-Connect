@@ -45,6 +45,12 @@ class CompanionClient(
     @Volatile
     private var running = false
 
+    @Volatile
+    private var ready = false
+
+    val isReady: Boolean
+        get() = ready
+
     fun connect() {
         if (running) return
         running = true
@@ -57,17 +63,21 @@ class CompanionClient(
 
     fun close() {
         running = false
+        ready = false
         try {
             socket?.close()
         } catch (e: Exception) {
             Log.w(TAG, "closing the socket failed: ${e.message}")
         }
         socket = null
+        input = null
+        output = null
     }
 
-    /** Sends the clipboard content, if the session is up. */
-    fun sendClipboard(text: String) {
-        val stream = output ?: return
+    /** Sends the clipboard content, if the session is up. Returns true if sent. */
+    fun sendClipboard(text: String): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
         val payload = ClipboardPayloads.build(text)
         val message = ProtocolMessage(
             type = Protocol.TYPE_CLIPBOARD_SET,
@@ -76,20 +86,22 @@ class CompanionClient(
             payload = ClipboardPayloads.toJson(payload),
         )
 
-        try {
+        return try {
             synchronized(stream) {
                 stream.write(FrameCodec.encode(message))
                 stream.flush()
             }
             Log.i(TAG, "sent ${payload.text.length} characters")
+            true
         } catch (e: Exception) {
             Log.w(TAG, "sending failed: ${e.message}")
             close()
+            false
         }
     }
 
     private fun readLoop() {
-        var established = false
+        var reason: String? = null
         try {
             val trust = PeerTrust(pairing?.fingerprint) { fingerprint ->
                 onPaired("", fingerprint)
@@ -112,34 +124,41 @@ class CompanionClient(
             stream.write(FrameCodec.encode(hello))
             stream.flush()
 
-            val reply = FrameCodec.readFrom(input!!)
+            val inStream = input!!
+            val reply = FrameCodec.readFrom(inStream)
             when (val result = Handshake.verifyHelloAck(reply, pairing, expectedNonce = nonce)) {
                 is HandshakeResult.Failed -> {
                     Log.w(TAG, "pairing refused: ${result.reason}")
-                    onClosed("pairing refused: ${result.reason}")
-                    close()
+                    reason = "pairing refused: ${result.reason}"
                     return
                 }
                 is HandshakeResult.Success -> {
                     Log.i(TAG, "paired with ${result.pcId}")
                     onPaired(result.pcId, result.fingerprint)
-                    established = true
+                    ready = true
                     onReady()
                 }
             }
 
             while (running) {
-                val message = FrameCodec.readFrom(input!!)
+                val inStreamLoop = input ?: break
+                val message = FrameCodec.readFrom(inStreamLoop)
                 if (message.type == Protocol.TYPE_BYE) {
                     Log.i(TAG, "the computer closed the session")
+                    reason = "the computer closed the session"
                     break
                 }
             }
         } catch (e: Exception) {
-            if (running) Log.w(TAG, "connection failed: ${e.message}")
+            if (running) {
+                Log.w(TAG, "connection failed: ${e.message}")
+                reason = e.message ?: "connection failed"
+            } else {
+                reason = "closed"
+            }
         } finally {
             close()
-            if (!established) onClosed("not connected")
+            onClosed(reason ?: "disconnected")
         }
     }
 

@@ -4,7 +4,10 @@ import android.app.Activity
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.WindowManager
 import com.aplusconnect.companion.protocol.ClipboardPayloads
@@ -21,21 +24,32 @@ import com.aplusconnect.companion.service.CompanionService
 class ClipboardReadActivity : Activity() {
 
     private var read = false
+    private val handler = Handler(Looper.getMainLooper())
+    private val safetyTimeout = Runnable {
+        if (!read) {
+            Log.w(TAG, "reader timed out waiting for focus")
+            finish()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyNoAnimation()
 
         window.setBackgroundDrawable(null)
         window.setFlags(
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         )
+
+        handler.postDelayed(safetyTimeout, 1000L)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus || read) return
         read = true
+        handler.removeCallbacks(safetyTimeout)
 
         val payload = readClipboard()
         if (payload != null) {
@@ -43,6 +57,26 @@ class ClipboardReadActivity : Activity() {
             CompanionService.deliverClipboard(this, payload.text)
         }
         finish()
+    }
+
+    override fun finish() {
+        super.finish()
+        applyNoAnimation()
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(safetyTimeout)
+        super.onDestroy()
+    }
+
+    private fun applyNoAnimation() {
+        if (Build.VERSION.SDK_INT >= 34) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, 0, 0)
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
+        } else {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+        }
     }
 
     /** The clipboard content, or null when there is none or it cannot be read. */
@@ -65,7 +99,11 @@ class ClipboardReadActivity : Activity() {
         /** Raises the transparent reader. */
         fun request(context: Context) {
             val intent = Intent(context, ClipboardReadActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                )
             try {
                 context.startActivity(intent)
             } catch (e: Exception) {
