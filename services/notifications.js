@@ -1,131 +1,171 @@
-const { spawn, execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
+const { promisify } = require('util');
 const EventEmitter = require('events');
 
+const execFileAsync = promisify(execFile);
+
+// Packages whose notifications are noise in a mirroring UI.
+const IGNORED_PACKAGES = new Set([
+  'android',
+  'com.android.systemui',
+  'com.android.settings',
+  'com.android.providers.downloads',
+]);
+
+// Our own "file received" posts.
+const IGNORED_TAGS = new Set(['aplus_connect']);
+
+/**
+ * A+ Connect - Notification mirroring
+ *
+ * Android 16 no longer writes notification contents to logcat, so the old
+ * `adb logcat` filter matched nothing and the page stayed empty. The Notification
+ * Manager can be dumped instead: `dumpsys notification --noredact` exposes the
+ * real title/text of every active notification to the shell user.
+ *
+ * It is a snapshot, not an event stream, so we poll, diff against what we have
+ * already seen, and emit only genuinely new notifications.
+ */
 class NotificationService extends EventEmitter {
-  constructor(adbPath = 'adb') {
+  constructor(options = {}) {
     super();
-    this.adbPath = adbPath;
-    this.logcatProc = null;
-    this.activeDeviceId = null;
+    this.adbPath = options.adbPath ?? 'adb';
+    this.pollInterval = options.pollInterval ?? 2000;
     this.history = [];
-    this.lastSeenTimestamp = Date.now();
+    this.activeDeviceId = null;
+    this.pollTimer = null;
+    this.polling = false;
+    this.seen = new Map(); // notification key -> when we first saw it
+    this.baselineDone = false;
   }
 
   start(deviceId) {
     this.stop();
     this.activeDeviceId = deviceId;
-    this.lastSeenTimestamp = Date.now();
+    this.seen.clear();
+    this.baselineDone = false;
+    this.history = [];
 
-    const args = [];
-    if (deviceId) args.push('-s', deviceId);
-    // Clear old logs and stream new notifications only
-    args.push('logcat', '-c');
-
-    // Wait a moment then start fresh stream
-    setTimeout(() => {
-      this.startLogcatStream(deviceId);
-    }, 500);
+    // Snapshot immediately so pre-existing notifications are treated as a
+    // baseline instead of flooding the page on connect.
+    this.poll();
+    this.pollTimer = setInterval(() => this.poll(), this.pollInterval);
   }
 
-  startLogcatStream(deviceId) {
-    const args = [];
-    if (deviceId) args.push('-s', deviceId);
-    // Stream notification events with broader filters
-    // ActivityManager shows app launches, NotificationManager shows posted notifications
-    args.push('logcat', '-v', 'time', '-s',
-      'NotificationService:*',
-      'NotificationManager:*',
-      'StatusBar:*',
-      'NotificationListenerService:*',
-      'ActivityManager:I'
-    );
+  stop() {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.activeDeviceId = null;
+  }
+
+  async poll() {
+    if (!this.activeDeviceId || this.polling) return;
+    this.polling = true;
 
     try {
-      this.logcatProc = spawn(this.adbPath, args);
-
-      this.logcatProc.stdout.on('data', (data) => {
-        const text = data.toString();
-        const lines = text.split('\n');
-        for (const line of lines) {
-          this.parseLogcatLine(line);
-        }
+      const args = ['-s', this.activeDeviceId, 'shell', 'dumpsys', 'notification', '--noredact'];
+      const { stdout } = await execFileAsync(this.adbPath, args, {
+        timeout: 8000,
+        maxBuffer: 32 * 1024 * 1024,
       });
 
-      this.logcatProc.stderr.on('data', (data) => {
-        console.error('Notification logcat stderr:', data.toString());
-      });
+      const found = this.parse(stdout);
 
-      this.logcatProc.on('error', (err) => {
-        console.error('Notification logcat error:', err);
-      });
-
-      this.logcatProc.on('close', (code) => {
-        if (code !== 0 && this.activeDeviceId) {
-          console.log('Notification logcat exited, restarting in 5s...');
-          setTimeout(() => {
-            if (this.activeDeviceId) this.startLogcatStream(this.activeDeviceId);
-          }, 5000);
-        }
-      });
-    } catch (e) {
-      console.error('Failed to spawn notification logcat:', e);
-    }
-  }
-
-  parseLogcatLine(line) {
-    if (!line || !line.trim()) return;
-
-    // Parse timestamp from logcat -v time format: "11-11 10:29:31.234 I/NotificationService..."
-    const timeMatch = line.match(/^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)/);
-    if (!timeMatch) return;
-
-    // Filter for notification post events
-    if (line.includes('enqueueNotificationInternal') ||
-        line.includes('postNotification') ||
-        line.includes('onNotificationPosted') ||
-        (line.includes('START u0') && line.includes('act='))) {
-
-      // Extract package name from various log formats
-      let pkg = null;
-
-      // Format 1: "pkg=com.example.app"
-      const pkgMatch1 = line.match(/pkg=([a-zA-Z0-9_.]+)/);
-      if (pkgMatch1) pkg = pkgMatch1[1];
-
-      // Format 2: "cmp=com.example.app/.Activity"
-      if (!pkg) {
-        const cmpMatch = line.match(/cmp=([a-zA-Z0-9_.]+)\//);
-        if (cmpMatch) pkg = cmpMatch[1];
+      if (!this.baselineDone) {
+        for (const notif of found) this.seen.set(notif.key, Date.now());
+        this.baselineDone = true;
+        this.pruneSeen();
+        return;
       }
 
-      // Format 3: Activity start "u0 {act=... cmp=...}"
-      if (!pkg) {
-        const actMatch = line.match(/u0.*cmp=([a-zA-Z0-9_.]+)\//);
-        if (actMatch) pkg = actMatch[1];
-      }
-
-      if (pkg) {
-        // Filter out system internal background chatter
-        if (pkg === 'android' ||
-            pkg === 'com.android.systemui' ||
-            pkg.includes('providers') ||
-            pkg.includes('launcher') ||
-            pkg === 'com.android.settings') return;
-
-        const notif = {
-          id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          pkg,
-          title: this.getReadableAppName(pkg),
-          message: 'New notification',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-
+      for (const notif of found) {
+        if (this.seen.has(notif.key)) continue;
+        this.seen.set(notif.key, Date.now());
         this.addNotification(notif);
       }
+
+      this.pruneSeen();
+    } catch (e) {
+      if (this.activeDeviceId) console.error('Notification poll failed:', e.message);
+    } finally {
+      this.polling = false;
     }
   }
 
-  getReadableAppName(pkg) {
+  // Parse the NotificationRecord blocks out of a dumpsys snapshot.
+  parse(dump) {
+    const notifications = [];
+    const blocks = dump.split(/NotificationRecord\(/).slice(1);
+
+    for (const block of blocks) {
+      const header = block.split('\n')[0];
+
+      const pkg = header.match(/\bpkg=([\w.]+)/)?.[1];
+      const idMatch = header.match(/\bid=(-?\d+)/);
+      const tag = header.match(/\btag=(\S+)/)?.[1];
+
+      if (!pkg || !idMatch) continue;
+      if (IGNORED_PACKAGES.has(pkg)) continue;
+      if (tag && IGNORED_TAGS.has(tag)) continue;
+
+      // Group summaries duplicate their children; skip them.
+      if (/^flags=.*GROUP_SUMMARY/m.test(block)) continue;
+      if (/^\s*flags=.*GROUP_SUMMARY/m.test(block)) continue;
+
+      const key = `${pkg}|${idMatch[1]}|${tag ?? 'null'}`;
+
+      const title =
+        this.extractString(block, 'android\\.title') ??
+        this.extractString(block, 'tickerText') ??
+        this.readableAppName(pkg);
+
+      const message =
+        this.extractString(block, 'android\\.text') ??
+        this.extractString(block, 'android\\.summaryText') ??
+        this.firstTextLine(block) ??
+        this.extractString(block, 'tickerText') ??
+        '';
+
+      const when = Number(block.match(/\bwhen=(\d+)/)?.[1] ?? 0);
+
+      notifications.push({
+        key,
+        id: `notif_${pkg}_${idMatch[1]}_${when || Date.now()}`,
+        pkg,
+        app: this.readableAppName(pkg),
+        title: this.clean(title),
+        message: this.clean(message),
+        time: when ? new Date(when).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+        timestamp: when || Date.now(),
+      });
+    }
+
+    return notifications;
+  }
+
+  extractString(block, fieldPattern) {
+    // Extras print as: android.title=String (Some title)
+    const re = new RegExp(`${fieldPattern}=(?:String|CharSequence) \\((.*)\\)\\s*$`, 'm');
+    const match = block.match(re);
+    return match ? match[1] : null;
+  }
+
+  firstTextLine(block) {
+    // android.textLines=CharSequence[] (n) followed by indented [0] ... lines
+    const match = block.match(/android\.textLines=CharSequence\[\] \(\d+\)\n((?:\s*\[\d+\].*\n?)+)/);
+    if (!match) return null;
+    const first = match[1].match(/\[\d+\]\s(.*)/);
+    return first ? first[1].trim() : null;
+  }
+
+  clean(text) {
+    if (typeof text !== 'string') return '';
+    return text.replace(/\\n/g, ' ').trim().slice(0, 400);
+  }
+
+  readableAppName(pkg) {
     const known = {
       'com.whatsapp': 'WhatsApp',
       'org.telegram.messenger': 'Telegram',
@@ -136,58 +176,52 @@ class NotificationService extends EventEmitter {
       'com.discord': 'Discord',
       'com.slack': 'Slack',
       'com.spotify.music': 'Spotify',
-      'com.coloros.note': 'OPPO Notes',
-      'com.oplus.battery': 'ColorOS Battery',
+      'com.coloros.note': 'Notes',
       'com.facebook.katana': 'Facebook',
-      'com.twitter.android': 'Twitter',
+      'com.twitter.android': 'X',
       'com.google.android.youtube': 'YouTube',
-      'com.snapchat.android': 'Snapchat'
+      'com.snapchat.android': 'Snapchat',
+      'com.linkedin.android': 'LinkedIn',
+      'com.microsoft.teams': 'Teams',
+      'com.google.android.dialer': 'Phone',
     };
-    return known[pkg] || pkg.split('.').pop().charAt(0).toUpperCase() + pkg.split('.').pop().slice(1) || 'Notification';
+    if (known[pkg]) return known[pkg];
+    const last = pkg.split('.').pop() ?? pkg;
+    return last.charAt(0).toUpperCase() + last.slice(1);
+  }
+
+  // Keep the dedupe table bounded; notifications can be dismissed and reposted.
+  pruneSeen() {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    for (const [key, at] of this.seen) {
+      if (at < cutoff) this.seen.delete(key);
+    }
+    while (this.seen.size > 500) {
+      const oldest = this.seen.keys().next().value;
+      this.seen.delete(oldest);
+    }
   }
 
   addNotification(notif) {
-    // Deduplicate: ignore if same app notified within last 3 seconds
-    const recent = this.history.find(n =>
-      n.pkg === notif.pkg &&
-      (Date.now() - this.parseNotifTime(n.time)) < 3000
-    );
-    if (recent) return;
+    // Newest first; keep the same notification from stacking.
+    const duplicate = this.history.find((n) => n.key === notif.key);
+    if (duplicate) return;
 
     this.history.unshift(notif);
     if (this.history.length > 50) this.history.pop();
 
     this.emit('notification-received', notif);
-
-    // Send native desktop notification via notify-send for KDE Plasma
-    this.sendDesktopNotification(notif.title, notif.message);
+    this.sendDesktopNotification(notif);
   }
 
-  parseNotifTime(timeStr) {
-    // Parse "HH:MM" format to ms since midnight today
-    const [h, m] = timeStr.split(':').map(Number);
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m).getTime();
-  }
+  sendDesktopNotification(notif) {
+    const args = ['-a', 'A+ Connect', '-i', 'phone', '-u', 'normal'];
+    if (notif.title) args.push(notif.title);
+    if (notif.message) args.push(notif.message);
 
-  sendDesktopNotification(title, message) {
-    execFile('notify-send', [
-      '-a', 'A+ Connect',
-      '-i', 'phone',
-      '-u', 'normal',
-      title,
-      message
-    ], (err) => {
-      // notify-send is optional; if missing, silently continue
+    execFile('notify-send', args, () => {
+      // notify-send is optional.
     });
-  }
-
-  stop() {
-    if (this.logcatProc) {
-      this.logcatProc.kill('SIGTERM');
-      this.logcatProc = null;
-    }
-    this.activeDeviceId = null;
   }
 
   clearHistory() {
