@@ -8,11 +8,11 @@ echo "🔌 A+ Connect - USB Auto-Setup"
 echo "================================"
 echo ""
 
-# Check if device is connected via USB
-USB_DEVICES=$(adb devices | grep -v "List of devices" | grep -v "^$" | grep -v "wifi" | wc -l)
+# Check for any connected devices (USB or wireless)
+ALL_DEVICES=$(adb devices | grep -v "List of devices" | grep -v "^$" | grep "device")
 
-if [ "$USB_DEVICES" -eq 0 ]; then
-    echo "❌ No USB device found!"
+if [ -z "$ALL_DEVICES" ]; then
+    echo "❌ No devices found!"
     echo ""
     echo "Please:"
     echo "  1. Connect your Oppo Reno 14 5G via USB cable"
@@ -22,10 +22,28 @@ if [ "$USB_DEVICES" -eq 0 ]; then
     exit 1
 fi
 
-# Get USB device ID
-USB_DEVICE=$(adb devices | grep -v "List of devices" | grep -v "^$" | grep -v "wifi" | head -n 1 | awk '{print $1}')
+# Check if we have a wireless device already
+WIRELESS_DEVICE=$(echo "$ALL_DEVICES" | grep ":" | head -n 1 | awk '{print $1}' || true)
 
-echo "✅ Found device: $USB_DEVICE"
+if [ -n "$WIRELESS_DEVICE" ]; then
+    echo "✅ Wireless device already connected: $WIRELESS_DEVICE"
+    echo ""
+    echo "You're already set up! Just launch A+ Connect:"
+    echo "  npm start"
+    echo ""
+    exit 0
+fi
+
+# Find USB device (no colon in ID means USB)
+USB_DEVICE=$(echo "$ALL_DEVICES" | grep -v ":" | head -n 1 | awk '{print $1}')
+
+if [ -z "$USB_DEVICE" ]; then
+    echo "❌ No USB device found (only wireless devices detected)"
+    echo "If you want to set up wireless, plug USB cable first"
+    exit 1
+fi
+
+echo "✅ Found USB device: $USB_DEVICE"
 echo ""
 
 # Enable TCP/IP mode on port 5555

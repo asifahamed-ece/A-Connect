@@ -35,21 +35,37 @@ class AdbService extends EventEmitter {
         if (parts.length >= 2) {
           const id = parts[0];
           const state = parts[1];
+
+          // Skip if not in 'device' state (unauthorized, offline, etc.)
+          if (state !== 'device') continue;
+
           const extra = {};
           for (let i = 2; i < parts.length; i++) {
             const [k, v] = parts[i].split(':');
             if (k && v) extra[k] = v;
           }
+
+          // Detect if wireless: contains port number or mDNS suffix
+          const isWifi = id.includes(':') || id.includes('._adb') || id.includes('._tcp');
+
           devices.push({
             id,
             state,
-            isWifi: id.includes(':'),
+            isWifi,
             model: extra.model || 'Android Device',
             product: extra.product || '',
             device: extra.device || ''
           });
         }
       }
+
+      // Sort: prioritize wireless devices over USB
+      devices.sort((a, b) => {
+        if (a.isWifi && !b.isWifi) return -1;
+        if (!a.isWifi && b.isWifi) return 1;
+        return 0;
+      });
+
       return devices;
     } catch (err) {
       console.error('Failed to list devices:', err);
