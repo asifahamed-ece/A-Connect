@@ -39,6 +39,10 @@ class ScrcpyService extends EventEmitter {
     args.push('--keyboard=uhid');
     args.push('--mouse=uhid');
 
+    // Use hardware H.265 encoder for lower latency on MediaTek Dimensity
+    args.push('--video-codec=h265');
+    args.push('--video-encoder=c2.mtk.hevc.encoder');
+
     // Performance & Quality
     if (maxFps) args.push(`--max-fps=${maxFps}`);
     if (bitRate) args.push(`--video-bit-rate=${bitRate}`);
@@ -61,6 +65,9 @@ class ScrcpyService extends EventEmitter {
     if (alwaysOnTop) args.push('--always-on-top');
     if (fullscreen) args.push('--fullscreen');
 
+    // Disable display on start (saves power)
+    args.push('--power-off-on-close');
+
     // Clipboard synchronization is enabled by default in scrcpy 5.x
     // Auto-syncs between Linux X11/Wayland clipboard and Android clipboard
 
@@ -68,7 +75,16 @@ class ScrcpyService extends EventEmitter {
 
     try {
       this.process = spawn(this.scrcpyPath, args, {
-        env: { ...process.env, SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR: '0' }
+        env: {
+          ...process.env,
+          // SDL performance hints for smoother cursor handling
+          SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR: '0',
+          SDL_MOUSE_RELATIVE_MODE_CENTER: '1',
+          SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS: '0',
+          // Force hardware rendering
+          SDL_RENDER_DRIVER: 'opengl',
+          SDL_RENDER_VSYNC: '0'
+        }
       });
 
       this.isRunning = true;

@@ -40,7 +40,10 @@ class FileTransferService extends EventEmitter {
         if (code === 0) {
           // Trigger ColorOS media scanner so new files appear in Photos / File Manager immediately
           const targetPath = `${remoteDestDir.replace(/\/$/, '')}/${filename}`;
-          this.triggerMediaScan(deviceId, targetPath).catch(() => {});
+          await this.triggerMediaScan(deviceId, targetPath).catch(() => {});
+
+          // Show notification on phone that file was received
+          await this.sendNotificationToDevice(deviceId, '📂 A+ Connect', `File received: ${filename}`).catch(() => {});
 
           this.emit('transfer-completed', {
             id: transferId,
@@ -72,6 +75,18 @@ class FileTransferService extends EventEmitter {
 
     return new Promise((resolve) => {
       execFile(this.adbPath, args, { timeout: 5000 }, (error, stdout) => {
+        resolve(!error);
+      });
+    });
+  }
+
+  async sendNotificationToDevice(deviceId, title, message) {
+    const args = [];
+    if (deviceId) args.push('-s', deviceId);
+    args.push('shell', 'cmd', 'notification', 'post', '-t', title, 'aplus_connect', message);
+
+    return new Promise((resolve) => {
+      execFile(this.adbPath, args, { timeout: 3000 }, (error) => {
         resolve(!error);
       });
     });
