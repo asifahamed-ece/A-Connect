@@ -1,4 +1,4 @@
-# A+ Connect - Linux O+ Connect Alternative
+# A+ Connect - Linux O+ Connect Alternative  ( Under Construction ! )
 
 ## Project Overview
 
