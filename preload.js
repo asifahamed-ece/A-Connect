@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld('api', {
   openFileDialog: () => ipcRenderer.invoke('file:openDialog'),
   cancelTransfer: (transferId) => ipcRenderer.invoke('file:cancel', transferId),
   cancelAllTransfers: () => ipcRenderer.invoke('file:cancelAll'),
+  listDirectory: (deviceId, remotePath) => ipcRenderer.invoke('file:listDirectory', deviceId, remotePath),
+  deletePath: (deviceId, remotePath) => ipcRenderer.invoke('file:delete', deviceId, remotePath),
+  makeDirectory: (deviceId, remotePath) => ipcRenderer.invoke('file:mkdir', deviceId, remotePath),
+  openLocalFile: (localPath) => ipcRenderer.invoke('file:openLocal', localPath),
+  confirmAction: (options) => ipcRenderer.invoke('ui:confirm', options),
 
   // Clipboard & Notifications
   setClipboardSync: (enabled) => ipcRenderer.invoke('clipboard:toggle', enabled),
@@ -30,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   sendToPhoneClipboard: (text) => ipcRenderer.invoke('clipboard:sendToPhone', text),
   getNotificationHistory: () => ipcRenderer.invoke('notifications:getHistory'),
   clearNotificationHistory: () => ipcRenderer.invoke('notifications:clearHistory'),
+  dismissNotification: (id) => ipcRenderer.invoke('notifications:dismiss', id),
 
   // System & Window
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
