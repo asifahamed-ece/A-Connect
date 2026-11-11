@@ -11,11 +11,22 @@ const state = {
   clipboard: [],
   clipboardStatus: { status: 'idle', enabled: true },
   casting: false,
-  browse: { path: '/sdcard', entries: [], loading: false },
+  browse: {
+    path: '/sdcard',
+    entries: [],
+    loading: false,
+    mode: 'browse', // 'browse' | 'recent'
+    query: '',
+    results: null, // null while a deep search is in flight
+    searchSeq: 0,
+    recent: null,
+    recentLoading: false,
+  },
 };
 
 const THEME_KEY = 'aplus-theme';
 const CAST_CONFIRM_KEY = 'aplus-cast-confirm';
+const RECENT_DAYS = 30;
 
 const $ = (id) => document.getElementById(id);
 
@@ -100,7 +111,7 @@ function showView(name) {
     renderDevice();
   }
   if (name === 'files' && state.device) {
-    loadDirectory(state.browse.path);
+    refreshBrowser();
   }
 }
 
@@ -255,11 +266,98 @@ function joinPath(base, name) {
   return `${base.replace(/\/+$/, '')}/${name}`;
 }
 
+function formatAge(ms) {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'just now';
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} mo ago`;
+  return `${Math.floor(months / 12)} y ago`;
+}
+
+// Two-line row used by the search results and the recent list, where the
+// containing folder matters.
+function richRow(entry, { showParent = false, showAge = false, reveal = false } = {}) {
+  const parent = parentPath(entry.path);
+  const bits = [];
+  if (showParent) bits.push(parent);
+  if (!entry.isDir) bits.push(formatBytes(entry.size));
+  if (showAge) bits.push(formatAge(entry.mtime));
+
+  return `
+    <div class="browse-row ${entry.isDir ? 'dir' : 'file'} rich" data-path="${escapeHtml(entry.path)}" data-dir="${entry.isDir ? '1' : '0'}">
+      ${icon(entry.isDir ? 'folder' : 'file')}
+      <div class="browse-body">
+        <div class="browse-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
+        <div class="browse-sub">${escapeHtml(bits.filter(Boolean).join(' · '))}</div>
+      </div>
+      ${
+        reveal
+          ? `<button class="icon-btn sm" data-reveal="${escapeHtml(parent)}" title="Show in folder">
+               <svg class="icon"><use href="#i-folder-open"/></svg>
+             </button>`
+          : ''
+      }
+      ${
+        entry.isDir
+          ? ''
+          : `<button class="icon-btn sm" data-download="${escapeHtml(entry.path)}" title="Download">
+               <svg class="icon"><use href="#i-download"/></svg>
+             </button>`
+      }
+      <button class="icon-btn sm danger" data-delete="${escapeHtml(entry.path)}" title="Delete">
+        <svg class="icon"><use href="#i-trash"/></svg>
+      </button>
+    </div>`;
+}
+
+// Keep the chrome (tabs, nav bar, clear button) in sync with the mode.
+function syncBrowserChrome() {
+  const { query, mode } = state.browse;
+  const searching = query.trim().length > 0;
+
+  $('browse-tab-browse').classList.toggle('is-active', mode === 'browse');
+  $('browse-tab-recent').classList.toggle('is-active', mode === 'recent');
+  $('browse-tab-browse').setAttribute('aria-selected', String(mode === 'browse'));
+  $('browse-tab-recent').setAttribute('aria-selected', String(mode === 'recent'));
+
+  $('browse-nav').hidden = searching;
+  $('browse-newfolder').hidden = mode === 'recent';
+  $('browse-upload').hidden = mode === 'recent';
+  // Going "up" makes no sense in the recent list.
+  $('browse-up').hidden = mode === 'recent';
+  $('browse-up').disabled = state.browse.path === '/';
+  $('browse-search-clear').hidden = !searching;
+}
+
+function renderBrowser() {
+  syncBrowserChrome();
+
+  // The breadcrumb describes what is listed, so it must not keep pointing at
+  // the last folder that was opened.
+  $('browse-path').textContent =
+    state.browse.mode === 'recent' ? 'Recent files' : state.browse.path;
+
+  if (state.browse.query.trim()) return renderSearch();
+  if (state.browse.mode === 'recent') return renderRecent();
+  return renderDirectory();
+}
+
 function renderDirectory() {
   const list = $('browser-list');
   const { path, entries, loading } = state.browse;
   $('browse-path').textContent = path;
 
+  if (!state.device) {
+    list.innerHTML = '<div class="list-empty">Connect a phone to browse its files</div>';
+    return;
+  }
   if (loading) {
     list.innerHTML = '<div class="list-empty">Loading…</div>';
     return;
@@ -291,12 +389,79 @@ function renderDirectory() {
     .join('');
 }
 
-async function loadDirectory(path) {
-  if (!state.device) return;
+function renderSearch() {
+  const list = $('browser-list');
+  const needle = state.browse.query.trim().toLowerCase();
 
+  if (!state.device) {
+    list.innerHTML = '<div class="list-empty">Connect a phone to search its files</div>';
+    return;
+  }
+
+  // Matches inside the folder that is open are instant; the phone-wide
+  // results arrive a second later from the media index.
+  const local = state.browse.entries.filter((e) => e.name.toLowerCase().includes(needle));
+  const localPaths = new Set(local.map((e) => e.path));
+  const results = state.browse.results;
+  const deep = results ? results.filter((e) => !localPaths.has(e.path)) : [];
+
+  const parts = [];
+
+  if (local.length) {
+    parts.push(`<div class="list-group-title">In this folder · ${local.length}</div>`);
+    parts.push(local.map((e) => richRow(e, { showAge: true })).join(''));
+  }
+
+  if (results === null) {
+    parts.push('<div class="list-empty">Searching the phone…</div>');
+  } else if (deep.length) {
+    parts.push(`<div class="list-group-title">Everywhere on the phone · ${deep.length}</div>`);
+    parts.push(
+      deep.map((e) => richRow(e, { showParent: true, showAge: true, reveal: true })).join(''),
+    );
+  } else if (!local.length) {
+    parts.push(
+      `<div class="list-empty">Nothing matches “${escapeHtml(state.browse.query.trim())}”</div>`,
+    );
+  }
+
+  list.innerHTML = parts.join('');
+}
+
+function renderRecent() {
+  const list = $('browser-list');
+  const { recent, recentLoading } = state.browse;
+
+  if (!state.device) {
+    list.innerHTML = '<div class="list-empty">Connect a phone to see its recent files</div>';
+    return;
+  }
+  if (recentLoading) {
+    list.innerHTML = '<div class="list-empty">Reading recent files…</div>';
+    return;
+  }
+  if (!recent || recent.length === 0) {
+    list.innerHTML = `<div class="list-empty">Nothing changed on the phone in the last ${RECENT_DAYS} days</div>`;
+    return;
+  }
+
+  list.innerHTML =
+    `<div class="list-group-title">Newest on the phone · ${recent.length}</div>` +
+    recent.map((e) => richRow(e, { showParent: true, showAge: true, reveal: true })).join('');
+}
+
+async function loadDirectory(path) {
   state.browse.path = path;
+
+  if (!state.device) {
+    state.browse.entries = [];
+    state.browse.loading = false;
+    renderBrowser();
+    return;
+  }
+
   state.browse.loading = true;
-  renderDirectory();
+  renderBrowser();
 
   try {
     state.browse.entries = await window.api.listDirectory(state.device.id, path);
@@ -305,8 +470,97 @@ async function loadDirectory(path) {
     toast(`Cannot open ${path}`, 'err');
   } finally {
     state.browse.loading = false;
-    renderDirectory();
+    renderBrowser();
   }
+}
+
+async function loadRecent(force = false) {
+  if (!state.device) {
+    state.browse.recent = null;
+    renderBrowser();
+    return;
+  }
+  // The list is cached, but the view still has to be repainted.
+  if (!force && state.browse.recent) {
+    renderBrowser();
+    return;
+  }
+
+  state.browse.recentLoading = true;
+  renderBrowser();
+
+  try {
+    state.browse.recent = await window.api.listRecentFiles(state.device.id);
+  } catch (err) {
+    state.browse.recent = [];
+    toast(`Could not read recent files: ${err.message}`, 'err');
+  } finally {
+    state.browse.recentLoading = false;
+    renderBrowser();
+  }
+}
+
+// Deep search over the phone's media index. Results from an older query are
+// discarded, so fast typing never shows stale matches.
+async function runSearch(query) {
+  if (!state.device) {
+    state.browse.results = [];
+    renderBrowser();
+    return;
+  }
+
+  const seq = ++state.browse.searchSeq;
+  state.browse.results = null;
+  renderBrowser();
+
+  try {
+    const found = await window.api.searchFiles(state.device.id, query);
+    if (seq !== state.browse.searchSeq) return;
+    state.browse.results = found;
+  } catch (err) {
+    if (seq !== state.browse.searchSeq) return;
+    state.browse.results = [];
+    toast(`Search failed: ${err.message}`, 'err');
+  } finally {
+    if (seq === state.browse.searchSeq) renderBrowser();
+  }
+}
+
+// Whatever is on screen right now gets reloaded.
+function refreshBrowser() {
+  if (state.browse.query.trim()) return runSearch(state.browse.query.trim());
+  if (state.browse.mode === 'recent') return loadRecent(true);
+  return loadDirectory(state.browse.path);
+}
+
+function switchMode(mode) {
+  if (mode === state.browse.mode) return;
+
+  state.browse.mode = mode;
+  state.browse.query = '';
+  state.browse.results = null;
+  state.browse.searchSeq++;
+  $('browse-search').value = '';
+
+  // Always repaint first: the data loaders may return early when their list
+  // is already cached, and the tab must still switch.
+  renderBrowser();
+
+  if (mode === 'recent') {
+    loadRecent();
+  } else if (!state.browse.entries.length) {
+    loadDirectory(state.browse.path);
+  }
+}
+
+// Open the folder that contains a search or recent hit.
+function revealEntry(dir) {
+  state.browse.mode = 'browse';
+  state.browse.query = '';
+  state.browse.results = null;
+  state.browse.searchSeq++;
+  $('browse-search').value = '';
+  loadDirectory(dir);
 }
 
 async function downloadEntry(remotePath) {
@@ -348,7 +602,7 @@ async function deleteEntry(remotePath) {
   try {
     await window.api.deletePath(state.device.id, remotePath);
     toast(`Deleted ${name}`);
-    loadDirectory(state.browse.path);
+    refreshBrowser();
   } catch (err) {
     toast(`Delete failed: ${err.message}`, 'err');
   }
@@ -399,7 +653,7 @@ async function uploadHere() {
   if (!state.device) return;
   const paths = await window.api.openFileDialog();
   await sendFiles(paths, state.browse.path);
-  setTimeout(() => loadDirectory(state.browse.path), 1200);
+  setTimeout(refreshBrowser, 1200);
 }
 
 /* ---------- Notifications ---------- */
@@ -718,9 +972,57 @@ function initFiles() {
 
   // Phone storage browser
   $('browse-up').addEventListener('click', () => loadDirectory(parentPath(state.browse.path)));
-  $('browse-refresh').addEventListener('click', () => loadDirectory(state.browse.path));
+  $('browse-refresh').addEventListener('click', () => refreshBrowser());
   $('browse-newfolder').addEventListener('click', createFolder);
   $('browse-upload').addEventListener('click', uploadHere);
+
+  $('browse-tab-browse').addEventListener('click', () => switchMode('browse'));
+  $('browse-tab-recent').addEventListener('click', () => switchMode('recent'));
+
+  // Typing filters the open folder instantly; the phone-wide search runs
+  // once the user pauses.
+  let searchTimer = null;
+  const searchInput = $('browse-search');
+
+  searchInput.addEventListener('input', () => {
+    state.browse.query = searchInput.value;
+    state.browse.searchSeq++; // discard any in-flight result
+    state.browse.results = null;
+
+    clearTimeout(searchTimer);
+    const query = state.browse.query.trim();
+
+    if (!query) {
+      renderBrowser();
+      return;
+    }
+
+    renderBrowser();
+    searchTimer = setTimeout(() => runSearch(query), 450);
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      clearTimeout(searchTimer);
+      runSearch(searchInput.value.trim());
+    }
+    if (e.key === 'Escape') {
+      clearTimeout(searchTimer);
+      searchInput.value = '';
+      state.browse.query = '';
+      state.browse.results = null;
+      renderBrowser();
+    }
+  });
+
+  $('browse-search-clear').addEventListener('click', () => {
+    clearTimeout(searchTimer);
+    searchInput.value = '';
+    state.browse.query = '';
+    state.browse.results = null;
+    searchInput.focus();
+    renderBrowser();
+  });
 
   $('browser-list').addEventListener('click', (e) => {
     const download = e.target.closest('[data-download]');
@@ -732,6 +1034,12 @@ function initFiles() {
     const del = e.target.closest('[data-delete]');
     if (del) {
       deleteEntry(del.dataset.delete);
+      return;
+    }
+
+    const reveal = e.target.closest('[data-reveal]');
+    if (reveal) {
+      revealEntry(reveal.dataset.reveal);
       return;
     }
 
@@ -890,6 +1198,11 @@ function init() {
 
   // Nothing is connected yet: the empty state is the honest default.
   showView('empty');
+
+  // A reload loses the device event, so pick the connection back up.
+  window.api.getConnectedDevice?.().then((device) => {
+    if (device && !state.device) setDevice(device);
+  });
 }
 
 window.addEventListener('DOMContentLoaded', init);
