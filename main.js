@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -246,6 +246,11 @@ function setupIpcHandlers() {
 
   // Scrcpy Handlers
   ipcMain.handle('scrcpy:start', async (_, deviceId, options) => {
+    // Note: ADB capture cannot ask the phone for consent (that needs
+    // MediaProjection inside an installed app), so the confirmation happens in
+    // the app before this handler runs. A phone-side notification was tried but
+    // shell notifications cannot be cancelled afterwards, leaving a stale
+    // "mirroring is active" message, so it is deliberately not posted.
     return scrcpy.start(deviceId, options);
   });
   ipcMain.handle('scrcpy:stop', async () => scrcpy.stop());
@@ -271,6 +276,19 @@ function setupIpcHandlers() {
     success: fileTransfer.cancelTransfer(transferId)
   }));
   ipcMain.handle('file:cancelAll', async () => ({ cancelled: fileTransfer.cancelAll() }));
+  ipcMain.handle('file:listDirectory', async (_, deviceId, remotePath) => {
+    return fileTransfer.listDirectory(deviceId, remotePath);
+  });
+  ipcMain.handle('file:delete', async (_, deviceId, remotePath) => {
+    return fileTransfer.deletePath(deviceId, remotePath);
+  });
+  ipcMain.handle('file:mkdir', async (_, deviceId, remotePath) => {
+    return fileTransfer.makeDirectory(deviceId, remotePath);
+  });
+  ipcMain.handle('file:openLocal', async (_, localPath) => {
+    const error = await shell.openPath(localPath);
+    return { success: !error, message: error || null };
+  });
 
   // Clipboard & Notifications
   ipcMain.handle('clipboard:toggle', async (_, enabled) => {
@@ -296,6 +314,22 @@ function setupIpcHandlers() {
   ipcMain.handle('notifications:clearHistory', async () => {
     notifications.clearHistory();
     return { success: true };
+  });
+  ipcMain.handle('notifications:dismiss', async (_, id) => ({
+    success: notifications.dismiss(id)
+  }));
+
+  ipcMain.handle('ui:confirm', async (_, options = {}) => {
+    if (!mainWindow) return false;
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['Cancel', options.confirmLabel || 'OK'],
+      defaultId: 1,
+      cancelId: 0,
+      message: options.message || 'Are you sure?',
+      detail: options.detail || ''
+    });
+    return result.response === 1;
   });
 }
 
