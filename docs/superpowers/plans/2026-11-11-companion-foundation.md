@@ -1011,6 +1011,7 @@ Create `companion-android/app/src/test/resources/fixtures/protocol-frames.json` 
         "ts": 1700000000001,
         "payload": {
           "sessionId": "session-1",
+          "pcId": "pc-1",
           "fingerprint": "AA:BB:CC:DD:EE:FF",
           "nonce": "abcdef0123456789"
         }
@@ -1026,7 +1027,8 @@ Create `companion-android/app/src/test/resources/fixtures/protocol-frames.json` 
         "ts": 1700000000002,
         "payload": {
           "text": "hello from the phone",
-          "hash": "9f86d081884c7d659a2feaa0c55ad015"
+          "hash": "9f86d081884c7d659a2feaa0c55ad015",
+          "truncated": false
         }
       }
     },
