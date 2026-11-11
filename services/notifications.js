@@ -36,6 +36,7 @@ class NotificationService extends EventEmitter {
     this.pollTimer = null;
     this.polling = false;
     this.seen = new Map(); // notification key -> when we first saw it
+    this.lastEmitted = new Map(); // pkg|id|tag -> last emit time (anti-spam)
     this.baselineDone = false;
   }
 
@@ -83,6 +84,13 @@ class NotificationService extends EventEmitter {
       for (const notif of found) {
         if (this.seen.has(notif.key)) continue;
         this.seen.set(notif.key, Date.now());
+
+        // A notification can be reposted under the same tag/id with new content.
+        // Treat that as new, but not more than once every 2s per slot.
+        const last = this.lastEmitted.get(notif.baseKey) ?? 0;
+        if (Date.now() - last < 2000) continue;
+        this.lastEmitted.set(notif.baseKey, Date.now());
+
         this.addNotification(notif);
       }
 
@@ -131,7 +139,8 @@ class NotificationService extends EventEmitter {
       const when = Number(block.match(/\bwhen=(\d+)/)?.[1] ?? 0);
 
       notifications.push({
-        key,
+        key: `${key}|${when}`,
+        baseKey: key,
         id: `notif_${pkg}_${idMatch[1]}_${when || Date.now()}`,
         pkg,
         app: this.readableAppName(pkg),
@@ -200,6 +209,9 @@ class NotificationService extends EventEmitter {
       const oldest = this.seen.keys().next().value;
       this.seen.delete(oldest);
     }
+    for (const [key, at] of this.lastEmitted) {
+      if (at < cutoff) this.lastEmitted.delete(key);
+    }
   }
 
   addNotification(notif) {
@@ -227,6 +239,15 @@ class NotificationService extends EventEmitter {
   clearHistory() {
     this.history = [];
     this.emit('history-cleared');
+  }
+
+  /** Remove one notification from the visible history. */
+  dismiss(id) {
+    const before = this.history.length;
+    this.history = this.history.filter((n) => n.id !== id);
+    if (this.history.length === before) return false;
+    this.emit('history-dismissed', { id });
+    return true;
   }
 }
 
