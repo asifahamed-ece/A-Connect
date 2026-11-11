@@ -3,167 +3,402 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>A+ Connect</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Custom Titlebar (matching O+ Connect style) -->
-  <div class="titlebar">
-    <div class="titlebar-drag">
-      <img src="../assets/icon.png" alt="A+ Connect" class="titlebar-icon">
-      <span class="titlebar-title">A+ Connect</span>
-    </div>
-    <div class="titlebar-controls">
-      <button class="titlebar-btn minimize" onclick="window.api.minimizeWindow()">
-        <svg width="12" height="1" viewBox="0 0 12 1"><rect width="12" height="1" fill="currentColor"/></svg>
-      </button>
-      <button class="titlebar-btn close" onclick="window.api.closeWindow()">
-        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      </button>
+  <!-- Icon sprite: single stroke family, 24px grid -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-cast" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2.5"/><path d="M8 20h8"/><path d="M12 17v3"/></symbol>
+    <symbol id="i-files" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2a2 2 0 0 1 1.6.8l.9 1.2H18.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1.5"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-min" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-max" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r=".6" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M12 7l4 3"/><path d="M12 11l-4 3"/><circle cx="12" cy="3" r="1.5"/><rect x="10" y="14" width="4" height="3" rx="1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 5.5h3"/></symbol>
+    <symbol id="i-desktop" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2.5"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-battery" viewBox="0 0 24 24"><rect x="2" y="8" width="17" height="9" rx="2"/><path d="M21.5 11v3"/><path d="M5 11h9v5H5z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-storage" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="i-android" viewBox="0 0 24 24"><path d="M6 10v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6"/><path d="M6 10a6 6 0 0 1 12 0"/><path d="M8 21v-3M16 21v-3"/><circle cx="9.5" cy="7.5" r=".7" fill="currentColor" stroke="none"/><circle cx="14.5" cy="7.5" r=".7" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".7" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v6M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0z"/><path d="M12 18v3"/></symbol>
+  </svg>
+
+  <div class="app">
+    <header class="titlebar">
+      <div class="titlebar-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#2563EB"/><path d="M8.4 15.6L12 7.6l3.6 8h-1.9l-.7-1.7h-2.1l-.7 1.7z" fill="#fff"/></svg>
+        </span>
+        <span class="brand-name">A+ Connect</span>
+      </div>
+      <div class="titlebar-drag"></div>
+      <div class="window-controls">
+        <button class="win-btn" id="win-min" aria-label="Minimize"><svg class="icon"><use href="#i-min"/></svg></button>
+        <button class="win-btn" id="win-max" aria-label="Maximize"><svg class="icon"><use href="#i-max"/></svg></button>
+        <button class="win-btn danger" id="win-close" aria-label="Close"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="profile">
+          <div class="avatar" aria-hidden="true">AP</div>
+          <div class="profile-text">
+            <div class="profile-name">This PC</div>
+            <div class="profile-sub" id="profile-sub">Not connected</div>
+          </div>
+        </div>
+
+        <div class="side-section">
+          <div class="side-heading">Devices</div>
+          <div id="device-list" class="device-list">
+            <div class="device-empty">No device connected</div>
+          </div>
+          <button class="btn-ghost side-add" id="btn-add-device">
+            <svg class="icon"><use href="#i-plus"/></svg>
+            <span>Add device</span>
+          </button>
+        </div>
+
+        <nav class="side-nav" aria-label="Sections">
+          <button class="nav-item" data-view="device">
+            <svg class="icon"><use href="#i-cast"/></svg><span>Multi-Screen Connect</span>
+          </button>
+          <button class="nav-item" data-view="files">
+            <svg class="icon"><use href="#i-files"/></svg><span>Files</span>
+            <span class="nav-badge" id="badge-files" hidden></span>
+          </button>
+          <button class="nav-item" data-view="notifications">
+            <svg class="icon"><use href="#i-bell"/></svg><span>Notifications</span>
+            <span class="nav-badge" id="badge-notifications" hidden></span>
+          </button>
+          <button class="nav-item" data-view="clipboard">
+            <svg class="icon"><use href="#i-clipboard"/></svg><span>Clipboard</span>
+            <span class="status-dot" id="clipboard-dot" title="Clipboard sync"></span>
+          </button>
+        </nav>
+
+        <div class="side-footer">
+          <button class="nav-item subtle" id="btn-settings">
+            <svg class="icon"><use href="#i-settings"/></svg><span>Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main -->
+      <main class="main" id="main">
+        <!-- Empty state -->
+        <section class="view" id="view-empty">
+          <div class="empty-state">
+            <svg class="empty-art" viewBox="0 0 320 200" aria-hidden="true">
+              <defs>
+                <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#E8F0FF"/><stop offset="1" stop-color="#D6E4FF"/>
+                </linearGradient>
+              </defs>
+              <rect x="52" y="34" width="150" height="96" rx="8" fill="url(#g1)" stroke="#BBD3FF" stroke-width="2"/>
+              <rect x="66" y="48" width="122" height="68" rx="4" fill="#fff" stroke="#D6E4FF"/>
+              <circle cx="127" cy="76" r="13" fill="#C7DAFF"/>
+              <path d="M108 104c4-11 11-16 19-16s15 5 19 16z" fill="#C7DAFF"/>
+              <path d="M127 130v14" stroke="#BBD3FF" stroke-width="3"/>
+              <rect x="96" y="144" width="62" height="6" rx="3" fill="#BBD3FF"/>
+              <rect x="186" y="60" width="66" height="120" rx="12" fill="#fff" stroke="#BBD3FF" stroke-width="2"/>
+              <rect x="194" y="74" width="50" height="88" rx="6" fill="#F1F6FF"/>
+              <circle cx="219" cy="90" r="9" fill="#C7DAFF"/>
+              <path d="M205 118c3-8 8-12 14-12s11 4 14 12z" fill="#C7DAFF"/>
+              <rect x="228" y="140" width="46" height="62" rx="10" fill="#fff" stroke="#BBD3FF" stroke-width="2"/>
+              <rect x="235" y="150" width="32" height="44" rx="5" fill="#F1F6FF"/>
+            </svg>
+            <h1 class="empty-title">No devices found</h1>
+            <p class="empty-sub">
+              Phones and tablets you pair with this PC appear here. Keep both devices
+              on the same Wi-Fi network and make sure wireless debugging is enabled.
+            </p>
+            <button class="btn-primary btn-lg" id="btn-add-device-2">
+              <svg class="icon"><use href="#i-plus"/></svg>
+              <span>Add device</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Device connected -->
+        <section class="view" id="view-device" hidden>
+          <header class="view-header">
+            <div>
+              <h1 class="view-title" id="device-title">Device</h1>
+              <p class="view-sub" id="device-sub">Connected</p>
+            </div>
+            <div class="header-actions">
+              <span class="chip" id="device-transport">
+                <svg class="icon"><use href="#i-wifi"/></svg><span>Wi-Fi</span>
+              </span>
+              <button class="btn-ghost" id="btn-disconnect">
+                <svg class="icon"><use href="#i-close"/></svg><span>Disconnect</span>
+              </button>
+            </div>
+          </header>
+
+          <div class="telemetry" id="telemetry">
+            <div class="telemetry-item">
+              <svg class="icon"><use href="#i-battery"/></svg>
+              <div><div class="telemetry-value" id="t-battery">—</div><div class="telemetry-label">Battery</div></div>
+            </div>
+            <div class="telemetry-item">
+              <svg class="icon"><use href="#i-android"/></svg>
+              <div><div class="telemetry-value" id="t-android">—</div><div class="telemetry-label">Android</div></div>
+            </div>
+            <div class="telemetry-item">
+              <svg class="icon"><use href="#i-storage"/></svg>
+              <div><div class="telemetry-value" id="t-storage">—</div><div class="telemetry-label">Storage free</div></div>
+            </div>
+            <div class="telemetry-item">
+              <svg class="icon"><use href="#i-clock"/></svg>
+              <div><div class="telemetry-value" id="t-rom">—</div><div class="telemetry-label">ColorOS</div></div>
+            </div>
+          </div>
+
+          <div class="card cast-card">
+            <div class="cast-copy">
+              <h2 class="card-title">Cast phone screen</h2>
+              <p class="card-sub">Control your phone from this PC with low-latency mirroring and input.</p>
+              <div class="cast-actions">
+                <button class="btn-primary" id="btn-cast">Start casting</button>
+                <button class="btn-ghost" id="btn-cast-stop" hidden>Stop</button>
+                <span class="cast-state" id="cast-state">Not casting</span>
+              </div>
+            </div>
+            <svg class="cast-art" viewBox="0 0 180 220" aria-hidden="true">
+              <rect x="40" y="10" width="100" height="200" rx="16" fill="#fff" stroke="#D6E4FF" stroke-width="2"/>
+              <rect x="50" y="26" width="80" height="150" rx="8" fill="#EFF5FF"/>
+              <circle cx="90" cy="54" r="12" fill="#C7DAFF"/>
+              <path d="M68 106c4-13 12-19 22-19s18 6 22 19z" fill="#C7DAFF"/>
+              <rect x="66" y="120" width="48" height="8" rx="4" fill="#DCE8FF"/>
+              <rect x="74" y="136" width="32" height="8" rx="4" fill="#DCE8FF"/>
+              <path d="M90 186h0" stroke="#2563EB" stroke-width="4" stroke-linecap="round"/>
+            </svg>
+          </div>
+
+          <div class="tiles">
+            <button class="tile" data-view="files">
+              <svg class="icon"><use href="#i-files"/></svg>
+              <span>Send files</span>
+            </button>
+            <button class="tile" data-view="notifications">
+              <svg class="icon"><use href="#i-bell"/></svg>
+              <span>Notifications</span>
+            </button>
+            <button class="tile" data-view="clipboard">
+              <svg class="icon"><use href="#i-clipboard"/></svg>
+              <span>Clipboard</span>
+            </button>
+            <button class="tile" id="btn-add-device-3">
+              <svg class="icon"><use href="#i-plus"/></svg>
+              <span>Another device</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Files -->
+        <section class="view" id="view-files" hidden>
+          <header class="view-header">
+            <div>
+              <h1 class="view-title">Files</h1>
+              <p class="view-sub">Send files to <span id="files-dest-label">/sdcard/Download</span></p>
+            </div>
+            <div class="header-actions">
+              <button class="btn-ghost" id="btn-cancel-all" hidden>Cancel all</button>
+            </div>
+          </header>
+
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose files to send">
+            <svg class="icon icon-lg"><use href="#i-upload"/></svg>
+            <div class="dropzone-title">Drop files here</div>
+            <div class="dropzone-sub">or click to browse your computer</div>
+          </div>
+
+          <div class="list" id="transfer-list">
+            <div class="list-empty" id="transfer-empty">No transfers yet</div>
+          </div>
+        </section>
+
+        <!-- Notifications -->
+        <section class="view" id="view-notifications" hidden>
+          <header class="view-header">
+            <div>
+              <h1 class="view-title">Notifications</h1>
+              <p class="view-sub" id="notif-sub">Mirrored from your phone</p>
+            </div>
+            <div class="header-actions">
+              <button class="btn-ghost" id="btn-clear-notifs">
+                <svg class="icon"><use href="#i-trash"/></svg><span>Clear</span>
+              </button>
+            </div>
+          </header>
+          <div class="list" id="notifications-list">
+            <div class="list-empty">No notifications yet</div>
+          </div>
+        </section>
+
+        <!-- Clipboard -->
+        <section class="view" id="view-clipboard" hidden>
+          <header class="view-header">
+            <div>
+              <h1 class="view-title">Clipboard</h1>
+              <p class="view-sub" id="clip-sub">Text you copy on either device appears on the other</p>
+            </div>
+            <div class="header-actions">
+              <span class="pill" id="clip-status">Idle</span>
+              <button class="btn-ghost" id="btn-clear-clip">
+                <svg class="icon"><use href="#i-trash"/></svg><span>Clear</span>
+              </button>
+            </div>
+          </header>
+
+          <div class="card row-card">
+            <div>
+              <div class="row-title">Sync clipboard with phone</div>
+              <div class="row-sub">Works without any app on the phone, over the active connection.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="clip-toggle">
+              <span class="switch-track" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <div class="list" id="clipboard-list">
+            <div class="list-empty">Nothing synced yet</div>
+          </div>
+        </section>
+      </main>
     </div>
   </div>
 
-  <div class="app-container">
-    <!-- Main Device Card -->
-    <div id="device-card" class="device-card" style="display: none;">
-      <div class="device-header">
-        <div class="device-brand" id="device-brand">OPPO</div>
-        <div class="device-model" id="device-model">Reno 14 5G</div>
+  <!-- Add device dialog -->
+  <div class="modal-root" id="modal-device" hidden>
+    <div class="modal-scrim" data-close-modal></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-device-title">
+      <button class="modal-close" data-close-modal aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+      <h2 class="modal-title" id="modal-device-title">Add a device</h2>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" role="tab" data-tab="wireless">Wireless debugging</button>
+        <button class="tab" role="tab" data-tab="usb">Connect via USB</button>
       </div>
 
-      <div class="device-telemetry">
-        <div class="telemetry-item">
-          <div class="telemetry-icon">🔋</div>
-          <div class="telemetry-value" id="battery-level">100%</div>
-        </div>
-        <div class="telemetry-item">
-          <div class="telemetry-icon">📱</div>
-          <div class="telemetry-value" id="coloros-version">ColorOS 16</div>
-        </div>
-        <div class="telemetry-item">
-          <div class="telemetry-icon">🌐</div>
-          <div class="telemetry-value" id="device-connection">Wi-Fi</div>
-        </div>
-      </div>
-
-      <div class="device-actions">
-        <button class="action-btn primary" id="btn-mirror" onclick="toggleMirroring()">
-          <span class="btn-icon">🖥</span>
-          <span class="btn-label">Screen Mirror</span>
-        </button>
-        <button class="action-btn" id="btn-files" onclick="showFileTransfer()">
-          <span class="btn-icon">📂</span>
-          <span class="btn-label">Files</span>
-        </button>
-        <button class="action-btn" id="btn-notifications" onclick="showNotifications()">
-          <span class="btn-icon">🔔</span>
-          <span class="btn-label">Notifications</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Connection Setup Panel -->
-    <div id="connection-panel" class="connection-panel">
-      <div class="connection-header">
-        <h2>Connect Your Device</h2>
-        <p class="connection-subtitle">Connect via Wi-Fi for wireless freedom</p>
-      </div>
-
-      <div class="connection-modes">
-        <div class="mode-card active" id="mode-wifi" onclick="selectMode('wifi')">
-          <div class="mode-icon">📡</div>
-          <div class="mode-title">Wi-Fi Connection</div>
-          <div class="mode-desc">Wireless, fast & seamless</div>
-        </div>
-        <div class="mode-card" id="mode-usb" onclick="selectMode('usb')">
-          <div class="mode-icon">🔌</div>
-          <div class="mode-title">USB Direct</div>
-          <div class="mode-desc">Plug & play (auto-detect)</div>
-        </div>
-      </div>
-
-      <div id="wifi-setup" class="setup-section">
-        <div class="setup-step">
-          <div class="step-number">1</div>
-          <div class="step-content">
-            <p>On your <strong>Oppo Reno 14 5G</strong>, enable <strong>Wireless debugging</strong>:</p>
-            <p class="step-detail">Settings → Developer options → Wireless debugging → ON</p>
-          </div>
-        </div>
-        <div class="setup-step">
-          <div class="step-number">2</div>
-          <div class="step-content">
-            <p>Tap <strong>"Pair device with pairing code"</strong> to get the IP, Port, and 6-digit code.</p>
-          </div>
-        </div>
-        <div class="setup-step">
-          <div class="step-number">3</div>
-          <div class="step-content">
-            <p>Enter pairing details below:</p>
-            <div class="input-group">
-              <input type="text" id="pair-ip" placeholder="IP (e.g. 192.168.1.100)" class="input-field">
-              <input type="text" id="pair-port" placeholder="Port (e.g. 37853)" class="input-field small">
-              <input type="text" id="pair-code" placeholder="6-digit code" class="input-field small" maxlength="6">
+      <div class="tab-panel" id="tab-wireless">
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">1</span>
+            <div>
+              <p>On your phone, enable <strong>Wireless debugging</strong>.</p>
+              <p class="muted">Settings → System → Developer options → Wireless debugging</p>
             </div>
-            <button class="btn-connect" id="btn-pair" onclick="pairDevice()">
-              <span>🔐 Pair Device</span>
-            </button>
           </div>
-        </div>
-        <div class="setup-step">
-          <div class="step-number">4</div>
-          <div class="step-content">
-            <p>Once paired, connect using the IP shown under <strong>"Wireless debugging"</strong>:</p>
-            <div class="input-group">
-              <input type="text" id="connect-ip" placeholder="IP Address (e.g. 192.168.1.100)" class="input-field">
-              <input type="text" id="connect-port" placeholder="Port (default: 5555)" class="input-field small" value="5555">
+          <div class="step">
+            <span class="step-num">2</span>
+            <div>
+              <p>Tap <strong>Pair device with pairing code</strong> and enter what it shows.</p>
+              <div class="form-row">
+                <input class="input" id="pair-ip" placeholder="IP address" autocomplete="off">
+                <input class="input narrow" id="pair-port" placeholder="Port" autocomplete="off">
+                <input class="input narrow" id="pair-code" placeholder="Code" maxlength="6" autocomplete="off">
+              </div>
+              <button class="btn-primary" id="btn-pair">Pair</button>
             </div>
-            <button class="btn-connect primary" id="btn-connect" onclick="connectWifi()">
-              <span>✨ Connect via Wi-Fi</span>
-            </button>
+          </div>
+          <div class="step">
+            <span class="step-num">3</span>
+            <div>
+              <p>Then connect using the address shown on the same screen.</p>
+              <div class="form-row">
+                <input class="input" id="connect-ip" placeholder="IP address" autocomplete="off">
+                <input class="input narrow" id="connect-port" placeholder="Port" value="5555" autocomplete="off">
+              </div>
+              <button class="btn-primary" id="btn-connect-wifi">Connect</button>
+            </div>
           </div>
         </div>
+        <p class="modal-note" id="pair-status"></p>
       </div>
 
-      <div id="usb-setup" class="setup-section" style="display: none;">
-        <div class="usb-status">
-          <div class="usb-icon">🔌</div>
-          <p>Plug your device into a USB port and it will be detected automatically.</p>
-          <p class="usb-note">Ensure USB debugging is enabled on your device.</p>
+      <div class="tab-panel" id="tab-usb" hidden>
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">1</span>
+            <div>
+              <p>Connect the phone with a USB cable and allow <strong>USB debugging</strong>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">2</span>
+            <div>
+              <p>Run this once in a terminal to switch to Wi-Fi:</p>
+              <code class="code">./setup-usb.sh</code>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">3</span>
+            <div>
+              <p>Unplug the cable, then connect with the phone's IP and port <strong>5555</strong>.</p>
+            </div>
+          </div>
         </div>
-        <button class="btn-connect" onclick="checkUsbDevices()">
-          <span>🔍 Check USB Devices</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- File Transfer Panel -->
-    <div id="file-panel" class="feature-panel" style="display: none;">
-      <div class="panel-header">
-        <button class="back-btn" onclick="showHome()">← Back</button>
-        <h2>File Transfer</h2>
-      </div>
-      <div class="file-drop-zone" id="drop-zone">
-        <div class="drop-icon">📂</div>
-        <p class="drop-text">Drag files here or click to browse</p>
-        <p class="drop-hint">Photos, videos, documents → straight to Downloads</p>
-        <button class="btn-browse" onclick="browseFiles()">Browse Files</button>
-      </div>
-      <div class="transfer-log" id="transfer-log"></div>
-    </div>
-
-    <!-- Notifications Panel -->
-    <div id="notifications-panel" class="feature-panel" style="display: none;">
-      <div class="panel-header">
-        <button class="back-btn" onclick="showHome()">← Back</button>
-        <h2>Notifications</h2>
-        <button class="btn-clear" onclick="clearNotifications()">Clear All</button>
-      </div>
-      <div class="notifications-list" id="notifications-list">
-        <div class="empty-state">No notifications yet</div>
       </div>
     </div>
   </div>
+
+  <!-- Settings dialog -->
+  <div class="modal-root" id="modal-settings" hidden>
+    <div class="modal-scrim" data-close-modal></div>
+    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="modal-settings-title">
+      <button class="modal-close" data-close-modal aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+      <h2 class="modal-title" id="modal-settings-title">Settings</h2>
+
+      <div class="settings-row">
+        <div>
+          <div class="row-title">Clipboard sync</div>
+          <div class="row-sub" id="settings-clip-detail">—</div>
+        </div>
+        <span class="pill" id="settings-clip-status">Idle</span>
+      </div>
+      <div class="settings-row">
+        <div>
+          <div class="row-title">Transfers land in</div>
+          <div class="row-sub">/sdcard/Download on the phone</div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div>
+          <div class="row-title">About</div>
+          <div class="row-sub">A+ Connect 1.0.0 · Electron · scrcpy over ADB</div>
+        </div>
+      </div>
+      <p class="modal-note">
+        Account sign-in is not supported: OPPO accounts authenticate through the
+        proprietary O+ Connect protocol, not through ADB.
+      </p>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
 
   <script src="renderer.js"></script>
 </body>
