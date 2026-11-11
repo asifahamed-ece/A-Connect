@@ -99,10 +99,33 @@ class ProbeRelayService : Service() {
         }
         Log.i(TAG, "probe foreground service started")
 
+        reportRoles()
+
         // The single write the measurements need.
         writeProbeValue()
 
         handler.postDelayed(poller, CYCLE_INTERVAL_MS)
+    }
+
+    /**
+     * Lists the roles this app qualifies for. Android 13 added
+     * READ_CLIPBOARD_IN_BACKGROUND, granted through a role rather than as a
+     * normal permission, so the question "is there a clipboard role?" is
+     * answered by asking the system rather than by guessing names.
+     */
+    private fun reportRoles() {
+        try {
+            val manager = getSystemService(android.app.role.RoleManager::class.java)
+            for (candidate in CANDIDATE_ROLES) {
+                Log.i(
+                    TAG,
+                    "role $candidate available=${manager.isRoleAvailable(candidate)} " +
+                        "held=${manager.isRoleHeld(candidate)}"
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "role query failed: ${e.message}")
+        }
     }
 
     private fun writeProbeValue() {
@@ -144,6 +167,13 @@ class ProbeRelayService : Service() {
         // PROBE_VALUE instead, the background write was dropped.
         const val BG_WRITE_VALUE = "background-write-value"
         private const val CYCLE_INTERVAL_MS = 5000L
+
+        private val CANDIDATE_ROLES = listOf(
+            "android.app.role.CLIPBOARD",
+            "android.app.role.CLIPBOARD_ACCESS",
+            "android.app.role.SYSTEM_CLIPBOARD",
+            "android.app.role.READ_CLIPBOARD_IN_BACKGROUND",
+        )
 
         fun sha256(value: String): String {
             val digest = MessageDigest.getInstance("SHA-256")
