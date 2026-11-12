@@ -34,6 +34,7 @@ const FIXTURE_DIR = path.join(
 const KOTLIN_FIXTURE = path.join(FIXTURE_DIR, 'protocol-frames.json');
 const NODE_FIXTURE = path.join(FIXTURE_DIR, 'protocol-frames-node.json');
 const BINARY_FIXTURE = path.join(FIXTURE_DIR, 'frames.json');
+const FEATURE_FIXTURE = path.join(FIXTURE_DIR, 'feature-payloads.json');
 
 function readFrames(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8')).frames;
@@ -168,6 +169,77 @@ function checkBinaryFrames() {
   assert.strictEqual(protocol.decode(jsonFrame).type, 'ping', 'a JSON frame stopped decoding');
 }
 
+/**
+ * The four features' payloads, against the one fixture both implementations
+ * read. The Kotlin side asserts the same fixture bytes in FeaturePayloadsTest,
+ * so a key that is renamed on one side fails there as well as here.
+ */
+function checkFeaturePayloads() {
+  const expected = JSON.parse(fs.readFileSync(FEATURE_FIXTURE, 'utf8'));
+
+  for (const name of [
+    'NOTIFICATION',
+    'NOTIFICATION_REMOVED',
+    'NOTIFICATION_ACTION',
+    'MEDIA_STATE',
+    'MEDIA_COMMAND',
+    'FILE_LIST_REQUEST',
+    'FILE_LIST',
+    'MIRROR_START',
+    'MIRROR_STOP',
+  ]) {
+    assert.ok(protocol.TYPES[name], `TYPES is missing ${name}`);
+  }
+
+  const notification = protocol.buildNotification({
+    id: 'com.example:7:null',
+    pkg: 'com.example',
+    app: 'Example',
+    title: 'Ada',
+    text: 'hello',
+    ts: 1700000000000,
+    ongoing: false,
+    actions: [
+      { id: 'reply', title: 'Reply' },
+      { id: 'archive', title: 'Archive' },
+    ],
+  });
+  assert.deepStrictEqual(notification, expected.notification, 'the notification payload changed');
+  assert.deepStrictEqual(
+    protocol.parseNotification(expected.notification).actions,
+    expected.notification.actions,
+    'the action order did not survive the parser'
+  );
+  assert.strictEqual(
+    protocol.parseNotification({ pkg: 'com.example' }),
+    null,
+    'a notification without an id parsed'
+  );
+
+  const mediaState = protocol.buildMediaState({
+    app: 'Music',
+    title: 'Song',
+    artist: 'Band',
+    album: 'Album',
+    playing: true,
+    positionMs: 1000,
+    durationMs: 180000,
+  });
+  assert.deepStrictEqual(mediaState, expected.mediaState, 'the media state payload changed');
+  assert.strictEqual(protocol.parseMediaState(mediaState).playing, true, 'playing did not survive');
+
+  const fileList = protocol.buildFileList('root', [
+    { name: 'Pictures', size: 0, isDir: true, mime: '' },
+    { name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
+  ]);
+  assert.deepStrictEqual(fileList, expected.fileList, 'the file list payload changed');
+  assert.strictEqual(
+    protocol.parseFileList(fileList).entries[1].name,
+    'photo.jpg',
+    'the file entries did not survive the parser'
+  );
+}
+
 function checkProofRules() {
   // The same vector the Kotlin side asserts, so a divergence between the two
   // implementations is a test failure rather than a pairing that mysteriously
@@ -233,6 +305,7 @@ function main() {
   for (const frame of frames) checkFrame(frame);
   checkClipboardRules();
   checkBinaryFrames();
+  checkFeaturePayloads();
   checkProofRules();
   checkPairingPayload();
 

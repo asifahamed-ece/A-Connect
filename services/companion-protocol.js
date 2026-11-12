@@ -42,6 +42,18 @@ const TYPES = {
   PING: 'ping',
   PONG: 'pong',
   BYE: 'bye',
+
+  // The four features that ride the same channel as the clipboard.
+  NOTIFICATION: 'notification',
+  NOTIFICATION_REMOVED: 'notification-removed',
+  NOTIFICATION_ACTION: 'notification-action',
+  MEDIA_STATE: 'media-state',
+  MEDIA_COMMAND: 'media-command',
+  FILE_LIST_REQUEST: 'file-list-request',
+  FILE_LIST: 'file-list',
+  FILE_SEND_REQUEST: 'file-send-request',
+  MIRROR_START: 'mirror-start',
+  MIRROR_STOP: 'mirror-stop',
 };
 
 const REASONS = {
@@ -179,6 +191,93 @@ function truncateToBytes(text, maxBytes) {
   return buf.subarray(0, end).toString('utf8');
 }
 
+/**
+ * The feature payloads, identical keys to FeaturePayloads.kt on the phone.
+ * The shared fixture in the Android test resources (feature-payloads.json) is
+ * what proves the two implementations agree.
+ */
+function buildNotification(n) {
+  return {
+    type: TYPES.NOTIFICATION,
+    id: n.id,
+    pkg: n.pkg,
+    app: n.app,
+    title: n.title,
+    text: n.text,
+    ts: n.ts,
+    ongoing: Boolean(n.ongoing),
+    actions: (n.actions || []).map((a) => ({ id: a.id, title: a.title })),
+  };
+}
+
+function parseNotification(payload) {
+  if (!payload || typeof payload.id !== 'string') return null;
+  return {
+    id: payload.id,
+    pkg: payload.pkg || '',
+    app: payload.app || '',
+    title: payload.title || '',
+    text: payload.text || '',
+    ts: payload.ts || 0,
+    ongoing: Boolean(payload.ongoing),
+    actions: Array.isArray(payload.actions)
+      ? payload.actions.map((a) => ({ id: a.id, title: a.title }))
+      : [],
+  };
+}
+
+function buildMediaState(s) {
+  return {
+    type: TYPES.MEDIA_STATE,
+    app: s.app,
+    title: s.title,
+    artist: s.artist,
+    album: s.album,
+    playing: Boolean(s.playing),
+    positionMs: s.positionMs,
+    durationMs: s.durationMs,
+  };
+}
+
+function parseMediaState(payload) {
+  if (!payload || typeof payload.title !== 'string') return null;
+  return {
+    app: payload.app || '',
+    title: payload.title,
+    artist: payload.artist || '',
+    album: payload.album || '',
+    playing: Boolean(payload.playing),
+    positionMs: payload.positionMs || 0,
+    durationMs: payload.durationMs || 0,
+  };
+}
+
+function buildFileList(path, entries) {
+  return {
+    type: TYPES.FILE_LIST,
+    path,
+    entries: (entries || []).map((e) => ({
+      name: e.name,
+      size: e.size,
+      isDir: Boolean(e.isDir),
+      mime: e.mime,
+    })),
+  };
+}
+
+function parseFileList(payload) {
+  if (!payload || !Array.isArray(payload.entries)) return null;
+  return {
+    path: payload.path || '',
+    entries: payload.entries.map((e) => ({
+      name: e.name,
+      size: e.size || 0,
+      isDir: Boolean(e.isDir),
+      mime: e.mime || '',
+    })),
+  };
+}
+
 const PAIRING_TYPE = 'aplus-pairing';
 const PAIRING_VERSION = 1;
 
@@ -258,6 +357,12 @@ module.exports = {
   decodeBinary,
   buildClipboardPayload,
   shouldSendClipboard,
+  buildNotification,
+  parseNotification,
+  buildMediaState,
+  parseMediaState,
+  buildFileList,
+  parseFileList,
   computeProof,
   verifyProof,
   buildPairingPayload,

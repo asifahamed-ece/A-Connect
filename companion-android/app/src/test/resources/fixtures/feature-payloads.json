@@ -1,0 +1,34 @@
+{
+  "notification": {
+    "type": "notification",
+    "id": "com.example:7:null",
+    "pkg": "com.example",
+    "app": "Example",
+    "title": "Ada",
+    "text": "hello",
+    "ts": 1700000000000,
+    "ongoing": false,
+    "actions": [
+      { "id": "reply", "title": "Reply" },
+      { "id": "archive", "title": "Archive" }
+    ]
+  },
+  "mediaState": {
+    "type": "media-state",
+    "app": "Music",
+    "title": "Song",
+    "artist": "Band",
+    "album": "Album",
+    "playing": true,
+    "positionMs": 1000,
+    "durationMs": 180000
+  },
+  "fileList": {
+    "type": "file-list",
+    "path": "root",
+    "entries": [
+      { "name": "Pictures", "size": 0, "isDir": true, "mime": "" },
+      { "name": "photo.jpg", "size": 1024, "isDir": false, "mime": "image/jpeg" }
+    ]
+  }
+}

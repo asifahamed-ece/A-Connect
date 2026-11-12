@@ -17,6 +17,18 @@ object Protocol {
     const val TYPE_PONG = "pong"
     const val TYPE_BYE = "bye"
 
+    // The four features that ride the same channel as the clipboard.
+    const val TYPE_NOTIFICATION = "notification"
+    const val TYPE_NOTIFICATION_REMOVED = "notification-removed"
+    const val TYPE_NOTIFICATION_ACTION = "notification-action"
+    const val TYPE_MEDIA_STATE = "media-state"
+    const val TYPE_MEDIA_COMMAND = "media-command"
+    const val TYPE_FILE_LIST_REQUEST = "file-list-request"
+    const val TYPE_FILE_LIST = "file-list"
+    const val TYPE_FILE_SEND_REQUEST = "file-send-request"
+    const val TYPE_MIRROR_START = "mirror-start"
+    const val TYPE_MIRROR_STOP = "mirror-stop"
+
     /**
      * The clipboard cap is a byte budget, not a character budget: 256 KiB of
      * UTF-8. A character cap would let a 256 KiB payload of control characters
