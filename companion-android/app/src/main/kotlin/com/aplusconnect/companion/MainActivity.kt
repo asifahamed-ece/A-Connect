@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.view.inputmethod.InputMethodManager
 import android.text.TextUtils
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -120,7 +121,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.aplusconnect.companion.clip.ClipboardEventWatcher
 import com.aplusconnect.companion.data.ClipHistoryEntry
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.protocol.PairingPayload
@@ -238,7 +238,7 @@ fun MainScreen(settings: CompanionSettings) {
     var historyItems by remember { mutableStateOf(settings.getHistory()) }
     var showHistoryDialog by remember { mutableStateOf(false) }
 
-    var accessibilityGranted by remember { mutableStateOf(isAccessibilityEnabled(context)) }
+    var accessibilityGranted by remember { mutableStateOf(isDefaultKeyboard(context)) }
     var batteryOptimized by remember { mutableStateOf(isBatteryOptimized(context)) }
     var clipboardSyncEnabled by remember { mutableStateOf(true) }
 
@@ -327,7 +327,7 @@ fun MainScreen(settings: CompanionSettings) {
             lastDirection = CompanionService.Status.lastDirection
             historyItems = settings.getHistory()
 
-            accessibilityGranted = isAccessibilityEnabled(context)
+            accessibilityGranted = isDefaultKeyboard(context)
             batteryOptimized = isBatteryOptimized(context)
             delay(500L)
         }
@@ -423,7 +423,7 @@ fun MainScreen(settings: CompanionSettings) {
                     onClipboardToggle = { clipboardSyncEnabled = it },
                     accessibilityGranted = accessibilityGranted,
                     batteryOptimized = batteryOptimized,
-                    onOpenAccessibility = { openAccessibilitySettings(context) },
+                    onOpenAccessibility = { openKeyboardPicker(context) },
                     onAllowBattery = { requestIgnoreBatteryOptimizations(context) },
                     isDark = isDark,
                     surfaceColor = surfaceColor,
@@ -987,13 +987,17 @@ fun InterconnectTab(
             modifier = Modifier.padding(start = 4.dp, top = 4.dp)
         )
 
-        // Accessibility Tile
+        // The keyboard is what carries the clipboard privilege.
         PermissionTile(
             icon = Icons.Default.Bolt,
-            title = "Copy Event Watcher",
-            subtitle = if (accessibilityGranted) "Accessibility service active" else "Required to detect copies in background",
+            title = "Clipboard Keyboard",
+            subtitle = if (accessibilityGranted) {
+                "Set as your keyboard - the clipboard syncs in the background"
+            } else {
+                "Set as your keyboard so copies sync in the background"
+            },
             isGranted = accessibilityGranted,
-            actionLabel = "ENABLE",
+            actionLabel = if (accessibilityGranted) "ACTIVE" else "SET",
             onAction = onOpenAccessibility,
             surfaceColor = surfaceColor,
             elevatedColor = elevatedColor,
@@ -1851,21 +1855,35 @@ private fun queryFileName(context: Context, uri: Uri): String {
     return name
 }
 
-private fun isAccessibilityEnabled(context: Context): Boolean {
-    val service = "${context.packageName}/${ClipboardEventWatcher::class.java.canonicalName}"
-    val enabledServices = Settings.Secure.getString(
-        context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-    val splitter = TextUtils.SimpleStringSplitter(':')
-    splitter.setString(enabledServices)
-    while (splitter.hasNext()) {
-        val entry = splitter.next()
-        if (entry.equals(service, ignoreCase = true) || entry.contains("ClipboardEventWatcher")) {
-            return true
-        }
+/**
+ * Whether this app is the default keyboard.
+ *
+ * That role is what Android grants privileged clipboard access on, and it is
+ * the only route that needs no accessibility service - an accessibility
+ * service makes the phone block contactless payments.
+ */
+/**
+ * Opens the keyboard picker so the user can choose the companion keyboard.
+ *
+ * This is deliberately not the accessibility settings: an accessibility
+ * service makes Android block contactless payments, so the app does not use
+ * one and does not ask for one.
+ */
+private fun openKeyboardPicker(context: Context) {
+    try {
+        val imm = context.getSystemService(InputMethodManager::class.java)
+        imm?.showInputMethodPicker()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Could not open the keyboard picker", Toast.LENGTH_SHORT).show()
     }
-    return false
+}
+
+private fun isDefaultKeyboard(context: Context): Boolean {
+    val current = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.DEFAULT_INPUT_METHOD
+    ) ?: return false
+    return current.contains(context.packageName)
 }
 
 private fun isBatteryOptimized(context: Context): Boolean {

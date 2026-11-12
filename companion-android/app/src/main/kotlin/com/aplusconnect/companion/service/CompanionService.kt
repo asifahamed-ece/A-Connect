@@ -50,6 +50,14 @@ class CompanionService : Service() {
         @Volatile
         var lastReceivedFile: String? = null
 
+        /** The last text the computer copied, for the keyboard to offer. */
+        @Volatile
+        var lastPcClipboard: String? = null
+
+        /** A short history of what the computer copied. */
+        @Volatile
+        var pcClipboardHistory: List<String> = emptyList()
+
         @Volatile
         var lastSyncedTime: Long = 0L
 
@@ -77,6 +85,15 @@ class CompanionService : Service() {
             NotificationChannel(CHANNEL_ID, "A+ Connect", NotificationManager.IMPORTANCE_LOW)
         )
         startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+
+        // The listener only fires while this app may read the clipboard, so it
+        // is safe to keep it registered.
+        try {
+            val clipboard = getSystemService(ClipboardManager::class.java)
+            clipboard.addPrimaryClipChangedListener(clipboardListener)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not watch the clipboard: ${e.message}")
+        }
 
         connect()
     }
@@ -200,10 +217,41 @@ class CompanionService : Service() {
         thisClient.connect()
     }
 
+    /**
+     * The clipboard change listener.
+     *
+     * The platform only delivers this callback to an app that may actually
+     * read the clipboard - which, for us, means while the app is the default
+     * keyboard. So this is the seamless path: no accessibility service, no
+     * tap, no focus steal.
+     */
+    private val clipboardListener =
+        ClipboardManager.OnPrimaryClipChangedListener { readAndForwardClipboard() }
+
+    /** Reads the clipboard and forwards it, if the app is allowed to read it. */
+    private fun readAndForwardClipboard() {
+        val text = try {
+            val manager = getSystemService(ClipboardManager::class.java)
+            val clip = manager.primaryClip
+            if (clip == null || clip.itemCount == 0) return
+            clip.getItemAt(0).coerceToText(this).toString()
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read the clipboard: ${e.message}")
+            return
+        }
+        if (text.isNotEmpty()) send(text)
+    }
+
     private fun applyIncomingClipboard(text: String) {
         if (text.isEmpty()) return
         val payload = ClipboardPayloads.build(text)
         lastSentHash = payload.hash
+
+        // The keyboard offers what the computer copied.
+        Status.lastPcClipboard = payload.text
+        Status.pcClipboardHistory = (listOf(payload.text) + Status.pcClipboardHistory)
+            .distinct()
+            .take(8)
 
         Status.lastSyncedText = payload.text
         Status.lastSyncedTime = System.currentTimeMillis()
