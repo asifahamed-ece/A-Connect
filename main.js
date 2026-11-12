@@ -8,6 +8,7 @@ const FileTransferService = require('./services/file-transfer');
 const ClipboardSyncService = require('./services/clipboard');
 const NotificationService = require('./services/notifications');
 const CompanionService = require('./services/companion');
+const { MprisService } = require('./services/mpris');
 
 let mainWindow = null;
 let tray = null;
@@ -20,6 +21,11 @@ const fileTransfer = new FileTransferService();
 const clipboardSync = new ClipboardSyncService();
 const notifications = new NotificationService();
 const companion = new CompanionService();
+
+// The phone's media session, published as an MPRIS player so the desktop shell
+// (Caelestia, Waybar, playerctl) can show and control it. The app has no media
+// panel of its own on purpose.
+const mpris = new MprisService();
 
 // Connect companion to clipboard sync
 clipboardSync.setCompanion(companion);
@@ -274,6 +280,8 @@ function setupServiceEvents() {
 
   companion.on('client-disconnected', (data) => {
     console.log(`[companion] disconnected phone: ${data.deviceId}`);
+    // Nothing is playing on a phone that is not there.
+    mpris.clear();
     // The companion is gone. If a phone is still on USB, the ADB poller takes
     // the notifications back.
     adb.getDevices()
@@ -294,6 +302,14 @@ function setupServiceEvents() {
 
   companion.on('notification-dismissed', ({ id }) => {
     notifications.removeById(id);
+  });
+
+  companion.on('media-state', (state) => {
+    mpris.update(state);
+  });
+
+  mpris.on('command', (name, positionMs) => {
+    companion.sendMediaCommand(name, positionMs);
   });
 
   companion.on('file-transfer-start', (data) => {
@@ -505,6 +521,7 @@ app.whenReady().then(() => {
   // Start continuous device discovery and companion server
   adb.startPolling(2500);
   companion.start();
+  mpris.start().catch((e) => console.error('[mpris] start failed:', e.message));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -518,6 +535,7 @@ app.on('before-quit', () => {
   companion.stop();
   clipboardSync.stop();
   notifications.stop();
+  mpris.stop();
 });
 
 app.on('window-all-closed', () => {

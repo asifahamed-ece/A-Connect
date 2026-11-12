@@ -12,6 +12,7 @@ const required = [
   '@yume-chan/adb-scrcpy',
   '@yume-chan/adb-server-node-tcp',
   '@yume-chan/scrcpy',
+  'dbus-next',
 ];
 
 const missing = required.filter(
