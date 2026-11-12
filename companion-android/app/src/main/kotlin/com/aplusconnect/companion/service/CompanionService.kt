@@ -71,6 +71,9 @@ class CompanionService : Service() {
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
     private var reconnectRunnable: Runnable? = null
+
+    /** Guards the pending clipboard and the last sent hash. */
+    private val stateLock = Any()
     private var pendingPayload: ClipboardPayload? = null
 
     override fun onCreate() {
@@ -225,8 +228,21 @@ class CompanionService : Service() {
      * keyboard. So this is the seamless path: no accessibility service, no
      * tap, no focus steal.
      */
+    /**
+     * The clipboard is read and sent on its own thread.
+     *
+     * The callback arrives on the main thread, and a socket write there
+     * blocks the whole app - which Android eventually kills, which drops the
+     * connection. The clipboard read and the write both belong here.
+     */
+    private val clipboardThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-clipboard").apply { isDaemon = true }
+    }
+
     private val clipboardListener =
-        ClipboardManager.OnPrimaryClipChangedListener { readAndForwardClipboard() }
+        ClipboardManager.OnPrimaryClipChangedListener {
+            clipboardThread.execute { readAndForwardClipboard() }
+        }
 
     /** Reads the clipboard and forwards it, if the app is allowed to read it. */
     private fun readAndForwardClipboard() {
@@ -245,7 +261,7 @@ class CompanionService : Service() {
     private fun applyIncomingClipboard(text: String) {
         if (text.isEmpty()) return
         val payload = ClipboardPayloads.build(text)
-        lastSentHash = payload.hash
+        synchronized(stateLock) { lastSentHash = payload.hash }
 
         // The keyboard offers what the computer copied.
         Status.lastPcClipboard = payload.text
@@ -292,12 +308,43 @@ class CompanionService : Service() {
     }
 
     /** Sends the clipboard to the computer, or queues it if not connected yet. */
-    @Synchronized
     private fun send(text: String) {
         val payload = ClipboardPayloads.build(text)
         if (payload.text.isEmpty()) return
+
+        // The same content is only sent once. Without this, the write the
+        // phone makes when the computer sends something comes straight back.
         if (payload.hash == lastSentHash) return
 
+        val c = client
+        if (c == null || !c.isReady) {
+            synchronized(stateLock) { pendingPayload = payload }
+            Log.i(TAG, "connection not ready; queued clipboard (${payload.text.length} chars)")
+            return
+        }
+
+        // The write happens outside the lock: it can block, and holding the
+        // lock would stall the rest of the service.
+        val sent = try {
+            c.sendClipboard(payload.text)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not send the clipboard: ${e.message}")
+            false
+        }
+
+        synchronized(stateLock) {
+            if (sent) {
+                lastSentHash = payload.hash
+                pendingPayload = null
+            } else {
+                pendingPayload = payload
+            }
+        }
+
+        if (sent) recordHistory(payload)
+    }
+
+    private fun recordHistory(payload: ClipboardPayload) {
         Status.lastSyncedText = payload.text
         Status.lastSyncedTime = System.currentTimeMillis()
         Status.lastDirection = "phone_to_pc"
@@ -309,29 +356,31 @@ class CompanionService : Service() {
                 timestamp = System.currentTimeMillis()
             )
         )
-
-        val c = client
-        if (c != null && c.sendClipboard(payload.text)) {
-            lastSentHash = payload.hash
-            pendingPayload = null
-        } else {
-            Log.i(TAG, "connection not ready; queued clipboard (${payload.text.length} chars)")
-            pendingPayload = payload
-        }
     }
 
-    @Synchronized
     private fun flushPending() {
-        val pending = pendingPayload ?: return
+        val pending = synchronized(stateLock) { pendingPayload } ?: return
+        val c = client
+        if (c == null || !c.isReady) return
+
         if (pending.hash == lastSentHash) {
-            pendingPayload = null
+            synchronized(stateLock) { pendingPayload = null }
             return
         }
-        val c = client
-        if (c != null && c.sendClipboard(pending.text)) {
+
+        val sent = try {
+            c.sendClipboard(pending.text)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not flush the queued clipboard: ${e.message}")
+            false
+        }
+
+        if (sent) {
             Log.i(TAG, "flushed queued clipboard (${pending.text.length} chars)")
-            lastSentHash = pending.hash
-            pendingPayload = null
+            synchronized(stateLock) {
+                lastSentHash = pending.hash
+                pendingPayload = null
+            }
         }
     }
 

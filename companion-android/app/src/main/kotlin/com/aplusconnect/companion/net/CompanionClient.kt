@@ -342,7 +342,7 @@ class CompanionClient(
             }
         } catch (e: Exception) {
             if (running) {
-                Log.w(TAG, "connection failed: ${e.message}")
+                Log.w(TAG, "connection failed: ${e.javaClass.simpleName}: ${e.message}")
                 reason = e.message ?: "connection failed"
             } else {
                 reason = "closed"
