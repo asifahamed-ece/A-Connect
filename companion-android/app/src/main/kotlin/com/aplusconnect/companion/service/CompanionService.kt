@@ -16,6 +16,8 @@ import android.os.Looper
 import android.util.Log
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.net.CompanionClient
+import com.aplusconnect.companion.net.DownloadDestination
+import com.aplusconnect.companion.net.IncomingFile
 import com.aplusconnect.companion.protocol.ClipboardPayload
 import com.aplusconnect.companion.protocol.ClipboardPayloads
 import java.util.UUID
@@ -40,6 +42,10 @@ class CompanionService : Service() {
         @Volatile
         var lastSyncedText: String? = null
 
+        /** The last file that arrived from the computer. */
+        @Volatile
+        var lastReceivedFile: String? = null
+
         @Volatile
         var lastSyncedTime: Long = 0L
 
@@ -48,6 +54,8 @@ class CompanionService : Service() {
     }
 
     private lateinit var settings: CompanionSettings
+    private lateinit var incomingFile: IncomingFile
+    private lateinit var destination: DownloadDestination
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
     private var pendingPayload: ClipboardPayload? = null
@@ -55,6 +63,8 @@ class CompanionService : Service() {
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
+        incomingFile = IncomingFile(this)
+        destination = DownloadDestination(this)
         instance = this
 
         val manager = getSystemService(NotificationManager::class.java)
@@ -123,6 +133,23 @@ class CompanionService : Service() {
             pairing = settings.pairing,
             sharedSecret = settings.sharedSecret,
             onSecretCreated = { secret -> settings.sharedSecret = secret },
+            onFileStart = { id, name, size, mime ->
+                incomingFile.start(id, name, size, mime)
+            },
+            onFileChunk = { id, index, bytes ->
+                incomingFile.chunk(id, bytes)
+            },
+            onFileDone = { id ->
+                val file = incomingFile.finish(id)
+                if (file != null) {
+                    val saved = destination.save(file, file.name, settings.downloadFolderUri)
+                    incomingFile.reset()
+                    if (saved != null) {
+                        Status.lastReceivedFile = file.name
+                        Log.i(TAG, "saved ${file.name}")
+                    }
+                }
+            },
             onPaired = { pcId, fingerprint ->
                 if (pcId.isNotEmpty()) settings.remember(pcId, fingerprint)
             },

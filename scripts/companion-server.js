@@ -19,7 +19,8 @@ const protocol = require('../services/companion-protocol');
 const { ensureCertificate } = require('../services/companion-cert');
 
 const PORT = Number(process.argv[2] || 24443);
-const CODE = process.env.PAIRING_CODE || process.argv[3] || '099368';
+const CODE = process.env.PAIRING_CODE || process.argv[3] ||
+  String(Math.floor(100000 + Math.random() * 900000));
 const PC_ID = 'pc-test';
 
 const { certPath, keyPath, fingerprint } = ensureCertificate();

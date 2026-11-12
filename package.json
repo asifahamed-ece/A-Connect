@@ -12,7 +12,8 @@
     "@yume-chan/adb": "3.0.0-beta.5",
     "@yume-chan/adb-scrcpy": "3.0.0-beta.5",
     "@yume-chan/adb-server-node-tcp": "3.0.0-beta.5",
-    "@yume-chan/scrcpy": "3.0.0-beta.5"
+    "@yume-chan/scrcpy": "3.0.0-beta.5",
+    "qrcode": "^1.5.4"
   },
   "keywords": [
     "oppo",

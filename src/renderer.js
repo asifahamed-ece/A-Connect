@@ -783,7 +783,7 @@ function applyCompanionInfo(info) {
   const codeEl = $('companion-code');
   const destEl = $('companion-dest-path');
 
-  if (codeEl) codeEl.textContent = info.code || '099368';
+  if (codeEl) codeEl.textContent = info.code || '—';
   if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
 
   if (info.connected) {
@@ -807,7 +807,7 @@ function applyCompanionInfo(info) {
       detail.textContent = `Ready on ${info.address}:${info.port}. Enter pairing code on phone.`;
     }
     if (badge) {
-      badge.innerHTML = `Code: <strong id="companion-code">${info.code || '099368'}</strong>`;
+      badge.innerHTML = `Code: <strong id="companion-code">${info.code || '—'}</strong>`;
     }
   } else {
     if (pill) {
@@ -1220,6 +1220,44 @@ function initClipboard() {
         const destEl = $('companion-dest-path');
         if (destEl) destEl.textContent = newDir;
         toast(`Destination set to ${newDir}`);
+      }
+    });
+  }
+
+  const showQrButton = $('btn-show-qr');
+  const hideQrButton = $('btn-hide-qr');
+  const qrCard = $('companion-qr-card');
+  const qrImage = $('companion-qr');
+
+  if (showQrButton) {
+    showQrButton.addEventListener('click', async () => {
+      if (!window.api.getCompanionQr) return;
+      const result = await window.api.getCompanionQr();
+      if (!result || !result.success) {
+        toast('Could not create the pairing code', 'err');
+        return;
+      }
+      if (qrImage) qrImage.src = result.dataUrl;
+      if (qrCard) qrCard.style.display = '';
+    });
+  }
+
+  if (hideQrButton) {
+    hideQrButton.addEventListener('click', () => {
+      if (qrCard) qrCard.style.display = 'none';
+    });
+  }
+
+  const sendButton = $('btn-send-to-phone');
+  if (sendButton) {
+    sendButton.addEventListener('click', async () => {
+      if (!window.api.pickAndSendFileToPhone) return;
+      const result = await window.api.pickAndSendFileToPhone();
+      if (result && result.canceled) return;
+      if (result && result.success) {
+        toast(`Sent ${result.name} to the phone`);
+      } else {
+        toast('Could not send the file', 'err');
       }
     });
   }

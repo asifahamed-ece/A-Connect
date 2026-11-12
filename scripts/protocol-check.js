@@ -166,6 +166,28 @@ function checkProofRules() {
   );
 }
 
+function checkPairingPayload() {
+  const info = {
+    pcName: 'Studio PC',
+    host: '192.168.1.39',
+    port: 24443,
+    code: '123456',
+    fingerprint: 'AA:BB:CC',
+    pcId: 'pc-1',
+  };
+
+  const text = JSON.stringify(protocol.buildPairingPayload(info));
+  const parsed = protocol.parsePairingPayload(text);
+
+  assert.deepStrictEqual(parsed, info, 'the pairing payload did not round trip');
+  assert.strictEqual(protocol.parsePairingPayload('hello'), null, 'a foreign payload was accepted');
+  assert.strictEqual(
+    protocol.parsePairingPayload(JSON.stringify({ v: 1, type: 'aplus-pairing', host: '1.2.3.4', port: 24443 })),
+    null,
+    'a payload without a code was accepted'
+  );
+}
+
 function main() {
   const write = process.argv.includes('--write');
 
@@ -179,6 +201,7 @@ function main() {
   for (const frame of frames) checkFrame(frame);
   checkClipboardRules();
   checkProofRules();
+  checkPairingPayload();
 
   if (write) writeNodeFixture();
 

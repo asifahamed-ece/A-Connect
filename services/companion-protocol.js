@@ -144,6 +144,48 @@ function truncateToBytes(text, maxBytes) {
   return buf.subarray(0, end).toString('utf8');
 }
 
+const PAIRING_TYPE = 'aplus-pairing';
+const PAIRING_VERSION = 1;
+
+/**
+ * What the computer shows as a QR code for the phone to scan: the address,
+ * the port, the one time code and the certificate fingerprint, so the user
+ * never types an address and the phone can pin the certificate at once.
+ */
+function buildPairingPayload(info) {
+  return {
+    v: PAIRING_VERSION,
+    type: PAIRING_TYPE,
+    pcName: info.pcName || 'Computer',
+    host: info.host,
+    port: info.port,
+    code: info.code,
+    fingerprint: info.fingerprint || '',
+    pcId: info.pcId || '',
+  };
+}
+
+/** Parses a scanned payload, or null when it is not one of ours. */
+function parsePairingPayload(text) {
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (err) {
+    return null;
+  }
+  if (!json || json.type !== PAIRING_TYPE || json.v !== PAIRING_VERSION) return null;
+  if (!json.host || !json.port || !json.code || String(json.code).length !== 6) return null;
+
+  return {
+    pcName: json.pcName || 'Computer',
+    host: json.host,
+    port: json.port,
+    code: String(json.code),
+    fingerprint: json.fingerprint || '',
+    pcId: json.pcId || '',
+  };
+}
+
 /**
  * The proof a returning phone presents: an HMAC over its id and the nonce of
  * this connection. The computer stores the secret from the first pairing and
@@ -179,6 +221,8 @@ module.exports = {
   shouldSendClipboard,
   computeProof,
   verifyProof,
+  buildPairingPayload,
+  parsePairingPayload,
   normalize,
   truncateToBytes,
 };

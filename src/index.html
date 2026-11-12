@@ -342,8 +342,32 @@
               </div>
               <div class="row-sub" id="companion-detail">Pure TLS client: no open debugging ports, seamless LAN sync.</div>
             </div>
-            <div id="companion-badge" style="font-family: monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.5px;">
-              Code: <strong id="companion-code">099368</strong>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <button class="btn btn-secondary" id="btn-show-qr" style="padding: 6px 12px; font-size: 12px;">Show QR</button>
+              <div id="companion-badge" style="font-family: monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.5px;">
+                Code: <strong id="companion-code">—</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="card row-card" id="companion-qr-card" style="margin-top: 10px; display: none;">
+            <div>
+              <div class="row-title">Pair by scanning</div>
+              <div class="row-sub">Point the phone's camera at this code - no address to type, and the certificate is confirmed at the same time.</div>
+              <img id="companion-qr" alt="Pairing QR code" style="margin-top: 10px; width: 220px; height: 220px; background: #fff; border-radius: 10px; padding: 8px; display: block;" />
+            </div>
+            <div>
+              <button class="btn btn-ghost" id="btn-hide-qr" style="padding: 6px 12px; font-size: 12px;">Hide</button>
+            </div>
+          </div>
+
+          <div class="card row-card" id="companion-send-card" style="margin-top: 10px;">
+            <div>
+              <div class="row-title">Send a file to the phone</div>
+              <div class="row-sub" id="companion-send-detail">Over the encrypted companion connection - no debugging port involved.</div>
+            </div>
+            <div>
+              <button class="btn btn-secondary" id="btn-send-to-phone" style="padding: 6px 12px; font-size: 12px;">Choose file…</button>
             </div>
           </div>
 

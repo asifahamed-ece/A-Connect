@@ -39,6 +39,9 @@ class CompanionClient(
     private val onClosed: (String) -> Unit,
     private val onClipboardReceived: (String) -> Unit = {},
     private val onSecretCreated: (String) -> Unit = {},
+    private val onFileStart: (id: String, name: String, size: Long, mime: String) -> Unit = { _, _, _, _ -> },
+    private val onFileChunk: (id: String, index: Int, bytes: ByteArray) -> Unit = { _, _, _ -> },
+    private val onFileDone: (id: String) -> Unit = { },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -292,6 +295,33 @@ class CompanionClient(
                         close()
                         break
                     }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_START) {
+                    onFileStart(
+                        message.payload.optString("id"),
+                        message.payload.optString("name"),
+                        message.payload.optLong("size"),
+                        message.payload.optString("mime"),
+                    )
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_CHUNK) {
+                    val bytes = java.util.Base64.getDecoder().decode(
+                        message.payload.optString("data")
+                    )
+                    onFileChunk(
+                        message.payload.optString("id"),
+                        message.payload.optInt("chunkIndex"),
+                        bytes,
+                    )
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_DONE) {
+                    onFileDone(message.payload.optString("id"))
                     continue
                 }
 

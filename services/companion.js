@@ -33,6 +33,7 @@ class CompanionService extends EventEmitter {
     super();
     this.port = options.port ?? DEFAULT_PORT;
     this.pcId = options.pcId ?? 'pc-test';
+    this.pcName = options.pcName || require('os').hostname();
     this.server = null;
     this.clients = new Set();
     this.status = 'stopped';
@@ -306,21 +307,41 @@ class CompanionService extends EventEmitter {
         const proof = message.payload.proof;
         const nonce = message.payload.nonce;
 
-        if (!secret || !proof || !protocol.verifyProof(secret, deviceId, nonce, proof)) {
-          console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
-          socket.write(
-            protocol.encode({
-              version: 1,
-              type: protocol.TYPES.HELLO_ERROR,
-              id: 'err',
-              ts: Date.now(),
-              payload: { reason: protocol.REASONS.AUTH_FAILED },
-            })
-          );
-          socket.end();
-          return;
+        const proofIsValid =
+          secret && proof && protocol.verifyProof(secret, deviceId, nonce, proof);
+
+        if (!proofIsValid) {
+          // A phone that lost its secret (or one that was paired before the
+          // secret existed) can pair again with the live code - the same
+          // five minute window the first pairing uses. Without a valid code
+          // there is nothing to fall back on, so the connection is refused.
+          const canRePair = this.isPairingCodeValid(message.payload.code) && message.payload.secret;
+          if (canRePair) {
+            this.pairedDevices[deviceId] = {
+              deviceId,
+              deviceName,
+              pairedAt: Date.now(),
+              secret: String(message.payload.secret),
+            };
+            this.savePairedDevices();
+            console.log(`[companion] re-paired ${deviceName} (${deviceId}) with the live code`);
+          } else {
+            console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
+            socket.write(
+              protocol.encode({
+                version: 1,
+                type: protocol.TYPES.HELLO_ERROR,
+                id: 'err',
+                ts: Date.now(),
+                payload: { reason: protocol.REASONS.AUTH_FAILED },
+              })
+            );
+            socket.end();
+            return;
+          }
+        } else {
+          console.log(`[companion] recognized returning paired device: ${deviceName} (${deviceId})`);
         }
-        console.log(`[companion] recognized returning paired device: ${deviceName} (${deviceId})`);
       }
 
       socket.handshakeDone = true;
@@ -484,6 +505,80 @@ class CompanionService extends EventEmitter {
     });
   }
 
+  /**
+   * Sends a file to the connected phones, in chunks.
+   *
+   * The chunks are base64 in JSON frames, the same shape the phone uses when
+   * it sends a file, so both directions share one code path on the wire.
+   */
+  sendFile(filePath, mime = 'application/octet-stream') {
+    if (typeof filePath !== 'string' || !filePath) return false;
+
+    const targets = Array.from(this.clients).filter((c) => c.handshakeDone && !c.destroyed);
+    if (targets.length === 0) return false;
+
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (e) {
+      console.error(`[companion] cannot send ${filePath}: ${e.message}`);
+      return false;
+    }
+    if (!stat.isFile()) return false;
+
+    const name = path.basename(filePath);
+    const transferId = crypto.randomUUID();
+    const chunkSize = 128 * 1024;
+
+    const start = protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.FILE_START,
+      id: transferId,
+      ts: Date.now(),
+      payload: { id: transferId, name, size: stat.size, mime },
+    });
+
+    try {
+      const data = fs.readFileSync(filePath);
+      for (const socket of targets) {
+        socket.write(start);
+        let index = 0;
+        for (let offset = 0; offset < data.length; offset += chunkSize) {
+          const slice = data.subarray(offset, Math.min(offset + chunkSize, data.length));
+          socket.write(
+            protocol.encode({
+              version: protocol.PROTOCOL_VERSION,
+              type: protocol.TYPES.FILE_CHUNK,
+              id: transferId,
+              ts: Date.now(),
+              payload: {
+                id: transferId,
+                chunkIndex: index,
+                data: slice.toString('base64'),
+              },
+            })
+          );
+          index += 1;
+        }
+        socket.write(
+          protocol.encode({
+            version: protocol.PROTOCOL_VERSION,
+            type: protocol.TYPES.FILE_DONE,
+            id: transferId,
+            ts: Date.now(),
+            payload: { id: transferId },
+          })
+        );
+      }
+      console.log(`[companion] sent ${name} (${stat.size} bytes) to ${targets.length} device(s)`);
+      this.emit('file-sent', { name, size: stat.size, count: targets.length });
+      return true;
+    } catch (e) {
+      console.error(`[companion] could not send ${name}: ${e.message}`);
+      return false;
+    }
+  }
+
   sendClipboard(text) {
     if (typeof text !== 'string' || !text) return false;
     const payload = protocol.buildClipboardPayload(text);
@@ -548,6 +643,34 @@ class CompanionService extends EventEmitter {
       }
     }
     return '127.0.0.1';
+  }
+
+  /** Everything the phone needs to pair, in one object. */
+  pairingInfo() {
+    return protocol.buildPairingPayload({
+      pcName: this.pcName || 'This PC',
+      host: this.localAddress(),
+      port: this.port,
+      code: this.pairingCode,
+      fingerprint: this.fingerprint || '',
+      pcId: this.pcId,
+    });
+  }
+
+  /**
+   * The pairing QR code, as a data URL the desktop can show.
+   *
+   * Scanning it is the seamless path: the user never types an address, and
+   * the phone gets the certificate fingerprint to pin straight away.
+   */
+  async pairingQrDataUrl() {
+    const qrcode = require('qrcode');
+    return qrcode.toDataURL(JSON.stringify(this.pairingInfo()), {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 320,
+      color: { dark: '#0f172a', light: '#ffffff' },
+    });
   }
 
   getInfo() {

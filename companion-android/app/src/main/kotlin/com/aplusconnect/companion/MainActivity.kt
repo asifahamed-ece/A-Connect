@@ -14,6 +14,7 @@ import android.text.TextUtils
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.background
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -70,6 +71,8 @@ import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -120,6 +123,8 @@ import androidx.compose.ui.unit.sp
 import com.aplusconnect.companion.clip.ClipboardEventWatcher
 import com.aplusconnect.companion.data.ClipHistoryEntry
 import com.aplusconnect.companion.data.CompanionSettings
+import com.aplusconnect.companion.protocol.PairingPayload
+import com.aplusconnect.companion.qr.QrScannerView
 import com.aplusconnect.companion.service.CompanionService
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -243,9 +248,44 @@ fun MainScreen(settings: CompanionSettings) {
     var uploadProgress by remember { mutableFloatStateOf(0f) }
     var uploadStatusMessage by remember { mutableStateOf<String?>(null) }
 
+    // Pairing by QR code
+    var showScanner by remember { mutableStateOf(false) }
+
     // Quick text send dialog
     var showSendTextDialog by remember { mutableStateOf(false) }
     var customTextToSend by remember { mutableStateOf("") }
+
+    // Where files arriving from the computer are stored. The system folder
+    // picker hands back a document tree the app keeps a permission for.
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                // Some providers do not offer a persistable permission; the
+                // folder still works for this session.
+            }
+            settings.downloadFolderUri = uri.toString()
+            Toast.makeText(context, "Received files will save to the chosen folder", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // The camera is only used while the pairing screen is open.
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            showScanner = true
+        } else {
+            Toast.makeText(context, "The camera is needed to scan the pairing code", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -452,12 +492,61 @@ fun MainScreen(settings: CompanionSettings) {
                         historyItems = emptyList()
                         Toast.makeText(context, "Clipboard history cleared", Toast.LENGTH_SHORT).show()
                     },
+                    downloadFolder = settings.downloadFolderUri,
+                    onPickDownloadFolder = { folderPicker.launch(null) },
+                    onScanQr = {
+                        cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                    },
                     surfaceColor = surfaceColor,
                     elevatedColor = elevatedColor,
                     borderColor = borderColor,
                     textPrimary = textPrimary,
                     textSecondary = textSecondary,
                     textMuted = textMuted
+                )
+            }
+        }
+    }
+
+    // Pairing by QR code: the scanner fills the address, the port and the
+    // one time code, and pins the computer's certificate straight away.
+    if (showScanner) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            QrScannerView(
+                onScanned = { text ->
+                    showScanner = false
+                    val info = PairingPayload.fromJson(text)
+                    if (info == null) {
+                        Toast.makeText(context, "That is not an A+ Connect pairing code", Toast.LENGTH_SHORT).show()
+                    } else {
+                        settings.host = info.host
+                        settings.port = info.port
+                        settings.pairingCode = info.code
+                        if (info.fingerprint.isNotEmpty() && info.pcId.isNotEmpty()) {
+                            settings.remember(info.pcId, info.fingerprint)
+                        }
+                        Toast.makeText(context, "Ready to pair with ${info.pcName}", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            IconButton(
+                onClick = { showScanner = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(20.dp)
+                    .size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close the scanner",
+                    tint = Color.White
                 )
             }
         }
@@ -1150,6 +1239,9 @@ fun SettingsTab(
     onForgetPairing: () -> Unit,
     historyCount: Int,
     onClearHistory: () -> Unit,
+    downloadFolder: String,
+    onPickDownloadFolder: () -> Unit,
+    onScanQr: () -> Unit,
     surfaceColor: Color,
     elevatedColor: Color,
     borderColor: Color,
@@ -1244,6 +1336,17 @@ fun SettingsTab(
                 }
 
                 Button(
+                    onClick = onScanQr,
+                    colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Text("Scan pairing QR", fontWeight = FontWeight.Bold, color = textPrimary)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
                     onClick = { onSaveAndConnect(host, port, code) },
                     colors = ButtonDefaults.buttonColors(containerColor = if (isConnected) ColorOSGreen else ColorOSGreenDark),
                     shape = RoundedCornerShape(12.dp),
@@ -1282,6 +1385,39 @@ fun SettingsTab(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("PC Destination Folder", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
                 Text("Sent files save automatically to PC ~/Downloads", fontSize = 12.sp, color = textSecondary)
+            }
+        }
+
+        // Where files that arrive from the computer are stored.
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, RoundedCornerShape(18.dp))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Save received files to", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                    Text(
+                        if (downloadFolder.isEmpty()) "The app's own downloads folder"
+                        else downloadFolder.substringAfterLast('/').ifEmpty { "Chosen folder" },
+                        fontSize = 12.sp,
+                        color = textSecondary,
+                        maxLines = 1
+                    )
+                }
+
+                Button(
+                    onClick = onPickDownloadFolder,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Change…", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                }
             }
         }
 

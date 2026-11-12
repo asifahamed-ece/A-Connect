@@ -385,6 +385,29 @@ function setupIpcHandlers() {
     companion.start(port);
     return companion.getInfo();
   });
+  ipcMain.handle('companion:qr', async () => {
+    try {
+      const dataUrl = await companion.pairingQrDataUrl();
+      return { success: true, dataUrl, info: companion.pairingInfo() };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  });
+  ipcMain.handle('companion:sendFile', async (_, filePath) => {
+    const sent = companion.sendFile(filePath);
+    return { success: sent, filePath };
+  });
+  ipcMain.handle('companion:pickAndSendFile', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Send a file to the phone',
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
+
+    const filePath = result.filePaths[0];
+    const sent = companion.sendFile(filePath);
+    return { success: sent, filePath, name: require('path').basename(filePath) };
+  });
   ipcMain.handle('companion:stop', async () => {
     companion.stop();
     return companion.getInfo();
