@@ -250,6 +250,9 @@ class CompanionService : Service() {
             onClipboardReceived = { text ->
                 applyIncomingClipboard(text)
             },
+            onNotificationAction = { id, action ->
+                PhoneNotificationListener.handleRemote(id, action)
+            },
         )
         client = thisClient
         thisClient.connect()

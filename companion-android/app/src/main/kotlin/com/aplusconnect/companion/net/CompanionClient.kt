@@ -44,6 +44,7 @@ class CompanionClient(
     private val onFileStart: (id: String, name: String, size: Long, mime: String) -> Unit = { _, _, _, _ -> },
     private val onFileChunk: (id: String, index: Int, bytes: ByteArray) -> Unit = { _, _, _ -> },
     private val onFileDone: (id: String) -> Unit = { },
+    private val onNotificationAction: (id: String, action: String) -> Unit = { _, _ -> },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -366,6 +367,14 @@ class CompanionClient(
                         Log.i(TAG, "received ${text.length} characters from computer")
                         onClipboardReceived(text)
                     }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_NOTIFICATION_ACTION) {
+                    onNotificationAction(
+                        message.payload.optString("id"),
+                        message.payload.optString("action"),
+                    )
                     continue
                 }
             }

@@ -21,6 +21,53 @@ function message(type, payload) {
   return { type, id: 'msg-1', ts: Date.now(), payload };
 }
 
+/**
+ * Dismissing from the desktop: the action goes to the phone, and the phone's
+ * own `notification-removed` is what updates the desktop list - one path, the
+ * same one a swipe on the phone uses.
+ */
+function checkDismiss() {
+  const service = new EventEmitter();
+  const written = [];
+  service.clients = [
+    {
+      handshakeDone: true,
+      destroyed: false,
+      clientIp: '127.0.0.1',
+      write: (buf) => written.push(Buffer.from(buf)),
+    },
+  ];
+
+  const dismissed = [];
+  service.on('notification-dismissed', (d) => dismissed.push(d));
+
+  const sent = CompanionService.prototype.dismissNotification.call(service, 'com.example:7:null');
+  assert.strictEqual(sent, true, 'the dismiss was not sent to the phone');
+  assert.strictEqual(written.length, 1, 'no notification-action frame was written');
+
+  const action = protocol.decode(written[0]);
+  assert.strictEqual(
+    action.type,
+    protocol.TYPES.NOTIFICATION_ACTION,
+    'the frame is not a notification-action'
+  );
+  assert.strictEqual(action.payload.id, 'com.example:7:null', 'the action id did not match');
+  assert.strictEqual(action.payload.action, 'dismiss', 'the action was not a dismiss');
+
+  // The phone dismisses it and says so.
+  if (CompanionService.routeNotification) {
+    CompanionService.routeNotification(
+      service,
+      message(protocol.TYPES.NOTIFICATION_REMOVED, {
+        type: protocol.TYPES.NOTIFICATION_REMOVED,
+        id: 'com.example:7:null',
+      })
+    );
+  }
+  assert.strictEqual(dismissed.length, 1, 'the desktop did not register the phone dismissing it');
+  assert.strictEqual(dismissed[0].id, 'com.example:7:null', 'the dismissed id did not match');
+}
+
 function run() {
   const service = new EventEmitter();
   const received = [];
@@ -58,6 +105,8 @@ function run() {
   if (CompanionService.routeNotification) CompanionService.routeNotification(service, removed);
   assert.strictEqual(dismissed.length, 1, 'no notification-dismissed event');
   assert.strictEqual(dismissed[0].id, 'com.example:7:null', 'the dismissed id did not match');
+
+  checkDismiss();
 
   console.log('companion notifications: ok');
 }

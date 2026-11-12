@@ -638,6 +638,43 @@ class CompanionService extends EventEmitter {
     return false;
   }
 
+  /**
+   * Asks the phone to dismiss one of its notifications, or to fire one of the
+   * notification's own buttons (`action` is "dismiss" or a button id).
+   *
+   * The phone answers by sending `notification-removed` - the same message a
+   * swipe on the phone produces - so the desktop list updates by one path, not
+   * two, and never loops back.
+   */
+  dismissNotification(id, action = 'dismiss') {
+    if (typeof id !== 'string' || !id) return false;
+
+    const frame = protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.NOTIFICATION_ACTION,
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      payload: {
+        type: protocol.TYPES.NOTIFICATION_ACTION,
+        id,
+        action,
+      },
+    });
+
+    let sentCount = 0;
+    for (const socket of this.clients) {
+      if (socket.handshakeDone && !socket.destroyed) {
+        try {
+          socket.write(frame);
+          sentCount += 1;
+        } catch (e) {
+          console.error(`[companion] could not send a notification action: ${e.message}`);
+        }
+      }
+    }
+    return sentCount > 0;
+  }
+
   updateStatus() {
     const connected = this.connectedClients;
     if (connected.length > 0) {

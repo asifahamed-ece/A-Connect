@@ -74,11 +74,37 @@ class PhoneNotificationListener : NotificationListenerService() {
         val sbn = live[id] ?: return false
         return try {
             cancelNotification(sbn.key)
+            Log.i(TAG, "dismissed $id at the computer's request")
             true
         } catch (e: Exception) {
             Log.w(TAG, "could not dismiss $id: ${e.message}")
             false
         }
+    }
+
+    /** Fires one of the notification's own buttons, by its index. */
+    private fun fireAction(id: String, action: String): Boolean {
+        val sbn = live[id] ?: return false
+        val index = action.toIntOrNull() ?: return false
+        val actions = sbn.notification?.actions ?: return false
+        if (index !in actions.indices) return false
+        return try {
+            actions[index].actionIntent?.send()
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "could not fire action $action on $id: ${e.message}")
+            false
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
+    override fun onDestroy() {
+        instance = null
+        super.onDestroy()
     }
 
     private fun appLabel(pkg: String): String = try {
@@ -90,5 +116,28 @@ class PhoneNotificationListener : NotificationListenerService() {
 
     companion object {
         private const val TAG = "AplusConnect"
+
+        /** A command to remove the notification, rather than press a button. */
+        const val ACTION_DISMISS = "dismiss"
+
+        /**
+         * The running listener, when the user has granted notification access.
+         *
+         * A NotificationListenerService is bound by the system, so this is how
+         * the connection reaches the one instance the system created; a null
+         * instance simply means notification access is not granted.
+         */
+        @Volatile
+        private var instance: PhoneNotificationListener? = null
+
+        /**
+         * Handles a command from the computer. A false answer is ordinary: the
+         * listener may not be running, or the notification may already be gone.
+         */
+        fun handleRemote(id: String, action: String): Boolean {
+            val listener = instance ?: return false
+            return if (action == ACTION_DISMISS) listener.dismiss(id)
+            else listener.fireAction(id, action)
+        }
     }
 }

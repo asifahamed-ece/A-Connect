@@ -412,9 +412,13 @@ function setupIpcHandlers() {
     notifications.clearHistory();
     return { success: true };
   });
-  ipcMain.handle('notifications:dismiss', async (_, id) => ({
-    success: notifications.dismiss(id)
-  }));
+  ipcMain.handle('notifications:dismiss', async (_, id) => {
+    // A notification that came from the phone has to be dismissed on the phone
+    // too, or it stays in the shade and comes straight back.
+    const entry = notifications.history.find((n) => n.id === id);
+    if (entry && entry.fromCompanion) companion.dismissNotification(id);
+    return { success: notifications.dismiss(id) };
+  });
 
   // Companion IPC Handlers
   ipcMain.handle('companion:getInfo', async () => companion.getInfo());
