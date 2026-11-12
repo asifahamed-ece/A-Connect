@@ -276,6 +276,7 @@ class CompanionClient(
                 lastHeardAt = System.currentTimeMillis()
 
                 if (message.type == Protocol.TYPE_PING) {
+                    Log.i(TAG, "ping received")
                     val pong = ProtocolMessage(
                         type = Protocol.TYPE_PONG,
                         id = message.id,

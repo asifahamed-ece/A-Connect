@@ -58,12 +58,13 @@ class CompanionService : Service() {
     private lateinit var destination: DownloadDestination
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
+    private var reconnectRunnable: Runnable? = null
     private var pendingPayload: ClipboardPayload? = null
 
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
-        incomingFile = IncomingFile(this)
+        incomingFile = IncomingFile(java.io.File(cacheDir, "incoming"))
         destination = DownloadDestination(this)
         instance = this
 
@@ -98,6 +99,10 @@ class CompanionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun connect() {
+        // One client at a time: stacking them leaves a closed socket behind
+        // that looks like a dropped connection.
+        if (client != null) return
+
         val host = settings.host
         if (host.isEmpty()) {
             Log.i(TAG, "no computer configured yet")
@@ -140,13 +145,19 @@ class CompanionService : Service() {
                 incomingFile.chunk(id, bytes)
             },
             onFileDone = { id ->
-                val file = incomingFile.finish(id)
-                if (file != null) {
-                    val saved = destination.save(file, file.name, settings.downloadFolderUri)
-                    incomingFile.reset()
+                val received = incomingFile.finish(id)
+                if (received != null) {
+                    val saved = destination.save(
+                        received.file,
+                        received.name,
+                        settings.downloadFolderUri,
+                    )
+                    received.file.delete()
                     if (saved != null) {
-                        Status.lastReceivedFile = file.name
-                        Log.i(TAG, "saved ${file.name}")
+                        Status.lastReceivedFile = received.name
+                        Log.i(TAG, "saved ${received.name}")
+                    } else {
+                        Log.w(TAG, "could not save ${received.name}")
                     }
                 }
             },
@@ -215,10 +226,17 @@ class CompanionService : Service() {
     }
 
     private fun scheduleReconnect() {
+        if (reconnectRunnable != null) return
         val now = System.currentTimeMillis()
         if (now < reconnectAt) return
         reconnectAt = now + RECONNECT_DELAY_MS
-        android.os.Handler(mainLooper).postDelayed({ connect() }, RECONNECT_DELAY_MS)
+
+        val runnable = Runnable {
+            reconnectRunnable = null
+            connect()
+        }
+        reconnectRunnable = runnable
+        android.os.Handler(mainLooper).postDelayed(runnable, RECONNECT_DELAY_MS)
     }
 
     /** Sends the clipboard to the computer, or queues it if not connected yet. */

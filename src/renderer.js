@@ -890,6 +890,15 @@ function initNavigation() {
     }
   }
 
+  // Only one panel may show at a time - set that up before the first click.
+  {
+    const active = document.querySelector('.tab.active');
+    const activeTab = active ? active.dataset.tab : 'qr';
+    $('tab-qr').hidden = activeTab !== 'qr';
+    $('tab-wireless').hidden = activeTab !== 'wireless';
+    $('tab-usb').hidden = activeTab !== 'usb';
+  }
+
   for (const id of ['btn-add-device', 'btn-add-device-2', 'btn-add-device-3']) {
     const el = $(id);
     if (el) {

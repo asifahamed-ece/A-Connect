@@ -28,6 +28,11 @@ const PAIRED_DEVICES_FILE = path.join(
   'paired-devices.json'
 );
 
+/** A log line with the time, so a drop can be placed in a timeline. */
+function log(message) {
+  console.log(`[companion ${new Date().toISOString().slice(11, 19)}] ${message}`);
+}
+
 class CompanionService extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -149,7 +154,7 @@ class CompanionService extends EventEmitter {
 
     this.server.listen(this.port, '0.0.0.0', () => {
       this.status = 'listening';
-      console.log(`[companion] TLS server listening on ${this.localAddress()}:${this.port}`);
+      log(`TLS server listening on ${this.localAddress()}:${this.port}`);
       this.emit('listening', {
         port: this.port,
         address: this.localAddress(),
@@ -203,7 +208,7 @@ class CompanionService extends EventEmitter {
       }
       this.clients.delete(socket);
       if (socket.handshakeDone) {
-        console.log(`[companion] phone disconnected: ${socket.deviceName || socket.clientIp}`);
+        log(`phone disconnected: ${socket.deviceName || socket.clientIp}`);
         this.emit('client-disconnected', { deviceId: socket.deviceId, ip: socket.clientIp });
       }
       this.updateStatus();
@@ -217,7 +222,7 @@ class CompanionService extends EventEmitter {
       if (!socket.handshakeDone || socket.destroyed) continue;
 
       if (now - (socket.lastSeen || 0) > PEER_TIMEOUT_MS) {
-        console.log(`[companion] ${socket.deviceName || socket.clientIp} stopped answering, closing`);
+        log(`${socket.deviceName || socket.clientIp} stopped answering, closing`);
         socket.destroy();
         continue;
       }
@@ -273,7 +278,7 @@ class CompanionService extends EventEmitter {
         const isCodeValid = this.isPairingCodeValid(message.payload.code);
         const secret = message.payload.secret;
         if (!isCodeValid || !secret) {
-          console.log(`[companion] refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
+          log(`refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
           socket.write(
             protocol.encode({
               version: 1,
@@ -296,7 +301,7 @@ class CompanionService extends EventEmitter {
           secret: String(secret),
         };
         this.savePairedDevices();
-        console.log(`[companion] newly paired with ${deviceName} (${deviceId})`);
+        log(`newly paired with ${deviceName} (${deviceId})`);
       } else {
         // A known device has to prove it still holds the secret from the
         // pairing. Knowing the device id is not enough: ids leak through logs
@@ -324,7 +329,7 @@ class CompanionService extends EventEmitter {
               secret: String(message.payload.secret),
             };
             this.savePairedDevices();
-            console.log(`[companion] re-paired ${deviceName} (${deviceId}) with the live code`);
+            log(`re-paired ${deviceName} (${deviceId}) with the live code`);
           } else {
             console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
             socket.write(
@@ -340,7 +345,7 @@ class CompanionService extends EventEmitter {
             return;
           }
         } else {
-          console.log(`[companion] recognized returning paired device: ${deviceName} (${deviceId})`);
+          log(`recognized returning paired device: ${deviceName} (${deviceId})`);
         }
       }
 
