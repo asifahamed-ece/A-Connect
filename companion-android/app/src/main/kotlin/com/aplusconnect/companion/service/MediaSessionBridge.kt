@@ -50,6 +50,24 @@ class MediaSessionBridge(
             adopt(controllers?.firstOrNull { isInteresting(it) })
         }
 
+    /**
+     * Publish as soon as the session itself changes.
+     *
+     * OnActiveSessionsChanged only fires when the *set* of sessions changes, so
+     * a pause or a skip within the same session would otherwise be invisible
+     * until the next tick - and the tick only runs while playing. A shell that
+     * paused the phone would keep saying "Playing".
+     */
+    private val controllerCallback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            publish()
+        }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            publish()
+        }
+    }
+
     fun start() {
         if (running) return
         val sessions = context.getSystemService(MediaSessionManager::class.java) ?: return
@@ -76,6 +94,11 @@ class MediaSessionBridge(
         ticker?.interrupt()
         ticker = null
         try {
+            controller?.unregisterCallback(controllerCallback)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not stop watching the session: ${e.message}")
+        }
+        try {
             manager?.removeOnActiveSessionsChangedListener(sessionsChanged)
         } catch (e: Exception) {
             Log.w(TAG, "could not stop watching the media sessions: ${e.message}")
@@ -91,7 +114,19 @@ class MediaSessionBridge(
     }
 
     private fun adopt(next: MediaController?) {
-        controller = next
+        if (next !== controller) {
+            try {
+                controller?.unregisterCallback(controllerCallback)
+            } catch (e: Exception) {
+                Log.w(TAG, "could not stop watching the old session: ${e.message}")
+            }
+            controller = next
+            try {
+                next?.registerCallback(controllerCallback)
+            } catch (e: Exception) {
+                Log.w(TAG, "could not watch the new session: ${e.message}")
+            }
+        }
         publish()
     }
 
