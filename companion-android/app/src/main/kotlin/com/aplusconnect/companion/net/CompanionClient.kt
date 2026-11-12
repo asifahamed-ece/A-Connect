@@ -8,6 +8,7 @@ import com.aplusconnect.companion.protocol.HandshakeResult
 import com.aplusconnect.companion.protocol.Pairing
 import com.aplusconnect.companion.protocol.Protocol
 import com.aplusconnect.companion.protocol.ProtocolMessage
+import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.InputStream
@@ -125,6 +126,28 @@ class CompanionClient(
         synchronized(writeLock) {
             stream.write(frame)
             stream.flush()
+        }
+    }
+
+    /**
+     * Sends one message of any type on the session. Returns true if it was
+     * written. The notification and media messages go through here.
+     */
+    fun sendMessage(type: String, payload: JSONObject): Boolean {
+        if (!ready) return false
+        val message = ProtocolMessage(
+            type = type,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload,
+        )
+        return try {
+            writeFrame(FrameCodec.encode(message))
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "sending $type failed: ${e.javaClass.simpleName}: ${e.message}")
+            close()
+            false
         }
     }
 

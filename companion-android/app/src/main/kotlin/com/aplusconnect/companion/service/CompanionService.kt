@@ -26,6 +26,9 @@ import com.aplusconnect.companion.net.DownloadDestination
 import com.aplusconnect.companion.net.IncomingFile
 import com.aplusconnect.companion.protocol.ClipboardPayload
 import com.aplusconnect.companion.protocol.ClipboardPayloads
+import com.aplusconnect.companion.protocol.FeaturePayloads
+import com.aplusconnect.companion.protocol.Protocol
+import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -55,6 +58,10 @@ class CompanionService : Service() {
         /** The last text the computer copied, for the keyboard to offer. */
         @Volatile
         var lastPcClipboard: String? = null
+
+        /** The newest notification the phone forwarded, for the app UI. */
+        @Volatile
+        var lastNotification: String? = null
 
         /** A short history of what the computer copied. */
         @Volatile
@@ -89,12 +96,30 @@ class CompanionService : Service() {
     }
     private var pendingPayload: ClipboardPayload? = null
 
+    /**
+     * Notifications waiting for the connection, oldest first.
+     *
+     * A notification that arrives while the computer is offline must still
+     * reach it, once: the queue keeps the order, and a notification that is
+     * updated replaces its own queued copy rather than piling up.
+     */
+    private val notificationQueue = ArrayDeque<Pair<String, JSONObject>>()
+
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
         incomingFile = IncomingFile(java.io.File(cacheDir, "incoming"))
         destination = DownloadDestination(this)
         instance = this
+
+        // Anything that arrived while the service was not running goes to the
+        // front of the queue, so it still reaches the computer.
+        val early = synchronized(earlyNotifications) {
+            val copy = earlyNotifications.toList()
+            earlyNotifications.clear()
+            copy
+        }
+        synchronized(stateLock) { notificationQueue.addAll(early) }
 
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
@@ -204,7 +229,7 @@ class CompanionService : Service() {
                     Status.isConnected = true
                     Status.state = "Connected to ${settings.host}"
                     updateNotification("Connected to ${settings.host}")
-                    sendThread.execute { flushPending() }
+                    sendThread.execute { flushPending(); flushNotifications() }
                 }
             },
             onClosed = { reason ->
@@ -364,8 +389,63 @@ class CompanionService : Service() {
         }
     }
 
-    private fun buildNotification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)
-        .setContentTitle("A+ Connect")
+    /** Forwards one notification, or queues it until the connection is up. */
+    private fun sendNotification(id: String, payload: JSONObject) {
+        Status.lastNotification = payload.optString("title")
+        val c = client
+        if (c == null || !c.isReady) {
+            queueNotification(id, payload)
+            Log.i(TAG, "connection not ready; queued notification $id")
+            return
+        }
+        if (!c.sendMessage(Protocol.TYPE_NOTIFICATION, payload)) {
+            queueNotification(id, payload)
+        }
+    }
+
+    /** Says a notification has gone away, or queues that too. */
+    private fun sendNotificationRemoved(id: String) {
+        val payload = FeaturePayloads.notificationRemoved(id)
+        val c = client
+        if (c == null || !c.isReady) {
+            queueNotification(id, payload)
+            return
+        }
+        if (!c.sendMessage(Protocol.TYPE_NOTIFICATION_REMOVED, payload)) {
+            queueNotification(id, payload)
+        }
+    }
+
+    /**
+     * Adds a notification to the queue, replacing any copy of it that is
+     * already waiting: a notification that is updated twice while the computer
+     * is offline must arrive once, with its latest text.
+     */
+    private fun queueNotification(id: String, payload: JSONObject) {
+        synchronized(stateLock) {
+            notificationQueue.removeAll { it.first == id }
+            notificationQueue.addLast(id to payload)
+        }
+    }
+
+    /** Sends the queued notifications, oldest first, stopping on the first failure. */
+    private fun flushNotifications() {
+        val c = client
+        if (c == null || !c.isReady) return
+        while (true) {
+            val next = synchronized(stateLock) {
+                if (notificationQueue.isEmpty()) null else notificationQueue.removeFirst()
+            } ?: return
+
+            val type = next.second.optString("type", Protocol.TYPE_NOTIFICATION)
+            if (!c.sendMessage(type, next.second)) {
+                synchronized(stateLock) { notificationQueue.addFirst(next) }
+                return
+            }
+        }
+    }
+
+    private fun buildNotification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)        .setContentTitle("A+ Connect")
         .setContentText(text)
         .setSmallIcon(android.R.drawable.ic_menu_edit)
         .setOngoing(true)
@@ -436,6 +516,36 @@ class CompanionService : Service() {
 
         private var instance: CompanionService? = null
         private var lastSentHash: String? = null
+
+        /** Notifications that arrived before the service was up. */
+        private val earlyNotifications = ArrayDeque<Pair<String, JSONObject>>()
+
+        /**
+         * Hands one notification to the service, starting it if it is not
+         * running yet so that the queue has somewhere to live and flush from.
+         */
+        fun deliverNotification(context: Context, id: String, payload: JSONObject) {
+            val running = instance
+            if (running != null) {
+                running.sendNotification(id, payload)
+                return
+            }
+            synchronized(earlyNotifications) {
+                earlyNotifications.removeAll { it.first == id }
+                earlyNotifications.addLast(id to payload)
+            }
+            start(context)
+        }
+
+        /** Hands a notification removal to the service. */
+        fun deliverNotificationRemoved(context: Context, id: String) {
+            val running = instance
+            if (running != null) {
+                running.sendNotificationRemoved(id)
+                return
+            }
+            start(context)
+        }
 
         /** Starts the service, so it connects to the computer. */
         fun start(context: Context) {

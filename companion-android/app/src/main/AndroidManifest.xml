@@ -67,5 +67,18 @@
             android:name=".service.CompanionService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Optional, and never an accessibility service: it only runs once the
+             user grants notification access in Settings, and the rest of the
+             app works without it. -->
+        <service
+            android:name=".service.PhoneNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

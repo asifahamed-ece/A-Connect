@@ -106,8 +106,18 @@ object FeaturePayloads {
             }
         })
 
-    /** Parses a notification payload, or null when it is not one. */
-    fun parseNotification(json: JSONObject): Notification? {
+    /**
+     * A stable id for one notification.
+     *
+     * Android identifies a notification by its package, its id and its tag;
+     * the tag is often null, so it is spelled out rather than left to a
+     * surprise. The same notification always produces the same string, which
+     * is what lets a dismiss find it again.
+     */
+    fun notificationId(pkg: String, id: Int, tag: String?): String =
+        "$pkg:$id:${tag ?: "null"}"
+
+    /** Parses a notification payload, or null when it is not one. */    fun parseNotification(json: JSONObject): Notification? {
         if (!json.has("id")) return null
         val actions = json.optJSONArray("actions") ?: JSONArray()
         return Notification(

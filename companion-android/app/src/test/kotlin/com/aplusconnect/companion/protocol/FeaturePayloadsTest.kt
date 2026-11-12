@@ -2,6 +2,7 @@ package com.aplusconnect.companion.protocol
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -54,6 +55,16 @@ class FeaturePayloadsTest {
     @Test
     fun `a notification without an id does not parse`() {
         assertNull(FeaturePayloads.parseNotification(JSONObject().put("pkg", "com.example")))
+    }
+
+    @Test
+    fun `a notification id is stable for the same notification`() {
+        val first = FeaturePayloads.notificationId("com.example", 7, null)
+        val again = FeaturePayloads.notificationId("com.example", 7, null)
+        val tagged = FeaturePayloads.notificationId("com.example", 7, "x")
+
+        assertEquals(first, again)
+        assertNotEquals(first, tagged)
     }
 
     @Test
