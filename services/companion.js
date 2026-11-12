@@ -297,7 +297,7 @@ class CompanionService extends EventEmitter {
           log(`refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
           socket.write(
             protocol.encode({
-              version: 1,
+              version: protocol.PROTOCOL_VERSION,
               type: protocol.TYPES.HELLO_ERROR,
               id: 'err',
               ts: Date.now(),
@@ -350,7 +350,7 @@ class CompanionService extends EventEmitter {
             console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
             socket.write(
               protocol.encode({
-                version: 1,
+                version: protocol.PROTOCOL_VERSION,
                 type: protocol.TYPES.HELLO_ERROR,
                 id: 'err',
                 ts: Date.now(),
@@ -371,7 +371,7 @@ class CompanionService extends EventEmitter {
 
       socket.write(
         protocol.encode({
-          version: 1,
+          version: protocol.PROTOCOL_VERSION,
           type: protocol.TYPES.HELLO_ACK,
           id: 'ack',
           ts: Date.now(),
@@ -429,7 +429,7 @@ class CompanionService extends EventEmitter {
 
     if (message.type === protocol.TYPES.PING) {      socket.write(
         protocol.encode({
-          version: 1,
+          version: protocol.PROTOCOL_VERSION,
           type: protocol.TYPES.PONG,
           id: message.id,
           ts: Date.now(),
@@ -608,7 +608,7 @@ class CompanionService extends EventEmitter {
     this.lastSentHash = payload.hash;
 
     const frame = protocol.encode({
-      version: 1,
+      version: protocol.PROTOCOL_VERSION,
       type: protocol.TYPES.CLIPBOARD_SET,
       id: crypto.randomUUID(),
       ts: Date.now(),

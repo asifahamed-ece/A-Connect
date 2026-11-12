@@ -107,7 +107,7 @@ const server = tls.createServer(
           if (message.payload.code !== CODE) {
             console.log(`[server] refusing: wrong pairing code`);
             socket.write(protocol.encode({
-              version: 1,
+              version: protocol.PROTOCOL_VERSION,
               type: protocol.TYPES.HELLO_ERROR,
               id: 'err',
               ts: Date.now(),
@@ -119,7 +119,7 @@ const server = tls.createServer(
           handshakeDone = true;
           console.log(`[server] paired with ${message.payload.deviceName} (${message.payload.deviceId})`);
           socket.write(protocol.encode({
-            version: 1,
+            version: protocol.PROTOCOL_VERSION,
             type: protocol.TYPES.HELLO_ACK,
             id: 'ack',
             ts: Date.now(),

@@ -240,6 +240,34 @@ function checkFeaturePayloads() {
   );
 }
 
+/**
+ * The envelope version must always come from PROTOCOL_VERSION.
+ *
+ * A literal `version: 1` left behind when the constant moved to 2 makes the
+ * phone refuse the computer's hello-ack with "protocol-version", which looks
+ * exactly like an unreachable computer. This caught five of them.
+ */
+function checkNoHardcodedVersion() {
+  const offenders = [];
+  for (const dir of ['services', 'scripts']) {
+    const full = path.join(__dirname, '..', dir);
+    for (const name of fs.readdirSync(full)) {
+      if (!name.endsWith('.js')) continue;
+      // This file necessarily contains the pattern it looks for.
+      if (name === 'protocol-check.js') continue;
+      const text = fs.readFileSync(path.join(full, name), 'utf8');
+      text.split('\n').forEach((line, index) => {
+        if (/version:\s*\d/.test(line)) offenders.push(`${dir}/${name}:${index + 1}`);
+      });
+    }
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `the envelope version must come from PROTOCOL_VERSION, not a literal: ${offenders.join(', ')}`
+  );
+}
+
 function checkProofRules() {
   // The same vector the Kotlin side asserts, so a divergence between the two
   // implementations is a test failure rather than a pairing that mysteriously
@@ -306,6 +334,7 @@ function main() {
   checkClipboardRules();
   checkBinaryFrames();
   checkFeaturePayloads();
+  checkNoHardcodedVersion();
   checkProofRules();
   checkPairingPayload();
 
