@@ -426,6 +426,7 @@ class CompanionService extends EventEmitter {
     }
 
     if (routeNotification(this, message)) return;
+    if (routeMedia(this, message)) return;
 
     if (message.type === protocol.TYPES.PING) {      socket.write(
         protocol.encode({
@@ -675,6 +676,40 @@ class CompanionService extends EventEmitter {
     return sentCount > 0;
   }
 
+  /**
+   * Sends a playback command to the phone.
+   *
+   * The phone applies it to the session it was showing when the state was
+   * produced, so a command never lands on whatever happens to play later.
+   */
+  sendMediaCommand(command, positionMs) {
+    if (typeof command !== 'string' || !command) return false;
+
+    const payload = { type: protocol.TYPES.MEDIA_COMMAND, command };
+    if (typeof positionMs === 'number') payload.positionMs = positionMs;
+
+    const frame = protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.MEDIA_COMMAND,
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      payload,
+    });
+
+    let sentCount = 0;
+    for (const socket of this.clients) {
+      if (socket.handshakeDone && !socket.destroyed) {
+        try {
+          socket.write(frame);
+          sentCount += 1;
+        } catch (e) {
+          console.error(`[companion] could not send a media command: ${e.message}`);
+        }
+      }
+    }
+    return sentCount > 0;
+  }
+
   updateStatus() {
     const connected = this.connectedClients;
     if (connected.length > 0) {
@@ -787,5 +822,21 @@ function routeNotification(service, message) {
 }
 
 CompanionService.routeNotification = routeNotification;
+
+/**
+ * Routes one media-state message to the service's events.
+ *
+ * Exported as a property of the class so the check can drive it without a
+ * socket; production calls it from `handleMessage`.
+ */
+function routeMedia(service, message) {
+  if (message.type !== protocol.TYPES.MEDIA_STATE) return false;
+  const state = protocol.parseMediaState(message.payload);
+  if (!state) return false;
+  service.emit('media-state', state);
+  return true;
+}
+
+CompanionService.routeMedia = routeMedia;
 
 module.exports = CompanionService;
