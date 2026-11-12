@@ -4,13 +4,18 @@
  * Node side of the A+ Connect companion wire protocol.
  *
  * Mirrors companion-android/.../protocol/FrameCodec.kt exactly: a 4 byte big
- * endian length prefix followed by UTF-8 JSON. Keep the two in step - the
- * shared fixtures in the Android test resources are what prove it.
+ * endian length, then a 1 byte frame kind, then the payload. Kind 0 is UTF-8
+ * JSON, kind 1 is opaque binary. The length counts the kind byte and the
+ * payload. Keep the two in step - the shared fixtures in the Android test
+ * resources are what prove it.
  */
 
 const crypto = require('crypto');
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
+
+const KIND_JSON = 0;
+const KIND_BINARY = 1;
 
 /**
  * Two mebibytes, so that the worst case of a clipboard payload fits: the
@@ -54,28 +59,53 @@ function isSupportedVersion(version) {
   return version === PROTOCOL_VERSION;
 }
 
-function encode(message) {
-  const body = Buffer.from(JSON.stringify(toJson(message)), 'utf8');
-  if (body.length > MAX_FRAME_BYTES) {
+function frame(kind, body) {
+  const length = 1 + body.length;
+  if (length > MAX_FRAME_BYTES) {
     throw new Error(`frame too large: ${body.length}`);
   }
-  const frame = Buffer.allocUnsafe(4 + body.length);
-  frame.writeInt32BE(body.length, 0);
-  body.copy(frame, 4);
-  return frame;
+  const out = Buffer.allocUnsafe(4 + length);
+  out.writeInt32BE(length, 0);
+  out.writeUInt8(kind, 4);
+  body.copy(out, 5);
+  return out;
 }
 
-function decode(frame) {
-  if (frame.length < 4) throw new Error('frame too short');
-  const length = frame.readInt32BE(0);
-  if (length < 0 || length > MAX_FRAME_BYTES) {
-    throw new Error(`illegal frame length: ${length}`);
+function encode(message) {
+  return frame(KIND_JSON, Buffer.from(JSON.stringify(toJson(message)), 'utf8'));
+}
+
+/** Wraps raw bytes - a mirror frame, for instance - as a binary frame. */
+function encodeBinary(bytes) {
+  return frame(KIND_BINARY, Buffer.from(bytes));
+}
+
+/**
+ * Reads one whole frame. Returns the payload slice if the frame's kind matches,
+ * or null when it does not; a malformed JSON frame throws, as before.
+ */
+function payloadOf(frameBytes, kind) {
+  if (frameBytes.length < 4) return null;
+  const length = frameBytes.readInt32BE(0);
+  if (length < 1 || length > MAX_FRAME_BYTES) {
+    if (kind === KIND_JSON) throw new Error(`illegal frame length: ${length}`);
+    return null;
   }
-  if (frame.length < 4 + length) throw new Error('truncated frame');
+  if (frameBytes.length < 4 + length) {
+    if (kind === KIND_JSON) throw new Error('truncated frame');
+    return null;
+  }
+  if (frameBytes.readUInt8(4) !== kind) return null;
+  return frameBytes.subarray(5, 4 + length);
+}
+
+function decode(frameBytes) {
+  const body = payloadOf(frameBytes, KIND_JSON);
+  if (body === null) throw new Error('frame is not JSON');
 
   let parsed;
   try {
-    parsed = JSON.parse(frame.subarray(4, 4 + length).toString('utf8'));
+    parsed = JSON.parse(body.toString('utf8'));
   } catch (err) {
     throw new Error('frame is not valid JSON');
   }
@@ -97,6 +127,11 @@ function decode(frame) {
     ts: parsed.ts,
     payload: parsed.payload || {},
   };
+}
+
+/** The payload of a binary frame, or null when the frame is anything else. */
+function decodeBinary(frameBytes) {
+  return payloadOf(frameBytes, KIND_BINARY);
 }
 
 function toJson(message) {
@@ -210,13 +245,17 @@ function verifyProof(secret, deviceId, nonce, proof) {
 
 module.exports = {
   PROTOCOL_VERSION,
+  KIND_JSON,
+  KIND_BINARY,
   MAX_FRAME_BYTES,
   MAX_CLIPBOARD_BYTES,
   TYPES,
   REASONS,
   isSupportedVersion,
   encode,
+  encodeBinary,
   decode,
+  decodeBinary,
   buildClipboardPayload,
   shouldSendClipboard,
   computeProof,

@@ -33,6 +33,7 @@ const FIXTURE_DIR = path.join(
 );
 const KOTLIN_FIXTURE = path.join(FIXTURE_DIR, 'protocol-frames.json');
 const NODE_FIXTURE = path.join(FIXTURE_DIR, 'protocol-frames-node.json');
+const BINARY_FIXTURE = path.join(FIXTURE_DIR, 'frames.json');
 
 function readFrames(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8')).frames;
@@ -136,6 +137,37 @@ function writeNodeFixture() {
   console.log(`wrote ${frames.length} frames to ${NODE_FIXTURE}`);
 }
 
+/**
+ * The shared binary fixture holds one payload in an implementation-neutral
+ * file; both sides must frame it to the same bytes. The Kotlin side asserts
+ * the same literal frame in FrameCodecTest.
+ */
+function checkBinaryFrames() {
+  const fixture = JSON.parse(fs.readFileSync(BINARY_FIXTURE, 'utf8'));
+  assert.strictEqual(fixture.kind, 'binary', 'the binary fixture is not marked binary');
+  const payload = Buffer.from(fixture.hex, 'hex');
+
+  const frame = protocol.encodeBinary(payload);
+  assert.strictEqual(
+    frame.readInt32BE(0),
+    1 + payload.length,
+    'the frame length must count the kind byte and the payload'
+  );
+  assert.strictEqual(frame.readUInt8(4), protocol.KIND_BINARY, 'the kind byte must be binary');
+  assert.strictEqual(frame.toString('hex'), '0000000501000102fa', 'the binary frame bytes changed');
+
+  const decoded = protocol.decodeBinary(frame);
+  assert.ok(decoded && decoded.equals(payload), 'the binary frame did not round trip');
+
+  const jsonFrame = protocol.encode({ v: 2, type: 'ping', id: '1', ts: 1, payload: {} });
+  assert.strictEqual(
+    protocol.decodeBinary(jsonFrame),
+    null,
+    'a JSON frame was read as a binary frame'
+  );
+  assert.strictEqual(protocol.decode(jsonFrame).type, 'ping', 'a JSON frame stopped decoding');
+}
+
 function checkProofRules() {
   // The same vector the Kotlin side asserts, so a divergence between the two
   // implementations is a test failure rather than a pairing that mysteriously
@@ -200,12 +232,14 @@ function main() {
 
   for (const frame of frames) checkFrame(frame);
   checkClipboardRules();
+  checkBinaryFrames();
   checkProofRules();
   checkPairingPayload();
 
   if (write) writeNodeFixture();
 
   console.log(`protocol-check: ${frames.length} frames decoded, round tripped and matched`);
+  console.log('protocol-check: frames matched');
 }
 
 main();

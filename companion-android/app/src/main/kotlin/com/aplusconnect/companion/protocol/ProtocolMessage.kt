@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /** Wire constants for the A+ Connect companion protocol. */
 object Protocol {
-    const val VERSION = 1
+    const val VERSION = 2
 
     const val TYPE_HELLO = "hello"
     const val TYPE_HELLO_ACK = "hello-ack"
