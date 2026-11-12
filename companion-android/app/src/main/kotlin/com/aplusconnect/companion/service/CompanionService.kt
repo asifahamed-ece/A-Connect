@@ -577,7 +577,10 @@ class CompanionService : Service() {
         fun deliverClipboard(context: Context, text: String) {
             val running = instance
             if (running != null) {
-                running.send(text)
+                // The Send Text and Paste buttons call this from the UI thread,
+                // and a socket write there throws NetworkOnMainThreadException
+                // and drops the connection. Sends run on the send thread.
+                running.sendThread.execute { running.send(text) }
                 return
             }
             val intent = Intent(context, CompanionService::class.java)
