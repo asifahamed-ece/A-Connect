@@ -527,7 +527,11 @@ class CompanionService : Service() {
         fun deliverNotification(context: Context, id: String, payload: JSONObject) {
             val running = instance
             if (running != null) {
-                running.sendNotification(id, payload)
+                // onNotificationPosted is delivered on the main thread, and a
+                // socket write there throws NetworkOnMainThreadException and
+                // closes the session - the same trap the clipboard hit. Every
+                // write goes through the send thread.
+                running.sendThread.execute { running.sendNotification(id, payload) }
                 return
             }
             synchronized(earlyNotifications) {
@@ -541,7 +545,7 @@ class CompanionService : Service() {
         fun deliverNotificationRemoved(context: Context, id: String) {
             val running = instance
             if (running != null) {
-                running.sendNotificationRemoved(id)
+                running.sendThread.execute { running.sendNotificationRemoved(id) }
                 return
             }
             start(context)
