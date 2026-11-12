@@ -3,6 +3,8 @@ package com.aplusconnect.companion.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.graphics.drawable.Icon
 import android.app.Service
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -14,6 +16,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.aplusconnect.companion.R
+import com.aplusconnect.companion.clip.ClipboardReadActivity
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
@@ -288,7 +292,33 @@ class CompanionService : Service() {
         .setContentText(text)
         .setSmallIcon(android.R.drawable.ic_menu_edit)
         .setOngoing(true)
+        .addAction(
+            Notification.Action.Builder(
+                Icon.createWithResource(this, R.drawable.ic_aplus_clipboard),
+                "Copy to PC",
+                copyActionIntent(),
+            ).build()
+        )
         .build()
+
+    /**
+     * The "Copy to PC" action.
+     *
+     * Tapping it raises the transparent reader, which takes focus for a moment
+     * and can therefore read the clipboard. This is the path that needs no
+     * accessibility service - and an accessibility service is what makes
+     * Android block contactless payments.
+     */
+    private fun copyActionIntent(): PendingIntent {
+        val intent = Intent(this, ClipboardReadActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        return PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     private fun updateNotification(text: String) {
         val manager = getSystemService(NotificationManager::class.java)

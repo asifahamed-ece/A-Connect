@@ -197,6 +197,14 @@ function setupServiceEvents() {
     sendToRenderer('event:mirror-started', data);
   });
 
+  scrcpy.on('error', (err) => {
+    // Without this listener Node treats an unhandled 'error' event as fatal
+    // and the whole app dies with a JavaScript error dialog.
+    console.error('[scrcpy] error:', err.message);
+    sendToRenderer('event:mirror-error', { message: err.message });
+    updateTrayMenu();
+  });
+
   scrcpy.on('stopped', (data) => {
     updateTrayMenu();
     sendToRenderer('event:mirror-stopped', data);
