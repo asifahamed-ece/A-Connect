@@ -990,11 +990,11 @@ fun InterconnectTab(
         // The keyboard is what carries the clipboard privilege.
         PermissionTile(
             icon = Icons.Default.Bolt,
-            title = "Clipboard Keyboard",
+            title = "A+ Connect Keyboard",
             subtitle = if (accessibilityGranted) {
-                "Set as your keyboard - the clipboard syncs in the background"
+                "Active - copies sync to the computer with no tap"
             } else {
-                "Set as your keyboard so copies sync in the background"
+                "Pick it as your keyboard so copies sync with no tap"
             },
             isGranted = accessibilityGranted,
             actionLabel = if (accessibilityGranted) "ACTIVE" else "SET",
@@ -1878,12 +1878,20 @@ private fun openKeyboardPicker(context: Context) {
     }
 }
 
+/**
+ * Whether the A+ Connect keyboard is the default keyboard.
+ *
+ * The keyboard is its own app (a patched HeliBoard), and *it* is what Android
+ * lets read the clipboard in the background. This app only receives what the
+ * keyboard hands over, so this is the state that decides whether copies sync
+ * with no tap.
+ */
 private fun isDefaultKeyboard(context: Context): Boolean {
     val current = Settings.Secure.getString(
         context.contentResolver,
         Settings.Secure.DEFAULT_INPUT_METHOD
     ) ?: return false
-    return current.contains(context.packageName)
+    return com.aplusconnect.companion.clip.KeyboardBridge.PACKAGES.any { current.startsWith(it) }
 }
 
 private fun isBatteryOptimized(context: Context): Boolean {

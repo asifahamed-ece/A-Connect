@@ -116,6 +116,7 @@ class CompanionService extends EventEmitter {
         deviceName: c.deviceName,
         ip: c.clientIp || c.remoteAddress || 'unknown',
         connectedAt: c.connectedAt,
+        clipboardAccess: c.clipboardAccess !== false,
       }));
   }
 

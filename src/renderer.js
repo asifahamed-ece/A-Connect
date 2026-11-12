@@ -4,6 +4,10 @@
 
 const state = {
   device: null,
+  // Which of the two connections the user is working with: 'adb' (the phone
+  // over the debugging connection) or 'companion' (the same phone over the
+  // encrypted channel). Both can be live at once, so the user picks.
+  target: 'adb',
   view: 'empty',
   transfers: new Map(),
   notifications: [],
@@ -127,7 +131,7 @@ function updateCompanionNotes() {
   const note = $('companion-files-note');
   if (!note) return;
 
-  const companionOnly = !state.device && state.companion;
+  const companionOnly = state.target === 'companion' && state.companion;
   note.style.display = companionOnly ? '' : 'none';
   if (companionOnly) {
     const text = $('companion-files-text');
@@ -140,10 +144,13 @@ function updateCompanionNotes() {
 
   // The browser and the drop zone both drive the debugging connection, so
   // they are hidden rather than left spinning forever.
+  // The browser and the drop zone drive the debugging connection, so they are
+  // hidden when the companion is the selected one.
+  const overAdb = state.target === 'adb' && Boolean(state.device);
   const dropzone = $('dropzone');
-  if (dropzone) dropzone.hidden = !state.device;
+  if (dropzone) dropzone.hidden = !overAdb;
   document.querySelectorAll('#view-files .browser').forEach((el) => {
-    el.hidden = !state.device;
+    el.hidden = !overAdb;
   });
 }
 
@@ -157,10 +164,15 @@ function renderDevice() {
 
   // Both transports can be live at once: the phone over the debugging
   // connection, and the same phone over the companion channel.
+  // The selection follows what is actually connected: no debugging device
+  // means the companion is the one to work with.
+  if (!device && companion) state.target = 'companion';
+  if (!companion && device) state.target = 'adb';
+
   const rows = [];
   if (device) {
     rows.push(`
-      <button class="device-row active" type="button">
+      <button class="device-row ${state.target === 'adb' ? 'active' : ''}" type="button" data-target="adb">
         ${icon('phone')}
         <span class="device-row-text">
           <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
@@ -170,7 +182,7 @@ function renderDevice() {
   }
   if (companion) {
     rows.push(`
-      <button class="device-row ${device ? '' : 'active'}" type="button">
+      <button class="device-row ${state.target === 'companion' ? 'active' : ''}" type="button" data-target="companion">
         ${icon('phone')}
         <span class="device-row-text">
           <span class="device-row-name">${escapeHtml(companion.deviceName || 'Phone')}</span>
@@ -187,42 +199,70 @@ function renderDevice() {
   }
 
   list.innerHTML = rows.join('');
+  list.querySelectorAll('.device-row').forEach((row) => {
+    row.addEventListener('click', () => selectTarget(row.dataset.target));
+  });
 
-  const shown = device || companion;
-  sub.textContent = shown.model || shown.deviceName || 'Connected';
+  const onCompanion = state.target === 'companion' && Boolean(companion);
+  const shown = onCompanion ? companion : device;
+  sub.textContent = shown ? (shown.model || shown.deviceName || 'Connected') : 'Not connected';
 
-  $('device-title').textContent = device ? (device.model || 'Phone') : (companion.deviceName || 'Phone');
-  $('device-sub').textContent = device
-    ? `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`
-    : `Connected over the companion channel · ${companion.ip || ''}`;
+  $('device-title').textContent = onCompanion
+    ? (companion.deviceName || 'Phone')
+    : (device ? (device.model || 'Phone') : 'Phone');
+  $('device-sub').textContent = onCompanion
+    ? `Connected over the companion channel · ${companion.ip || ''}`
+    : `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`;
 
   const transport = $('device-transport');
-  transport.innerHTML = device
-    ? `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`
-    : `${icon('plug')}<span>Companion</span>`;
+  transport.innerHTML = onCompanion
+    ? `${icon('plug')}<span>Companion</span>`
+    : `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`;
 
   // Say plainly which features this transport can carry.
   const note = $('companion-capability-note');
   if (note) {
-    const companionOnly = !device && companion;
-    note.style.display = companionOnly ? '' : 'none';
-    if (companionOnly) {
-      const text = $('companion-capability-text');
-      if (text) {
-        text.textContent =
-          'The clipboard and file transfers work over this connection. ' +
-          'Screen mirroring and the phone file browser still need the debugging connection.';
-      }
+    note.style.display = companion ? '' : 'none';
+    const text = $('companion-capability-text');
+    if (text) {
+      text.textContent = onCompanion
+        ? 'The clipboard and file transfers work over this connection. ' +
+          'Screen mirroring and the phone file browser still need the debugging connection.'
+        : 'The companion connection is live too - click it above to work with the phone over the encrypted channel.';
     }
   }
 
-  const battery = device.battery || {};
+  // The phone details come from the debugging connection only.
+  const battery = onCompanion ? {} : (device.battery || {});
   $('t-battery').textContent = battery.level != null ? `${battery.level}%` : '—';
-  $('t-android').textContent = device.androidVersion || '—';
-  $('t-storage').textContent = device.storage?.free || '—';
-  $('t-rom').textContent = device.colorOsVersion || '—';
+  $('t-android').textContent = onCompanion ? '—' : (device.androidVersion || '—');
+  $('t-storage').textContent = onCompanion ? '—' : (device.storage?.free || '—');
+  $('t-rom').textContent = onCompanion ? '—' : (device.colorOsVersion || '—');
 
   $('files-dest-label').textContent = '/sdcard/Download';
+}
+
+/**
+ * Chooses which connection the app acts on.
+ *
+ * The same phone can be reachable twice at once: over the debugging
+ * connection and over the encrypted companion channel. Each carries different
+ * things, so the user picks which one they are working with.
+ */
+function selectTarget(target) {
+  if (state.target === target) return;
+  state.target = target;
+
+  renderDevice();
+  updateCompanionNotes();
+
+  // The panels that depend on the connection reload for the new one.
+  if (state.view === 'files') refreshBrowser();
+  if (state.view === 'clipboard') {
+    loadClipboardHistory();
+    refreshClipboardStatus();
+  }
+  if (state.view === 'notifications') loadNotificationHistory();
 }
 
 function setDevice(device) {
@@ -855,6 +895,7 @@ function applyCompanionInfo(info) {
   const badge = $('companion-badge');
   const codeEl = $('companion-code');
   const destEl = $('companion-dest-path');
+  const qrCard = $('companion-qr-card');
 
   if (codeEl) codeEl.textContent = info.code || '—';
   if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
@@ -865,9 +906,22 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Connected';
       pill.className = 'pill syncing';
     }
+    // The clipboard only syncs while the phone's keyboard is the default one.
+    if (client && client.clipboardAccess === false) {
+      if (pill) {
+        pill.textContent = 'Connected';
+        pill.className = 'pill idle';
+      }
+      if (detail) {
+        detail.textContent =
+          'Connected over TLS - but the phone is not set to the A+ Connect keyboard, ' +
+          'so the clipboard will not sync. Set it in the phone: Settings, System, ' +
+          'Languages & input, Default keyboard.';
+      }
+    }
     // Nothing to pair while a phone is already connected.
     if (qrCard) qrCard.style.display = 'none';
-    if (detail) {
+    if (detail && client?.clipboardAccess !== false) {
       detail.textContent = `Connected to ${client?.deviceName || 'Phone'} (${client?.ip || info.address}) over TLS 1.3`;
     }
     if (badge) {

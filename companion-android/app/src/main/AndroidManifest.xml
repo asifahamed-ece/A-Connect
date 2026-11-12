@@ -7,6 +7,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Signature-level: only an app signed with this app's key can send it,
+         which in practice means the A+ Connect keyboard. -->
+    <permission
+        android:name="com.aplusconnect.companion.permission.CLIPBOARD_BRIDGE"
+        android:label="Send the phone clipboard to A+ Connect"
+        android:protectionLevel="signature" />
     <!-- Only used while the pairing screen is open, to scan the computer's QR. -->
     <uses-permission android:name="android.permission.CAMERA" />
 
@@ -34,20 +41,16 @@
             </intent-filter>
         </activity>
 
-        <!-- The clipboard keyboard: holding this role is what gives the app
-             privileged clipboard access without an accessibility service. -->
-        <service
-            android:name=".ui.ime.AplusImeService"
+        <!-- The patched keyboard broadcasts what was copied; this app is the
+             only listener, and only a same-signed app may send it. -->
+        <receiver
+            android:name=".clip.ClipboardBridgeReceiver"
             android:exported="true"
-            android:label="@string/ime_label"
-            android:permission="android.permission.BIND_INPUT_METHOD">
+            android:permission="com.aplusconnect.companion.permission.CLIPBOARD_BRIDGE">
             <intent-filter>
-                <action android:name="android.view.InputMethod" />
+                <action android:name="com.aplusconnect.companion.action.CLIPBOARD" />
             </intent-filter>
-            <meta-data
-                android:name="android.view.im"
-                android:resource="@xml/method" />
-        </service>
+        </receiver>
 
         <!-- A transparent window that takes focus so the clipboard can be read
              by the notification action. -->

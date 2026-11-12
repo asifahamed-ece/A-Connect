@@ -34,6 +34,7 @@ class CompanionClient(
     private val code: String,
     private val pairing: Pairing?,
     private val sharedSecret: String,
+    private val clipboardAccess: Boolean = true,
     private val onPaired: (pcId: String, fingerprint: String) -> Unit,
     private val onReady: () -> Unit,
     private val onClosed: (String) -> Unit,
@@ -101,17 +102,35 @@ class CompanionClient(
         try {
             socket?.close()
         } catch (e: Exception) {
-            Log.w(TAG, "closing the socket failed: ${e.message}")
+            Log.w(TAG, "closing the socket failed: ${e.javaClass.simpleName}: ${e.message}")
         }
         socket = null
         input = null
         output = null
     }
 
+    /**
+     * The one lock every write to the session goes through.
+     *
+     * The clipboard, the file chunks and the ping answers can all be written
+     * from different threads. Two writers that take different locks can
+     * interleave inside a frame, and the computer then reads a corrupt stream
+     * and drops the connection.
+     */
+    private val writeLock = Any()
+
+    /** Writes one frame, under the session's single write lock. */
+    private fun writeFrame(frame: ByteArray) {
+        val stream = output ?: throw IllegalStateException("the session is closed")
+        synchronized(writeLock) {
+            stream.write(frame)
+            stream.flush()
+        }
+    }
+
     /** Sends the clipboard content, if the session is up. Returns true if sent. */
     fun sendClipboard(text: String): Boolean {
         if (!ready) return false
-        val stream = output ?: return false
         val payload = ClipboardPayloads.build(text)
         val message = ProtocolMessage(
             type = Protocol.TYPE_CLIPBOARD_SET,
@@ -121,14 +140,11 @@ class CompanionClient(
         )
 
         return try {
-            synchronized(stream) {
-                stream.write(FrameCodec.encode(message))
-                stream.flush()
-            }
+            writeFrame(FrameCodec.encode(message))
             Log.i(TAG, "sent ${payload.text.length} characters")
             true
         } catch (e: Exception) {
-            Log.w(TAG, "sending failed: ${e.message}")
+            Log.w(TAG, "sending failed: ${e.javaClass.simpleName}: ${e.message}")
             close()
             false
         }
@@ -149,10 +165,7 @@ class CompanionClient(
             payload = payload
         )
         return try {
-            synchronized(stream) {
-                stream.write(FrameCodec.encode(message))
-                stream.flush()
-            }
+            writeFrame(FrameCodec.encode(message))
             true
         } catch (e: Exception) {
             Log.w(TAG, "failed to send file start: ${e.message}")
@@ -174,10 +187,7 @@ class CompanionClient(
             payload = payload
         )
         return try {
-            synchronized(stream) {
-                stream.write(FrameCodec.encode(message))
-                stream.flush()
-            }
+            writeFrame(FrameCodec.encode(message))
             true
         } catch (e: Exception) {
             Log.w(TAG, "failed to send file chunk: ${e.message}")
@@ -196,10 +206,7 @@ class CompanionClient(
             payload = payload
         )
         return try {
-            synchronized(stream) {
-                stream.write(FrameCodec.encode(message))
-                stream.flush()
-            }
+            writeFrame(FrameCodec.encode(message))
             true
         } catch (e: Exception) {
             Log.w(TAG, "failed to send file done: ${e.message}")
@@ -230,6 +237,9 @@ class CompanionClient(
             // The first contact carries the secret, so the computer can
             // remember it. Every later contact carries a proof that only the
             // holder of the secret can produce.
+            // The computer is told whether the clipboard can actually sync:
+            // only the default keyboard may read the clipboard in the
+            // background, so the desktop can say so instead of looking broken.
             val hello = if (sharedSecret.isEmpty()) {
                 val secret = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
                 onSecretCreated(java.util.Base64.getEncoder().encodeToString(secret))
@@ -239,6 +249,7 @@ class CompanionClient(
                     code = code,
                     nonce = nonce,
                     secret = secret,
+                    clipboardAccess = clipboardAccess,
                 )
             } else {
                 val secretBytes = java.util.Base64.getDecoder().decode(sharedSecret)
@@ -248,6 +259,7 @@ class CompanionClient(
                     code = code,
                     nonce = nonce,
                     proof = Handshake.proofFor(secretBytes, deviceId, nonce),
+                    clipboardAccess = clipboardAccess,
                 )
             }
             val stream = output!!
@@ -284,13 +296,7 @@ class CompanionClient(
                         payload = org.json.JSONObject(),
                     )
                     try {
-                        val pongStream = output
-                        if (pongStream != null) {
-                            synchronized(pongStream) {
-                                pongStream.write(FrameCodec.encode(pong))
-                                pongStream.flush()
-                            }
-                        }
+                        writeFrame(FrameCodec.encode(pong))
                     } catch (e: Exception) {
                         Log.w(TAG, "could not answer the ping: ${e.message}")
                         close()

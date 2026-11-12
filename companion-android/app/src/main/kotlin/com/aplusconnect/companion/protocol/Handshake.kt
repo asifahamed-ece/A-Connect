@@ -31,6 +31,7 @@ object Handshake {
         nonce: String,
         secret: ByteArray? = null,
         proof: String? = null,
+        clipboardAccess: Boolean = true,
     ): ProtocolMessage {
         val payload = JSONObject()
             .put("deviceId", deviceId)
@@ -38,6 +39,9 @@ object Handshake {
             .put("code", code)
             .put("nonce", nonce)
             .put("protocolVersion", Protocol.VERSION)
+            // Whether the phone can read the clipboard in the background,
+            // which it can only do while it is the default keyboard.
+            .put("clipboardAccess", clipboardAccess)
 
         // The first contact carries the secret; every later one carries a proof
         // that only the holder of the secret can produce.

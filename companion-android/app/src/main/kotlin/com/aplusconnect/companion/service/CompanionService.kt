@@ -18,6 +18,8 @@ import android.os.Looper
 import android.util.Log
 import com.aplusconnect.companion.R
 import com.aplusconnect.companion.clip.ClipboardReadActivity
+import com.aplusconnect.companion.clip.ClipboardBridgeReceiver
+import com.aplusconnect.companion.clip.KeyboardBridge
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
@@ -74,6 +76,17 @@ class CompanionService : Service() {
 
     /** Guards the pending clipboard and the last sent hash. */
     private val stateLock = Any()
+
+    /**
+     * Where clipboard sends happen.
+     *
+     * The keyboard's broadcast is delivered on the main thread, so the send
+     * cannot run there (NetworkOnMainThreadException closes the session), and
+     * it must not run on the reader thread either, which is blocked reading.
+     */
+    private val sendThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-send").apply { isDaemon = true }
+    }
     private var pendingPayload: ClipboardPayload? = null
 
     override fun onCreate() {
@@ -89,15 +102,6 @@ class CompanionService : Service() {
         )
         startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
 
-        // The listener only fires while this app may read the clipboard, so it
-        // is safe to keep it registered.
-        try {
-            val clipboard = getSystemService(ClipboardManager::class.java)
-            clipboard.addPrimaryClipChangedListener(clipboardListener)
-        } catch (e: Exception) {
-            Log.w(TAG, "could not watch the clipboard: ${e.message}")
-        }
-
         connect()
     }
 
@@ -108,7 +112,12 @@ class CompanionService : Service() {
             }
         }
         val text = intent?.getStringExtra(EXTRA_CLIPBOARD)
-        if (text != null) send(text)
+        if (text != null) {
+            // The broadcast arrives on the main thread, and Android refuses a
+            // socket write there: it would kill the connection. Every send
+            // happens on this thread instead.
+            sendThread.execute { send(text) }
+        }
         return START_STICKY
     }
 
@@ -161,6 +170,7 @@ class CompanionService : Service() {
             code = settings.pairingCode,
             pairing = settings.pairing,
             sharedSecret = settings.sharedSecret,
+            clipboardAccess = isDefaultKeyboard(),
             onSecretCreated = { secret -> settings.sharedSecret = secret },
             onFileStart = { id, name, size, mime ->
                 incomingFile.start(id, name, size, mime)
@@ -194,7 +204,7 @@ class CompanionService : Service() {
                     Status.isConnected = true
                     Status.state = "Connected to ${settings.host}"
                     updateNotification("Connected to ${settings.host}")
-                    flushPending()
+                    sendThread.execute { flushPending() }
                 }
             },
             onClosed = { reason ->
@@ -228,36 +238,6 @@ class CompanionService : Service() {
      * keyboard. So this is the seamless path: no accessibility service, no
      * tap, no focus steal.
      */
-    /**
-     * The clipboard is read and sent on its own thread.
-     *
-     * The callback arrives on the main thread, and a socket write there
-     * blocks the whole app - which Android eventually kills, which drops the
-     * connection. The clipboard read and the write both belong here.
-     */
-    private val clipboardThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "companion-clipboard").apply { isDaemon = true }
-    }
-
-    private val clipboardListener =
-        ClipboardManager.OnPrimaryClipChangedListener {
-            clipboardThread.execute { readAndForwardClipboard() }
-        }
-
-    /** Reads the clipboard and forwards it, if the app is allowed to read it. */
-    private fun readAndForwardClipboard() {
-        val text = try {
-            val manager = getSystemService(ClipboardManager::class.java)
-            val clip = manager.primaryClip
-            if (clip == null || clip.itemCount == 0) return
-            clip.getItemAt(0).coerceToText(this).toString()
-        } catch (e: Exception) {
-            Log.w(TAG, "could not read the clipboard: ${e.message}")
-            return
-        }
-        if (text.isNotEmpty()) send(text)
-    }
-
     private fun applyIncomingClipboard(text: String) {
         if (text.isEmpty()) return
         val payload = ClipboardPayloads.build(text)
@@ -422,12 +402,36 @@ class CompanionService : Service() {
         manager?.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
+    /**
+     * Whether the app is the default keyboard.
+     *
+     * That role is what lets it read the clipboard in the background, so it
+     * is also what the computer is told - otherwise the desktop looks
+     * connected while nothing can sync.
+     */
+    /**
+     * Whether the phone's clipboard can actually reach the computer.
+     *
+     * Only the default keyboard may read the clipboard in the background
+     * (ClipboardService.isDefaultIme reads
+     * Settings.Secure.DEFAULT_INPUT_METHOD), so the clipboard can sync only
+     * while the A+ Connect keyboard is the default one. The computer is told
+     * this, so it can say why instead of looking broken.
+     */
+    private fun isDefaultKeyboard(): Boolean {
+        val current = android.provider.Settings.Secure.getString(
+            contentResolver,
+            android.provider.Settings.Secure.DEFAULT_INPUT_METHOD,
+        ) ?: return false
+        return KeyboardBridge.PACKAGES.any { current.startsWith(it) }
+    }
+
     companion object {
         const val TAG = "AplusConnect"
         private const val CHANNEL_ID = "aplus_connect"
         private const val NOTIFICATION_ID = 7
-        private const val EXTRA_CLIPBOARD = "clipboard"
-        private const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
+        const val EXTRA_CLIPBOARD = "clipboard"
+        const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
         private const val RECONNECT_DELAY_MS = 5000L
 
         private var instance: CompanionService? = null

@@ -1,7 +1,12 @@
 # A+ Connect Companion — Design Spec
 
 **Date:** 2026-11-11
-**Status:** Draft for review
+**Status:** Draft for review — **partly superseded**; the clipboard trigger described
+here was replaced on 2026-11-12. Read `docs/companion/payment-block-findings.md`,
+`docs/companion/keyboard-fork.md` and `docs/companion/spike-results.md` for what was
+actually measured and built: the accessibility service and the app's own input method
+are both gone, and the clipboard now comes from a patched HeliBoard fork that
+broadcasts what was copied.
 **Author:** brainstorming session (design), pending written implementation plan
 
 ---
