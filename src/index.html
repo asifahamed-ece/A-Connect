@@ -400,8 +400,42 @@
       <h2 class="modal-title" id="modal-device-title">Add a device</h2>
 
       <div class="tabs" role="tablist">
-        <button class="tab active" role="tab" data-tab="wireless">Wireless debugging</button>
+        <button class="tab active" role="tab" data-tab="qr">Pair by QR</button>
+        <button class="tab" role="tab" data-tab="wireless">Wireless debugging</button>
         <button class="tab" role="tab" data-tab="usb">Connect via USB</button>
+      </div>
+
+      <div class="tab-panel" id="tab-qr">
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">1</span>
+            <div>
+              <p>Install the <strong>A+ Connect Companion</strong> app on your phone.</p>
+              <p class="muted">No debugging, no developer options - the phone opens no port on the network.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">2</span>
+            <div>
+              <p>Open the app, go to <strong>Settings</strong> and tap <strong>Scan pairing QR</strong>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">3</span>
+            <div>
+              <p>Point the camera at this code. The phone pairs itself.</p>
+              <div style="display: flex; align-items: center; gap: 18px; margin-top: 12px; flex-wrap: wrap;">
+                <img id="pair-qr-image" alt="Pairing QR code"
+                     style="width: 220px; height: 220px; background: #fff; border-radius: 10px; padding: 8px;" />
+                <div>
+                  <div class="muted" style="margin-bottom: 6px;">Or type the code on the phone:</div>
+                  <div style="font-family: monospace; font-size: 24px; letter-spacing: 3px;" id="pair-qr-code">------</div>
+                  <div class="muted" style="margin-top: 8px; font-size: 12px;" id="pair-qr-hint"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="tab-panel" id="tab-wireless">

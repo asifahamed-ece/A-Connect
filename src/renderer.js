@@ -792,6 +792,8 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Connected';
       pill.className = 'pill syncing';
     }
+    // Nothing to pair while a phone is already connected.
+    if (qrCard) qrCard.style.display = 'none';
     if (detail) {
       detail.textContent = `Connected to ${client?.deviceName || 'Phone'} (${client?.ip || info.address}) over TLS 1.3`;
     }
@@ -802,6 +804,11 @@ function applyCompanionInfo(info) {
     if (pill) {
       pill.textContent = 'Listening';
       pill.className = 'pill idle';
+    }
+    // Nothing is paired yet: show the pairing code straight away.
+    if (qrCard && qrCard.style.display === 'none') {
+      qrCard.style.display = '';
+      refreshPairingQr();
     }
     if (detail) {
       detail.textContent = `Ready on ${info.address}:${info.port}. Enter pairing code on phone.`;
@@ -814,6 +821,7 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Offline';
       pill.className = 'pill disconnected';
     }
+    if (qrCard) qrCard.style.display = 'none';
     if (detail) {
       detail.textContent = 'Companion TLS server is not running.';
     }
@@ -860,9 +868,36 @@ function initNavigation() {
     el.addEventListener('click', () => showView(el.dataset.view));
   });
 
+  // The pairing QR: shown in the "add a device" dialog and, when nothing is
+  // connected yet, right in the clipboard panel.
+  async function refreshPairingQr() {
+    if (!window.api.getCompanionQr) return null;
+    try {
+      const result = await window.api.getCompanionQr();
+      if (!result || !result.success) return null;
+
+      const image = $('pair-qr-image');
+      if (image) image.src = result.dataUrl;
+      const code = $('pair-qr-code');
+      if (code) code.textContent = result.info?.code || '------';
+      const hint = $('pair-qr-hint');
+      if (hint) {
+        hint.textContent = `${result.info?.pcName || 'This PC'} at ${result.info?.host}:${result.info?.port}`;
+      }
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
   for (const id of ['btn-add-device', 'btn-add-device-2', 'btn-add-device-3']) {
     const el = $(id);
-    if (el) el.addEventListener('click', () => openModal('modal-device'));
+    if (el) {
+      el.addEventListener('click', () => {
+        openModal('modal-device');
+        refreshPairingQr();
+      });
+    }
   }
 
   $('btn-settings').addEventListener('click', () => {
@@ -928,6 +963,7 @@ function initPairing() {
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      $('tab-qr').hidden = tab.dataset.tab !== 'qr';
       $('tab-wireless').hidden = tab.dataset.tab !== 'wireless';
       $('tab-usb').hidden = tab.dataset.tab !== 'usb';
     });

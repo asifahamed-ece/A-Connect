@@ -523,13 +523,17 @@ fun MainScreen(settings: CompanionSettings) {
                     if (info == null) {
                         Toast.makeText(context, "That is not an A+ Connect pairing code", Toast.LENGTH_SHORT).show()
                     } else {
+                        if (info.fingerprint.isNotEmpty() && info.pcId.isNotEmpty()) {
+                            // The QR carries the computer's certificate, so it
+                            // can be pinned before the first connection.
+                            settings.remember(info.pcId, info.fingerprint)
+                        }
                         settings.host = info.host
                         settings.port = info.port
                         settings.pairingCode = info.code
-                        if (info.fingerprint.isNotEmpty() && info.pcId.isNotEmpty()) {
-                            settings.remember(info.pcId, info.fingerprint)
-                        }
-                        Toast.makeText(context, "Ready to pair with ${info.pcName}", Toast.LENGTH_SHORT).show()
+                        isConnecting = true
+                        CompanionService.reconnect(context)
+                        Toast.makeText(context, "Pairing with ${info.pcName}…", Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -1296,6 +1300,41 @@ fun SettingsTab(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // The live state of the connection, so pairing shows what is
+                // happening instead of looking like nothing happened.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isConnecting) {
+                        CircularProgressIndicator(
+                            color = ColorOSGreen,
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(
+                                    if (isConnected) ColorOSGreen else textMuted,
+                                    RoundedCornerShape(5.dp)
+                                )
+                        )
+                    }
+                    Text(
+                        when {
+                            isConnecting -> "Pairing with the computer…"
+                            isConnected -> "Connected to the computer"
+                            else -> "Not connected"
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isConnected) ColorOSGreen else textSecondary
+                    )
+                }
+
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
