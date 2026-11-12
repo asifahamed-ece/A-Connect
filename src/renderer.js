@@ -11,6 +11,8 @@ const state = {
   clipboard: [],
   clipboardStatus: { status: 'idle', enabled: true },
   casting: false,
+  // The phone connected over the companion channel (TLS), if any.
+  companion: null,
   browse: {
     path: '/sdcard',
     entries: [],
@@ -110,41 +112,109 @@ function showView(name) {
   if (name === 'device') {
     renderDevice();
   }
-  if (name === 'files' && state.device) {
-    refreshBrowser();
+  if (name === 'files') {
+    updateCompanionNotes();
+    if (state.device) refreshBrowser();
   }
+}
+
+/**
+ * The phone file browser needs the debugging connection. Over the companion
+ * channel the app can send and receive files, so say that instead of showing
+ * an empty browser.
+ */
+function updateCompanionNotes() {
+  const note = $('companion-files-note');
+  if (!note) return;
+
+  const companionOnly = !state.device && state.companion;
+  note.style.display = companionOnly ? '' : 'none';
+  if (companionOnly) {
+    const text = $('companion-files-text');
+    if (text) {
+      text.textContent =
+        'You can send files to the phone and pull files from it. ' +
+        'Listing and browsing the phone folders still needs the debugging connection.';
+    }
+  }
+
+  // The browser and the drop zone both drive the debugging connection, so
+  // they are hidden rather than left spinning forever.
+  const dropzone = $('dropzone');
+  if (dropzone) dropzone.hidden = !state.device;
+  document.querySelectorAll('#view-files .browser').forEach((el) => {
+    el.hidden = !state.device;
+  });
 }
 
 /* ---------- Device ---------- */
 
 function renderDevice() {
   const device = state.device;
+  const companion = state.companion;
   const list = $('device-list');
   const sub = $('profile-sub');
 
-  if (!device) {
+  // Both transports can be live at once: the phone over the debugging
+  // connection, and the same phone over the companion channel.
+  const rows = [];
+  if (device) {
+    rows.push(`
+      <button class="device-row active" type="button">
+        ${icon('phone')}
+        <span class="device-row-text">
+          <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
+          <span class="device-row-meta">${device.isWifi ? 'Wi-Fi' : 'USB'} · connected</span>
+        </span>
+      </button>`);
+  }
+  if (companion) {
+    rows.push(`
+      <button class="device-row ${device ? '' : 'active'}" type="button">
+        ${icon('phone')}
+        <span class="device-row-text">
+          <span class="device-row-name">${escapeHtml(companion.deviceName || 'Phone')}</span>
+          <span class="device-row-meta">Companion · TLS 1.3 · connected</span>
+        </span>
+      </button>`);
+  }
+
+  if (rows.length === 0) {
     list.innerHTML = '<div class="device-empty">No device connected</div>';
     sub.textContent = 'Not connected';
     showView('empty');
     return;
   }
 
-  list.innerHTML = `
-    <button class="device-row active" type="button">
-      ${icon('phone')}
-      <span class="device-row-text">
-        <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
-        <span class="device-row-meta">${device.isWifi ? 'Wi-Fi' : 'USB'} · connected</span>
-      </span>
-    </button>`;
+  list.innerHTML = rows.join('');
 
-  sub.textContent = device.model || 'Connected';
+  const shown = device || companion;
+  sub.textContent = shown.model || shown.deviceName || 'Connected';
 
-  $('device-title').textContent = device.model || 'Phone';
-  $('device-sub').textContent = `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`;
+  $('device-title').textContent = device ? (device.model || 'Phone') : (companion.deviceName || 'Phone');
+  $('device-sub').textContent = device
+    ? `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`
+    : `Connected over the companion channel · ${companion.ip || ''}`;
 
   const transport = $('device-transport');
-  transport.innerHTML = `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`;
+  transport.innerHTML = device
+    ? `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`
+    : `${icon('plug')}<span>Companion</span>`;
+
+  // Say plainly which features this transport can carry.
+  const note = $('companion-capability-note');
+  if (note) {
+    const companionOnly = !device && companion;
+    note.style.display = companionOnly ? '' : 'none';
+    if (companionOnly) {
+      const text = $('companion-capability-text');
+      if (text) {
+        text.textContent =
+          'The clipboard and file transfers work over this connection. ' +
+          'Screen mirroring and the phone file browser still need the debugging connection.';
+      }
+    }
+  }
 
   const battery = device.battery || {};
   $('t-battery').textContent = battery.level != null ? `${battery.level}%` : '—';
@@ -777,6 +847,9 @@ async function refreshCompanionInfo() {
 function applyCompanionInfo(info) {
   if (!info) return;
   state.companionConnected = Boolean(info.connected);
+  state.companion = state.companionConnected ? (info.clients && info.clients[0]) || null : null;
+  renderDevice();
+  updateCompanionNotes();
   const pill = $('companion-pill');
   const detail = $('companion-detail');
   const badge = $('companion-badge');
@@ -1290,6 +1363,20 @@ function initClipboard() {
   if (hideQrButton) {
     hideQrButton.addEventListener('click', () => {
       if (qrCard) qrCard.style.display = 'none';
+    });
+  }
+
+  const sendFileButton = $('btn-send-file-to-phone');
+  if (sendFileButton) {
+    sendFileButton.addEventListener('click', async () => {
+      if (!window.api.pickAndSendFileToPhone) return;
+      const result = await window.api.pickAndSendFileToPhone();
+      if (result && result.canceled) return;
+      if (result && result.success) {
+        toast(`Sent ${result.name} to the phone`);
+      } else {
+        toast('Could not send the file', 'err');
+      }
     });
   }
 

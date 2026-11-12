@@ -138,8 +138,8 @@
             </svg>
             <h1 class="empty-title">No devices found</h1>
             <p class="empty-sub">
-              Phones and tablets you pair with this PC appear here. Keep both devices
-              on the same Wi-Fi network and make sure wireless debugging is enabled.
+              Pair a phone with the QR code - no debugging and no developer options -
+              or add it over wireless debugging for screen mirroring and the file browser.
             </p>
             <button class="btn-primary btn-lg" id="btn-add-device-2">
               <svg class="icon"><use href="#i-plus"/></svg>
@@ -164,6 +164,15 @@
               </button>
             </div>
           </header>
+
+          <!-- Shown when the phone is connected over the companion channel
+               only: some features still need the ADB transport. -->
+          <div class="card row-card" id="companion-capability-note" style="display: none; margin-bottom: 16px;">
+            <div>
+              <div class="row-title">Connected over the companion channel</div>
+              <div class="row-sub" id="companion-capability-text"></div>
+            </div>
+          </div>
 
           <div class="telemetry" id="telemetry">
             <div class="telemetry-item">
@@ -236,6 +245,18 @@
               <button class="btn-ghost" id="btn-cancel-all" hidden>Cancel all</button>
             </div>
           </header>
+
+          <!-- The phone file browser needs the ADB transport; over the
+               companion channel the app can send and receive files. -->
+          <div class="card row-card" id="companion-files-note" style="display: none; margin-bottom: 16px;">
+            <div>
+              <div class="row-title">Browsing the phone's files needs the debugging connection</div>
+              <div class="row-sub" id="companion-files-text"></div>
+            </div>
+            <div>
+              <button class="btn-secondary" id="btn-send-file-to-phone" style="padding: 6px 12px; font-size: 12px;">Send a file…</button>
+            </div>
+          </div>
 
           <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose files to send">
             <svg class="icon icon-lg"><use href="#i-upload"/></svg>

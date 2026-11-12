@@ -129,8 +129,7 @@ class CompanionService extends EventEmitter {
     } catch (err) {
       console.error('[companion] certificate error:', err.message);
       this.status = 'error';
-      this.emit('error', err);
-      this.emit('status', { status: 'error', detail: err.message });
+      this.reportError(err);
       return;
     }
 
@@ -143,10 +142,14 @@ class CompanionService extends EventEmitter {
     );
 
     this.server.on('error', (err) => {
-      console.error('[companion] server error:', err.message);
+      // Another copy of the app may already hold the port. That is a
+      // situation to report, not a reason to take the whole app down.
+      const detail = err.code === 'EADDRINUSE'
+        ? `Port ${this.port} is already in use - another copy of A+ Connect is probably running`
+        : err.message;
+      console.error('[companion] server error:', detail);
       this.status = 'error';
-      this.emit('error', err);
-      this.emit('status', { status: 'error', detail: err.message });
+      this.reportError(err, detail);
     });
 
     this.pingTimer = setInterval(() => this.pingClients(), PING_INTERVAL_MS);
@@ -213,6 +216,18 @@ class CompanionService extends EventEmitter {
       }
       this.updateStatus();
     });
+  }
+
+  /**
+   * Reports a failure without taking the app down.
+   *
+   * Node throws when an EventEmitter emits 'error' and nobody is listening,
+   * so the event is only emitted when there is a listener, and the status
+   * always carries the detail.
+   */
+  reportError(err, detail = err.message) {
+    this.emit('status', { status: 'error', detail });
+    if (this.listenerCount('error') > 0) this.emit('error', err);
   }
 
   /** Pings the connected phones and drops the ones that stopped answering. */

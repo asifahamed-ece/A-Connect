@@ -253,6 +253,13 @@ function setupServiceEvents() {
     sendToRenderer('event:companion-paired', data);
   });
 
+  companion.on('error', (err) => {
+    // The companion server failing (a port clash, a missing certificate)
+    // must never take the desktop app down with it.
+    console.error('[companion] error:', err.message);
+    updateTrayMenu();
+  });
+
   companion.on('client-disconnected', (data) => {
     console.log(`[companion] disconnected phone: ${data.deviceId}`);
     updateTrayMenu();
