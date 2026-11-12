@@ -497,6 +497,8 @@ fun MainScreen(settings: CompanionSettings) {
                     onScanQr = {
                         cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
                     },
+                    keyboardActive = accessibilityGranted,
+                    onOpenKeyboardPicker = { openKeyboardPicker(context) },
                     surfaceColor = surfaceColor,
                     elevatedColor = elevatedColor,
                     borderColor = borderColor,
@@ -1250,6 +1252,8 @@ fun SettingsTab(
     downloadFolder: String,
     onPickDownloadFolder: () -> Unit,
     onScanQr: () -> Unit,
+    keyboardActive: Boolean,
+    onOpenKeyboardPicker: () -> Unit,
     surfaceColor: Color,
     elevatedColor: Color,
     borderColor: Color,
@@ -1490,6 +1494,59 @@ fun SettingsTab(
                 ) {
                     Text("Clear All", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorOSError)
                 }
+            }
+        }
+
+        // Clipboard access, and why there is no accessibility option.
+        Text("CLIPBOARD ACCESS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted, letterSpacing = 0.8.sp, modifier = Modifier.padding(start = 4.dp))
+
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, RoundedCornerShape(18.dp))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("A+ Connect Keyboard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                        Text(
+                            if (keyboardActive) "Active - copies sync with no tap"
+                            else "Not selected - copies need an extra tap",
+                            fontSize = 12.sp,
+                            color = if (keyboardActive) ColorOSGreen else textSecondary
+                        )
+                    }
+
+                    Button(
+                        onClick = onOpenKeyboardPicker,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            if (keyboardActive) "ACTIVE" else "SET",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = textPrimary
+                        )
+                    }
+                }
+
+                Text(
+                    "Android lets only the default keyboard read the clipboard in the background, so the A+ Connect Keyboard is what carries a copy to the computer. There is deliberately no accessibility option: an accessibility service makes the phone refuse contactless payments, so this app never asks for one.",
+                    fontSize = 11.sp,
+                    color = textSecondary
+                )
+
+                Text(
+                    "Updating this app can reset the default keyboard to the previous one. If copies stop syncing with no tap, set the A+ Connect Keyboard again here.",
+                    fontSize = 11.sp,
+                    color = textMuted
+                )
             }
         }
 
@@ -1856,13 +1913,6 @@ private fun queryFileName(context: Context, uri: Uri): String {
 }
 
 /**
- * Whether this app is the default keyboard.
- *
- * That role is what Android grants privileged clipboard access on, and it is
- * the only route that needs no accessibility service - an accessibility
- * service makes the phone block contactless payments.
- */
-/**
  * Opens the keyboard picker so the user can choose the companion keyboard.
  *
  * This is deliberately not the accessibility settings: an accessibility
@@ -1900,17 +1950,6 @@ private fun isBatteryOptimized(context: Context): Boolean {
         !pm.isIgnoringBatteryOptimizations(context.packageName)
     } else {
         false
-    }
-}
-
-private fun openAccessibilitySettings(context: Context) {
-    try {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        Toast.makeText(context, "Could not open Accessibility settings", Toast.LENGTH_SHORT).show()
     }
 }
 
