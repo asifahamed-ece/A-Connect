@@ -249,6 +249,21 @@ class NotificationService extends EventEmitter {
     this.emit('history-dismissed', { id });
     return true;
   }
+
+  /**
+   * Adds a notification that arrived over the companion channel.
+   *
+   * It is shaped like an ADB one on purpose, so the history, the desktop
+   * notification and the renderer need no special case for it.
+   */
+  addFromCompanion(notif) {
+    this.addNotification(notif);
+  }
+
+  /** Removes one, after the phone said it was gone. */
+  removeById(id) {
+    return this.dismiss(id);
+  }
 }
 
 module.exports = NotificationService;

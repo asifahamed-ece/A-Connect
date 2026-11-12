@@ -13,6 +13,13 @@ const { ensureCertificate } = require('./companion-cert');
 const DEFAULT_PORT = 24443;
 const PAIRING_CODE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// A link that carries no traffic is dropped by the network (Wi-Fi sleep,
+// NAT timeouts). The protocol has PING and PONG for exactly this: the
+// computer pings, the phone answers, and a client that stops answering is
+// closed instead of lingering as a half-open socket.
+const PING_INTERVAL_MS = 30 * 1000;
+const PEER_TIMEOUT_MS = 75 * 1000;
+
 const PAIRED_DEVICES_FILE = path.join(
   process.env.HOME || process.env.USERPROFILE || '.',
   '.config',
@@ -21,11 +28,17 @@ const PAIRED_DEVICES_FILE = path.join(
   'paired-devices.json'
 );
 
+/** A log line with the time, so a drop can be placed in a timeline. */
+function log(message) {
+  console.log(`[companion ${new Date().toISOString().slice(11, 19)}] ${message}`);
+}
+
 class CompanionService extends EventEmitter {
   constructor(options = {}) {
     super();
     this.port = options.port ?? DEFAULT_PORT;
     this.pcId = options.pcId ?? 'pc-test';
+    this.pcName = options.pcName || require('os').hostname();
     this.server = null;
     this.clients = new Set();
     this.status = 'stopped';
@@ -103,6 +116,7 @@ class CompanionService extends EventEmitter {
         deviceName: c.deviceName,
         ip: c.clientIp || c.remoteAddress || 'unknown',
         connectedAt: c.connectedAt,
+        clipboardAccess: c.clipboardAccess !== false,
       }));
   }
 
@@ -116,8 +130,7 @@ class CompanionService extends EventEmitter {
     } catch (err) {
       console.error('[companion] certificate error:', err.message);
       this.status = 'error';
-      this.emit('error', err);
-      this.emit('status', { status: 'error', detail: err.message });
+      this.reportError(err);
       return;
     }
 
@@ -130,15 +143,22 @@ class CompanionService extends EventEmitter {
     );
 
     this.server.on('error', (err) => {
-      console.error('[companion] server error:', err.message);
+      // Another copy of the app may already hold the port. That is a
+      // situation to report, not a reason to take the whole app down.
+      const detail = err.code === 'EADDRINUSE'
+        ? `Port ${this.port} is already in use - another copy of A+ Connect is probably running`
+        : err.message;
+      console.error('[companion] server error:', detail);
       this.status = 'error';
-      this.emit('error', err);
-      this.emit('status', { status: 'error', detail: err.message });
+      this.reportError(err, detail);
     });
+
+    this.pingTimer = setInterval(() => this.pingClients(), PING_INTERVAL_MS);
+    if (this.pingTimer.unref) this.pingTimer.unref();
 
     this.server.listen(this.port, '0.0.0.0', () => {
       this.status = 'listening';
-      console.log(`[companion] TLS server listening on ${this.localAddress()}:${this.port}`);
+      log(`TLS server listening on ${this.localAddress()}:${this.port}`);
       this.emit('listening', {
         port: this.port,
         address: this.localAddress(),
@@ -150,6 +170,10 @@ class CompanionService extends EventEmitter {
   }
 
   stop() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
     for (const socket of this.clients) {
       try {
         socket.destroy();
@@ -170,6 +194,7 @@ class CompanionService extends EventEmitter {
     socket.buffer = Buffer.alloc(0);
     socket.handshakeDone = false;
     socket.connectedAt = Date.now();
+    socket.lastSeen = Date.now();
     this.clients.add(socket);
 
     socket.on('data', (chunk) => this.handleData(socket, chunk));
@@ -187,14 +212,55 @@ class CompanionService extends EventEmitter {
       }
       this.clients.delete(socket);
       if (socket.handshakeDone) {
-        console.log(`[companion] phone disconnected: ${socket.deviceName || socket.clientIp}`);
+        log(`phone disconnected: ${socket.deviceName || socket.clientIp}`);
         this.emit('client-disconnected', { deviceId: socket.deviceId, ip: socket.clientIp });
       }
       this.updateStatus();
     });
   }
 
+  /**
+   * Reports a failure without taking the app down.
+   *
+   * Node throws when an EventEmitter emits 'error' and nobody is listening,
+   * so the event is only emitted when there is a listener, and the status
+   * always carries the detail.
+   */
+  reportError(err, detail = err.message) {
+    this.emit('status', { status: 'error', detail });
+    if (this.listenerCount('error') > 0) this.emit('error', err);
+  }
+
+  /** Pings the connected phones and drops the ones that stopped answering. */
+  pingClients() {
+    const now = Date.now();
+    for (const socket of this.clients) {
+      if (!socket.handshakeDone || socket.destroyed) continue;
+
+      if (now - (socket.lastSeen || 0) > PEER_TIMEOUT_MS) {
+        log(`${socket.deviceName || socket.clientIp} stopped answering, closing`);
+        socket.destroy();
+        continue;
+      }
+
+      try {
+        socket.write(
+          protocol.encode({
+            version: protocol.PROTOCOL_VERSION,
+            type: protocol.TYPES.PING,
+            id: crypto.randomUUID(),
+            ts: now,
+            payload: {},
+          })
+        );
+      } catch (e) {
+        socket.destroy();
+      }
+    }
+  }
+
   handleData(socket, chunk) {
+    socket.lastSeen = Date.now();
     socket.buffer = Buffer.concat([socket.buffer, chunk]);
 
     for (;;) {
@@ -226,11 +292,12 @@ class CompanionService extends EventEmitter {
 
       if (!isAlreadyPaired) {
         const isCodeValid = this.isPairingCodeValid(message.payload.code);
-        if (!isCodeValid) {
-          console.log(`[companion] refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
+        const secret = message.payload.secret;
+        if (!isCodeValid || !secret) {
+          log(`refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
           socket.write(
             protocol.encode({
-              version: 1,
+              version: protocol.PROTOCOL_VERSION,
               type: protocol.TYPES.HELLO_ERROR,
               id: 'err',
               ts: Date.now(),
@@ -241,16 +308,61 @@ class CompanionService extends EventEmitter {
           return;
         }
 
-        // Successfully paired with code
+        // Paired with the code: keep the phone's secret so it can prove it is
+        // the same phone next time.
         this.pairedDevices[deviceId] = {
           deviceId,
           deviceName,
           pairedAt: Date.now(),
+          secret: String(secret),
         };
         this.savePairedDevices();
-        console.log(`[companion] newly paired with ${deviceName} (${deviceId})`);
+        log(`newly paired with ${deviceName} (${deviceId})`);
       } else {
-        console.log(`[companion] recognized returning paired device: ${deviceName} (${deviceId})`);
+        // A known device has to prove it still holds the secret from the
+        // pairing. Knowing the device id is not enough: ids leak through logs
+        // and backups, and a leaked id would otherwise hand over the whole
+        // clipboard.
+        const paired = this.pairedDevices[deviceId];
+        const secret = paired.secret ? Buffer.from(paired.secret, 'base64') : null;
+        const proof = message.payload.proof;
+        const nonce = message.payload.nonce;
+
+        const proofIsValid =
+          secret && proof && protocol.verifyProof(secret, deviceId, nonce, proof);
+
+        if (!proofIsValid) {
+          // A phone that lost its secret (or one that was paired before the
+          // secret existed) can pair again with the live code - the same
+          // five minute window the first pairing uses. Without a valid code
+          // there is nothing to fall back on, so the connection is refused.
+          const canRePair = this.isPairingCodeValid(message.payload.code) && message.payload.secret;
+          if (canRePair) {
+            this.pairedDevices[deviceId] = {
+              deviceId,
+              deviceName,
+              pairedAt: Date.now(),
+              secret: String(message.payload.secret),
+            };
+            this.savePairedDevices();
+            log(`re-paired ${deviceName} (${deviceId}) with the live code`);
+          } else {
+            console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
+            socket.write(
+              protocol.encode({
+                version: protocol.PROTOCOL_VERSION,
+                type: protocol.TYPES.HELLO_ERROR,
+                id: 'err',
+                ts: Date.now(),
+                payload: { reason: protocol.REASONS.AUTH_FAILED },
+              })
+            );
+            socket.end();
+            return;
+          }
+        } else {
+          log(`recognized returning paired device: ${deviceName} (${deviceId})`);
+        }
       }
 
       socket.handshakeDone = true;
@@ -259,7 +371,7 @@ class CompanionService extends EventEmitter {
 
       socket.write(
         protocol.encode({
-          version: 1,
+          version: protocol.PROTOCOL_VERSION,
           type: protocol.TYPES.HELLO_ACK,
           id: 'ack',
           ts: Date.now(),
@@ -313,10 +425,11 @@ class CompanionService extends EventEmitter {
       return;
     }
 
-    if (message.type === protocol.TYPES.PING) {
-      socket.write(
+    if (routeNotification(this, message)) return;
+
+    if (message.type === protocol.TYPES.PING) {      socket.write(
         protocol.encode({
-          version: 1,
+          version: protocol.PROTOCOL_VERSION,
           type: protocol.TYPES.PONG,
           id: message.id,
           ts: Date.now(),
@@ -414,6 +527,80 @@ class CompanionService extends EventEmitter {
     });
   }
 
+  /**
+   * Sends a file to the connected phones, in chunks.
+   *
+   * The chunks are base64 in JSON frames, the same shape the phone uses when
+   * it sends a file, so both directions share one code path on the wire.
+   */
+  sendFile(filePath, mime = 'application/octet-stream') {
+    if (typeof filePath !== 'string' || !filePath) return false;
+
+    const targets = Array.from(this.clients).filter((c) => c.handshakeDone && !c.destroyed);
+    if (targets.length === 0) return false;
+
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (e) {
+      console.error(`[companion] cannot send ${filePath}: ${e.message}`);
+      return false;
+    }
+    if (!stat.isFile()) return false;
+
+    const name = path.basename(filePath);
+    const transferId = crypto.randomUUID();
+    const chunkSize = 128 * 1024;
+
+    const start = protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.FILE_START,
+      id: transferId,
+      ts: Date.now(),
+      payload: { id: transferId, name, size: stat.size, mime },
+    });
+
+    try {
+      const data = fs.readFileSync(filePath);
+      for (const socket of targets) {
+        socket.write(start);
+        let index = 0;
+        for (let offset = 0; offset < data.length; offset += chunkSize) {
+          const slice = data.subarray(offset, Math.min(offset + chunkSize, data.length));
+          socket.write(
+            protocol.encode({
+              version: protocol.PROTOCOL_VERSION,
+              type: protocol.TYPES.FILE_CHUNK,
+              id: transferId,
+              ts: Date.now(),
+              payload: {
+                id: transferId,
+                chunkIndex: index,
+                data: slice.toString('base64'),
+              },
+            })
+          );
+          index += 1;
+        }
+        socket.write(
+          protocol.encode({
+            version: protocol.PROTOCOL_VERSION,
+            type: protocol.TYPES.FILE_DONE,
+            id: transferId,
+            ts: Date.now(),
+            payload: { id: transferId },
+          })
+        );
+      }
+      console.log(`[companion] sent ${name} (${stat.size} bytes) to ${targets.length} device(s)`);
+      this.emit('file-sent', { name, size: stat.size, count: targets.length });
+      return true;
+    } catch (e) {
+      console.error(`[companion] could not send ${name}: ${e.message}`);
+      return false;
+    }
+  }
+
   sendClipboard(text) {
     if (typeof text !== 'string' || !text) return false;
     const payload = protocol.buildClipboardPayload(text);
@@ -421,7 +608,7 @@ class CompanionService extends EventEmitter {
     this.lastSentHash = payload.hash;
 
     const frame = protocol.encode({
-      version: 1,
+      version: protocol.PROTOCOL_VERSION,
       type: protocol.TYPES.CLIPBOARD_SET,
       id: crypto.randomUUID(),
       ts: Date.now(),
@@ -449,6 +636,43 @@ class CompanionService extends EventEmitter {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Asks the phone to dismiss one of its notifications, or to fire one of the
+   * notification's own buttons (`action` is "dismiss" or a button id).
+   *
+   * The phone answers by sending `notification-removed` - the same message a
+   * swipe on the phone produces - so the desktop list updates by one path, not
+   * two, and never loops back.
+   */
+  dismissNotification(id, action = 'dismiss') {
+    if (typeof id !== 'string' || !id) return false;
+
+    const frame = protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.NOTIFICATION_ACTION,
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      payload: {
+        type: protocol.TYPES.NOTIFICATION_ACTION,
+        id,
+        action,
+      },
+    });
+
+    let sentCount = 0;
+    for (const socket of this.clients) {
+      if (socket.handshakeDone && !socket.destroyed) {
+        try {
+          socket.write(frame);
+          sentCount += 1;
+        } catch (e) {
+          console.error(`[companion] could not send a notification action: ${e.message}`);
+        }
+      }
+    }
+    return sentCount > 0;
   }
 
   updateStatus() {
@@ -480,6 +704,34 @@ class CompanionService extends EventEmitter {
     return '127.0.0.1';
   }
 
+  /** Everything the phone needs to pair, in one object. */
+  pairingInfo() {
+    return protocol.buildPairingPayload({
+      pcName: this.pcName || 'This PC',
+      host: this.localAddress(),
+      port: this.port,
+      code: this.pairingCode,
+      fingerprint: this.fingerprint || '',
+      pcId: this.pcId,
+    });
+  }
+
+  /**
+   * The pairing QR code, as a data URL the desktop can show.
+   *
+   * Scanning it is the seamless path: the user never types an address, and
+   * the phone gets the certificate fingerprint to pin straight away.
+   */
+  async pairingQrDataUrl() {
+    const qrcode = require('qrcode');
+    return qrcode.toDataURL(JSON.stringify(this.pairingInfo()), {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 320,
+      color: { dark: '#0f172a', light: '#ffffff' },
+    });
+  }
+
   getInfo() {
     return {
       status: this.status,
@@ -495,5 +747,45 @@ class CompanionService extends EventEmitter {
     };
   }
 }
+
+/**
+ * Routes one notification message to the service's events.
+ *
+ * Exported as a property of the class so the conformance check can drive it
+ * without a socket; production calls it from `handleMessage`.
+ *
+ * Returns true when the message was a notification one.
+ */
+function routeNotification(service, message) {
+  if (message.type === protocol.TYPES.NOTIFICATION) {
+    const notif = protocol.parseNotification(message.payload);
+    if (!notif) return false;
+    service.emit('notification-received', {
+      id: notif.id,
+      app: notif.app || notif.pkg,
+      title: notif.title,
+      text: notif.text,
+      // The ADB path calls the body `message`; both keys carry the text so the
+      // renderer does not care which transport delivered it.
+      message: notif.text,
+      key: notif.id,
+      time: notif.ts,
+      actions: notif.actions,
+      fromCompanion: true,
+    });
+    return true;
+  }
+
+  if (message.type === protocol.TYPES.NOTIFICATION_REMOVED) {
+    const id = message.payload && message.payload.id;
+    if (typeof id !== 'string') return false;
+    service.emit('notification-dismissed', { id });
+    return true;
+  }
+
+  return false;
+}
+
+CompanionService.routeNotification = routeNotification;
 
 module.exports = CompanionService;

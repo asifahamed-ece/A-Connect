@@ -127,7 +127,10 @@ class ScrcpyService extends EventEmitter {
       this.process.on('error', (err) => {
         this.isRunning = false;
         this.process = null;
-        this.emit('error', err);
+        // Node throws when an 'error' event has no listener, which would take
+        // the whole desktop app down, so the event is only emitted when
+        // somebody is listening.
+        if (this.listenerCount('error') > 0) this.emit('error', err);
       });
 
       return { success: true };

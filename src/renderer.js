@@ -4,6 +4,10 @@
 
 const state = {
   device: null,
+  // Which of the two connections the user is working with: 'adb' (the phone
+  // over the debugging connection) or 'companion' (the same phone over the
+  // encrypted channel). Both can be live at once, so the user picks.
+  target: 'adb',
   view: 'empty',
   transfers: new Map(),
   notifications: [],
@@ -11,6 +15,8 @@ const state = {
   clipboard: [],
   clipboardStatus: { status: 'idle', enabled: true },
   casting: false,
+  // The phone connected over the companion channel (TLS), if any.
+  companion: null,
   browse: {
     path: '/sdcard',
     entries: [],
@@ -110,49 +116,153 @@ function showView(name) {
   if (name === 'device') {
     renderDevice();
   }
-  if (name === 'files' && state.device) {
-    refreshBrowser();
+  if (name === 'files') {
+    updateCompanionNotes();
+    if (state.device) refreshBrowser();
   }
+}
+
+/**
+ * The phone file browser needs the debugging connection. Over the companion
+ * channel the app can send and receive files, so say that instead of showing
+ * an empty browser.
+ */
+function updateCompanionNotes() {
+  const note = $('companion-files-note');
+  if (!note) return;
+
+  const companionOnly = state.target === 'companion' && state.companion;
+  note.style.display = companionOnly ? '' : 'none';
+  if (companionOnly) {
+    const text = $('companion-files-text');
+    if (text) {
+      text.textContent =
+        'You can send files to the phone and pull files from it. ' +
+        'Listing and browsing the phone folders still needs the debugging connection.';
+    }
+  }
+
+  // The browser and the drop zone both drive the debugging connection, so
+  // they are hidden rather than left spinning forever.
+  // The browser and the drop zone drive the debugging connection, so they are
+  // hidden when the companion is the selected one.
+  const overAdb = state.target === 'adb' && Boolean(state.device);
+  const dropzone = $('dropzone');
+  if (dropzone) dropzone.hidden = !overAdb;
+  document.querySelectorAll('#view-files .browser').forEach((el) => {
+    el.hidden = !overAdb;
+  });
 }
 
 /* ---------- Device ---------- */
 
 function renderDevice() {
   const device = state.device;
+  const companion = state.companion;
   const list = $('device-list');
   const sub = $('profile-sub');
 
-  if (!device) {
+  // Both transports can be live at once: the phone over the debugging
+  // connection, and the same phone over the companion channel.
+  // The selection follows what is actually connected: no debugging device
+  // means the companion is the one to work with.
+  if (!device && companion) state.target = 'companion';
+  if (!companion && device) state.target = 'adb';
+
+  const rows = [];
+  if (device) {
+    rows.push(`
+      <button class="device-row ${state.target === 'adb' ? 'active' : ''}" type="button" data-target="adb">
+        ${icon('phone')}
+        <span class="device-row-text">
+          <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
+          <span class="device-row-meta">${device.isWifi ? 'Wi-Fi' : 'USB'} · connected</span>
+        </span>
+      </button>`);
+  }
+  if (companion) {
+    rows.push(`
+      <button class="device-row ${state.target === 'companion' ? 'active' : ''}" type="button" data-target="companion">
+        ${icon('phone')}
+        <span class="device-row-text">
+          <span class="device-row-name">${escapeHtml(companion.deviceName || 'Phone')}</span>
+          <span class="device-row-meta">Companion · TLS 1.3 · connected</span>
+        </span>
+      </button>`);
+  }
+
+  if (rows.length === 0) {
     list.innerHTML = '<div class="device-empty">No device connected</div>';
     sub.textContent = 'Not connected';
     showView('empty');
     return;
   }
 
-  list.innerHTML = `
-    <button class="device-row active" type="button">
-      ${icon('phone')}
-      <span class="device-row-text">
-        <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
-        <span class="device-row-meta">${device.isWifi ? 'Wi-Fi' : 'USB'} · connected</span>
-      </span>
-    </button>`;
+  list.innerHTML = rows.join('');
+  list.querySelectorAll('.device-row').forEach((row) => {
+    row.addEventListener('click', () => selectTarget(row.dataset.target));
+  });
 
-  sub.textContent = device.model || 'Connected';
+  const onCompanion = state.target === 'companion' && Boolean(companion);
+  const shown = onCompanion ? companion : device;
+  sub.textContent = shown ? (shown.model || shown.deviceName || 'Connected') : 'Not connected';
 
-  $('device-title').textContent = device.model || 'Phone';
-  $('device-sub').textContent = `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`;
+  $('device-title').textContent = onCompanion
+    ? (companion.deviceName || 'Phone')
+    : (device ? (device.model || 'Phone') : 'Phone');
+  $('device-sub').textContent = onCompanion
+    ? `Connected over the companion channel · ${companion.ip || ''}`
+    : `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`;
 
   const transport = $('device-transport');
-  transport.innerHTML = `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`;
+  transport.innerHTML = onCompanion
+    ? `${icon('plug')}<span>Companion</span>`
+    : `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`;
 
-  const battery = device.battery || {};
+  // Say plainly which features this transport can carry.
+  const note = $('companion-capability-note');
+  if (note) {
+    note.style.display = companion ? '' : 'none';
+    const text = $('companion-capability-text');
+    if (text) {
+      text.textContent = onCompanion
+        ? 'The clipboard and file transfers work over this connection. ' +
+          'Screen mirroring and the phone file browser still need the debugging connection.'
+        : 'The companion connection is live too - click it above to work with the phone over the encrypted channel.';
+    }
+  }
+
+  // The phone details come from the debugging connection only.
+  const battery = onCompanion ? {} : (device.battery || {});
   $('t-battery').textContent = battery.level != null ? `${battery.level}%` : '—';
-  $('t-android').textContent = device.androidVersion || '—';
-  $('t-storage').textContent = device.storage?.free || '—';
-  $('t-rom').textContent = device.colorOsVersion || '—';
+  $('t-android').textContent = onCompanion ? '—' : (device.androidVersion || '—');
+  $('t-storage').textContent = onCompanion ? '—' : (device.storage?.free || '—');
+  $('t-rom').textContent = onCompanion ? '—' : (device.colorOsVersion || '—');
 
   $('files-dest-label').textContent = '/sdcard/Download';
+}
+
+/**
+ * Chooses which connection the app acts on.
+ *
+ * The same phone can be reachable twice at once: over the debugging
+ * connection and over the encrypted companion channel. Each carries different
+ * things, so the user picks which one they are working with.
+ */
+function selectTarget(target) {
+  if (state.target === target) return;
+  state.target = target;
+
+  renderDevice();
+  updateCompanionNotes();
+
+  // The panels that depend on the connection reload for the new one.
+  if (state.view === 'files') refreshBrowser();
+  if (state.view === 'clipboard') {
+    loadClipboardHistory();
+    refreshClipboardStatus();
+  }
+  if (state.view === 'notifications') loadNotificationHistory();
 }
 
 function setDevice(device) {
@@ -777,13 +887,17 @@ async function refreshCompanionInfo() {
 function applyCompanionInfo(info) {
   if (!info) return;
   state.companionConnected = Boolean(info.connected);
+  state.companion = state.companionConnected ? (info.clients && info.clients[0]) || null : null;
+  renderDevice();
+  updateCompanionNotes();
   const pill = $('companion-pill');
   const detail = $('companion-detail');
   const badge = $('companion-badge');
   const codeEl = $('companion-code');
   const destEl = $('companion-dest-path');
+  const qrCard = $('companion-qr-card');
 
-  if (codeEl) codeEl.textContent = info.code || '099368';
+  if (codeEl) codeEl.textContent = info.code || '—';
   if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
 
   if (info.connected) {
@@ -792,7 +906,22 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Connected';
       pill.className = 'pill syncing';
     }
-    if (detail) {
+    // The clipboard only syncs while the phone's keyboard is the default one.
+    if (client && client.clipboardAccess === false) {
+      if (pill) {
+        pill.textContent = 'Connected';
+        pill.className = 'pill idle';
+      }
+      if (detail) {
+        detail.textContent =
+          'Connected over TLS - but the phone is not set to the A+ Connect keyboard, ' +
+          'so the clipboard will not sync. Set it in the phone: Settings, System, ' +
+          'Languages & input, Default keyboard.';
+      }
+    }
+    // Nothing to pair while a phone is already connected.
+    if (qrCard) qrCard.style.display = 'none';
+    if (detail && client?.clipboardAccess !== false) {
       detail.textContent = `Connected to ${client?.deviceName || 'Phone'} (${client?.ip || info.address}) over TLS 1.3`;
     }
     if (badge) {
@@ -803,17 +932,23 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Listening';
       pill.className = 'pill idle';
     }
+    // Nothing is paired yet: show the pairing code straight away.
+    if (qrCard && qrCard.style.display === 'none') {
+      qrCard.style.display = '';
+      refreshPairingQr();
+    }
     if (detail) {
       detail.textContent = `Ready on ${info.address}:${info.port}. Enter pairing code on phone.`;
     }
     if (badge) {
-      badge.innerHTML = `Code: <strong id="companion-code">${info.code || '099368'}</strong>`;
+      badge.innerHTML = `Code: <strong id="companion-code">${info.code || '—'}</strong>`;
     }
   } else {
     if (pill) {
       pill.textContent = 'Offline';
       pill.className = 'pill disconnected';
     }
+    if (qrCard) qrCard.style.display = 'none';
     if (detail) {
       detail.textContent = 'Companion TLS server is not running.';
     }
@@ -860,9 +995,45 @@ function initNavigation() {
     el.addEventListener('click', () => showView(el.dataset.view));
   });
 
+  // The pairing QR: shown in the "add a device" dialog and, when nothing is
+  // connected yet, right in the clipboard panel.
+  async function refreshPairingQr() {
+    if (!window.api.getCompanionQr) return null;
+    try {
+      const result = await window.api.getCompanionQr();
+      if (!result || !result.success) return null;
+
+      const image = $('pair-qr-image');
+      if (image) image.src = result.dataUrl;
+      const code = $('pair-qr-code');
+      if (code) code.textContent = result.info?.code || '------';
+      const hint = $('pair-qr-hint');
+      if (hint) {
+        hint.textContent = `${result.info?.pcName || 'This PC'} at ${result.info?.host}:${result.info?.port}`;
+      }
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  // Only one panel may show at a time - set that up before the first click.
+  {
+    const active = document.querySelector('.tab.active');
+    const activeTab = active ? active.dataset.tab : 'qr';
+    $('tab-qr').hidden = activeTab !== 'qr';
+    $('tab-wireless').hidden = activeTab !== 'wireless';
+    $('tab-usb').hidden = activeTab !== 'usb';
+  }
+
   for (const id of ['btn-add-device', 'btn-add-device-2', 'btn-add-device-3']) {
     const el = $(id);
-    if (el) el.addEventListener('click', () => openModal('modal-device'));
+    if (el) {
+      el.addEventListener('click', () => {
+        openModal('modal-device');
+        refreshPairingQr();
+      });
+    }
   }
 
   $('btn-settings').addEventListener('click', () => {
@@ -928,6 +1099,7 @@ function initPairing() {
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      $('tab-qr').hidden = tab.dataset.tab !== 'qr';
       $('tab-wireless').hidden = tab.dataset.tab !== 'wireless';
       $('tab-usb').hidden = tab.dataset.tab !== 'usb';
     });
@@ -1220,6 +1392,58 @@ function initClipboard() {
         const destEl = $('companion-dest-path');
         if (destEl) destEl.textContent = newDir;
         toast(`Destination set to ${newDir}`);
+      }
+    });
+  }
+
+  const showQrButton = $('btn-show-qr');
+  const hideQrButton = $('btn-hide-qr');
+  const qrCard = $('companion-qr-card');
+  const qrImage = $('companion-qr');
+
+  if (showQrButton) {
+    showQrButton.addEventListener('click', async () => {
+      if (!window.api.getCompanionQr) return;
+      const result = await window.api.getCompanionQr();
+      if (!result || !result.success) {
+        toast('Could not create the pairing code', 'err');
+        return;
+      }
+      if (qrImage) qrImage.src = result.dataUrl;
+      if (qrCard) qrCard.style.display = '';
+    });
+  }
+
+  if (hideQrButton) {
+    hideQrButton.addEventListener('click', () => {
+      if (qrCard) qrCard.style.display = 'none';
+    });
+  }
+
+  const sendFileButton = $('btn-send-file-to-phone');
+  if (sendFileButton) {
+    sendFileButton.addEventListener('click', async () => {
+      if (!window.api.pickAndSendFileToPhone) return;
+      const result = await window.api.pickAndSendFileToPhone();
+      if (result && result.canceled) return;
+      if (result && result.success) {
+        toast(`Sent ${result.name} to the phone`);
+      } else {
+        toast('Could not send the file', 'err');
+      }
+    });
+  }
+
+  const sendButton = $('btn-send-to-phone');
+  if (sendButton) {
+    sendButton.addEventListener('click', async () => {
+      if (!window.api.pickAndSendFileToPhone) return;
+      const result = await window.api.pickAndSendFileToPhone();
+      if (result && result.canceled) return;
+      if (result && result.success) {
+        toast(`Sent ${result.name} to the phone`);
+      } else {
+        toast('Could not send the file', 'err');
       }
     });
   }

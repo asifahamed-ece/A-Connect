@@ -63,6 +63,33 @@ class CompanionSettings(context: Context) {
         get() = prefs.getString(KEY_DEVICE_NAME, "") ?: ""
         set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
 
+    /**
+     * The secret this phone shares with the computer, used to prove on every
+     * later connection that it is the same phone. It is sent once, during the
+     * pairing, and never again.
+     */
+    var sharedSecret: String
+        get() = prefs.getString(KEY_SECRET, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_SECRET, value).apply()
+
+    /**
+     * The folder the user picked for files received from the computer, as a
+     * document tree the app keeps a permission for. Empty means the app's own
+     * downloads folder.
+     */
+    var downloadFolderUri: String
+        get() = prefs.getString(KEY_DOWNLOAD_FOLDER, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_DOWNLOAD_FOLDER, value).apply()
+
+    /** True once the phone has been paired and holds the secret. */
+    val isPaired: Boolean
+        get() = sharedSecret.isNotEmpty()
+
+    /** Forgets the pairing, so the next connection pairs again with the code. */
+    fun clearSecret() {
+        prefs.edit().remove(KEY_SECRET).apply()
+    }
+
     /** The paired computer, or null when this phone is not paired yet. */
     var pairing: Pairing?
         get() {
@@ -125,6 +152,8 @@ class CompanionSettings(context: Context) {
         private const val KEY_CODE = "code"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_DEVICE_NAME = "device_name"
+        private const val KEY_SECRET = "shared_secret"
+        private const val KEY_DOWNLOAD_FOLDER = "download_folder"
         private const val KEY_PC_ID = "pc_id"
         private const val KEY_FINGERPRINT = "fingerprint"
         private const val KEY_HISTORY = "clip_history"

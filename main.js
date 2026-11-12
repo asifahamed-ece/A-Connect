@@ -197,6 +197,14 @@ function setupServiceEvents() {
     sendToRenderer('event:mirror-started', data);
   });
 
+  scrcpy.on('error', (err) => {
+    // Without this listener Node treats an unhandled 'error' event as fatal
+    // and the whole app dies with a JavaScript error dialog.
+    console.error('[scrcpy] error:', err.message);
+    sendToRenderer('event:mirror-error', { message: err.message });
+    updateTrayMenu();
+  });
+
   scrcpy.on('stopped', (data) => {
     updateTrayMenu();
     sendToRenderer('event:mirror-stopped', data);
@@ -249,14 +257,43 @@ function setupServiceEvents() {
 
   companion.on('client-paired', (data) => {
     console.log(`[companion] paired phone: ${data.deviceName} (${data.deviceId})`);
+    // One transport per event: once the companion is up, notifications come
+    // over it, so the ADB poller stands down rather than reporting everything
+    // twice.
+    notifications.stop();
     updateTrayMenu();
     sendToRenderer('event:companion-paired', data);
   });
 
+  companion.on('error', (err) => {
+    // The companion server failing (a port clash, a missing certificate)
+    // must never take the desktop app down with it.
+    console.error('[companion] error:', err.message);
+    updateTrayMenu();
+  });
+
   companion.on('client-disconnected', (data) => {
     console.log(`[companion] disconnected phone: ${data.deviceId}`);
+    // The companion is gone. If a phone is still on USB, the ADB poller takes
+    // the notifications back.
+    adb.getDevices()
+      .then((devices) => {
+        if (devices && devices.length > 0) notifications.start(devices[0].id);
+      })
+      .catch(() => {});
     updateTrayMenu();
     sendToRenderer('event:companion-disconnected', data);
+  });
+
+  // The companion channel's notifications join the same history and the same
+  // renderer event the ADB path uses, so the Notifications panel needs no
+  // change at all.
+  companion.on('notification-received', (notif) => {
+    notifications.addFromCompanion(notif);
+  });
+
+  companion.on('notification-dismissed', ({ id }) => {
+    notifications.removeById(id);
   });
 
   companion.on('file-transfer-start', (data) => {
@@ -375,15 +412,42 @@ function setupIpcHandlers() {
     notifications.clearHistory();
     return { success: true };
   });
-  ipcMain.handle('notifications:dismiss', async (_, id) => ({
-    success: notifications.dismiss(id)
-  }));
+  ipcMain.handle('notifications:dismiss', async (_, id) => {
+    // A notification that came from the phone has to be dismissed on the phone
+    // too, or it stays in the shade and comes straight back.
+    const entry = notifications.history.find((n) => n.id === id);
+    if (entry && entry.fromCompanion) companion.dismissNotification(id);
+    return { success: notifications.dismiss(id) };
+  });
 
   // Companion IPC Handlers
   ipcMain.handle('companion:getInfo', async () => companion.getInfo());
   ipcMain.handle('companion:start', async (_, port) => {
     companion.start(port);
     return companion.getInfo();
+  });
+  ipcMain.handle('companion:qr', async () => {
+    try {
+      const dataUrl = await companion.pairingQrDataUrl();
+      return { success: true, dataUrl, info: companion.pairingInfo() };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  });
+  ipcMain.handle('companion:sendFile', async (_, filePath) => {
+    const sent = companion.sendFile(filePath);
+    return { success: sent, filePath };
+  });
+  ipcMain.handle('companion:pickAndSendFile', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Send a file to the phone',
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
+
+    const filePath = result.filePaths[0];
+    const sent = companion.sendFile(filePath);
+    return { success: sent, filePath, name: require('path').basename(filePath) };
   });
   ipcMain.handle('companion:stop', async () => {
     companion.stop();

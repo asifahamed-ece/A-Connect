@@ -13,3 +13,8 @@ Thumbs.db
 .cache/
 tmp/
 temp/
+
+# The keyboard fork's upstream checkout (75 MB, GPL-3.0). Reproduce it with:
+#   git clone --depth 1 --branch v4.2 https://github.com/HeliBorg/HeliBoard.git keyboard/heliboard
+#   python3 keyboard/patch-heliboard.py
+keyboard/heliboard/

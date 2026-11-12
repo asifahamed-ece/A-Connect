@@ -7,6 +7,9 @@ const fs = require('fs');
 
 const execFileAsync = promisify(execFile);
 
+/** How long to wait before starting the debugging bridge again after it dies. */
+const BRIDGE_RETRY_MS = 5000;
+
 // Electron's clipboard API is not usable as a bridge on Linux: on Wayland the
 // browser only observes the selection while it holds seat focus, so it reads ""
 // while other applications copy, and its own writes never reach the compositor.
@@ -60,6 +63,11 @@ class ClipboardSyncService extends EventEmitter {
     this.lastPhoneText = '';
     this.history = [];
     this.companion = null;
+
+    // Guards the transport switch against re-entering itself.
+    this.switchingTransport = false;
+    // A bridge that just died is not started again straight away.
+    this.bridgeRetryAt = 0;
   }
 
   setCompanion(companion) {
@@ -80,6 +88,7 @@ class ClipboardSyncService extends EventEmitter {
   }
 
   ensurePolling() {
+    this.syncTransport();
     const hasTarget = Boolean(this.child || (this.companion && this.companion.isConnected));
     if (this.enabled && hasTarget) {
       if (!this.pollTimer) {
@@ -119,8 +128,39 @@ class ClipboardSyncService extends EventEmitter {
     this.lastDesktopText = await this.readClipboard();
     if (this.deviceId !== deviceId) return; // stopped while the read was in flight
 
-    this.spawnBridge();
+    this.syncTransport();
     this.ensurePolling();
+  }
+
+  /**
+   * Only one transport may carry the clipboard.
+   *
+   * The debugging bridge reads the phone's clipboard over ADB; the companion
+   * channel gets the same copy from the phone's keyboard. Running both means
+   * every copy is delivered twice and the desktop cannot tell which path a
+   * copy came from. The companion wins when it is connected, because that is
+   * the connection that works without debugging.
+   */
+  syncTransport() {
+    // The bridge's exit calls back into the status, which calls this again:
+    // without a guard the two recurse until the process dies.
+    if (this.switchingTransport) return;
+    this.switchingTransport = true;
+
+    try {
+      const companionLive = Boolean(this.companion && this.companion.isConnected);
+
+      if (companionLive) {
+        if (this.child) this.stopBridge();
+        return;
+      }
+
+      const wanted = this.enabled && Boolean(this.deviceId);
+      const rested = Date.now() >= this.bridgeRetryAt;
+      if (wanted && !this.child && rested) this.spawnBridge();
+    } finally {
+      this.switchingTransport = false;
+    }
   }
 
   stopBridge() {
@@ -292,6 +332,7 @@ class ClipboardSyncService extends EventEmitter {
     child.on('exit', (code) => {
       if (this.child === child) {
         this.child = null;
+        this.bridgeRetryAt = Date.now() + BRIDGE_RETRY_MS;
         this.setStatus('disconnected', `Clipboard bridge stopped (code ${code})`);
       }
     });
@@ -375,13 +416,14 @@ class ClipboardSyncService extends EventEmitter {
       this.lastPhoneText = text;
       let sent = false;
 
+      // One transport per event. Sending over both would write the text to
+      // the phone twice, and the phone's copy watcher would treat the copy it
+      // received over ADB as a fresh user copy and send it back.
       if (this.companion && this.companion.isConnected) {
         if (this.companion.sendClipboard(text)) {
           sent = true;
         }
-      }
-
-      if (this.child) {
+      } else if (this.child) {
         try {
           this.child.send({ cmd: 'set', text });
           sent = true;

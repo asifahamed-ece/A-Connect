@@ -10,10 +10,12 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.view.inputmethod.InputMethodManager
 import android.text.TextUtils
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.background
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -70,6 +72,8 @@ import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -117,9 +121,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.aplusconnect.companion.clip.ClipboardEventWatcher
 import com.aplusconnect.companion.data.ClipHistoryEntry
 import com.aplusconnect.companion.data.CompanionSettings
+import com.aplusconnect.companion.protocol.PairingPayload
+import com.aplusconnect.companion.qr.QrScannerView
 import com.aplusconnect.companion.service.CompanionService
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -233,7 +238,7 @@ fun MainScreen(settings: CompanionSettings) {
     var historyItems by remember { mutableStateOf(settings.getHistory()) }
     var showHistoryDialog by remember { mutableStateOf(false) }
 
-    var accessibilityGranted by remember { mutableStateOf(isAccessibilityEnabled(context)) }
+    var accessibilityGranted by remember { mutableStateOf(isDefaultKeyboard(context)) }
     var batteryOptimized by remember { mutableStateOf(isBatteryOptimized(context)) }
     var clipboardSyncEnabled by remember { mutableStateOf(true) }
 
@@ -243,9 +248,44 @@ fun MainScreen(settings: CompanionSettings) {
     var uploadProgress by remember { mutableFloatStateOf(0f) }
     var uploadStatusMessage by remember { mutableStateOf<String?>(null) }
 
+    // Pairing by QR code
+    var showScanner by remember { mutableStateOf(false) }
+
     // Quick text send dialog
     var showSendTextDialog by remember { mutableStateOf(false) }
     var customTextToSend by remember { mutableStateOf("") }
+
+    // Where files arriving from the computer are stored. The system folder
+    // picker hands back a document tree the app keeps a permission for.
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                // Some providers do not offer a persistable permission; the
+                // folder still works for this session.
+            }
+            settings.downloadFolderUri = uri.toString()
+            Toast.makeText(context, "Received files will save to the chosen folder", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // The camera is only used while the pairing screen is open.
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            showScanner = true
+        } else {
+            Toast.makeText(context, "The camera is needed to scan the pairing code", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -287,7 +327,7 @@ fun MainScreen(settings: CompanionSettings) {
             lastDirection = CompanionService.Status.lastDirection
             historyItems = settings.getHistory()
 
-            accessibilityGranted = isAccessibilityEnabled(context)
+            accessibilityGranted = isDefaultKeyboard(context)
             batteryOptimized = isBatteryOptimized(context)
             delay(500L)
         }
@@ -383,7 +423,7 @@ fun MainScreen(settings: CompanionSettings) {
                     onClipboardToggle = { clipboardSyncEnabled = it },
                     accessibilityGranted = accessibilityGranted,
                     batteryOptimized = batteryOptimized,
-                    onOpenAccessibility = { openAccessibilitySettings(context) },
+                    onOpenAccessibility = { openKeyboardPicker(context) },
                     onAllowBattery = { requestIgnoreBatteryOptimizations(context) },
                     isDark = isDark,
                     surfaceColor = surfaceColor,
@@ -452,12 +492,67 @@ fun MainScreen(settings: CompanionSettings) {
                         historyItems = emptyList()
                         Toast.makeText(context, "Clipboard history cleared", Toast.LENGTH_SHORT).show()
                     },
+                    downloadFolder = settings.downloadFolderUri,
+                    onPickDownloadFolder = { folderPicker.launch(null) },
+                    onScanQr = {
+                        cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                    },
+                    keyboardActive = accessibilityGranted,
+                    onOpenKeyboardPicker = { openKeyboardPicker(context) },
                     surfaceColor = surfaceColor,
                     elevatedColor = elevatedColor,
                     borderColor = borderColor,
                     textPrimary = textPrimary,
                     textSecondary = textSecondary,
                     textMuted = textMuted
+                )
+            }
+        }
+    }
+
+    // Pairing by QR code: the scanner fills the address, the port and the
+    // one time code, and pins the computer's certificate straight away.
+    if (showScanner) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            QrScannerView(
+                onScanned = { text ->
+                    showScanner = false
+                    val info = PairingPayload.fromJson(text)
+                    if (info == null) {
+                        Toast.makeText(context, "That is not an A+ Connect pairing code", Toast.LENGTH_SHORT).show()
+                    } else {
+                        if (info.fingerprint.isNotEmpty() && info.pcId.isNotEmpty()) {
+                            // The QR carries the computer's certificate, so it
+                            // can be pinned before the first connection.
+                            settings.remember(info.pcId, info.fingerprint)
+                        }
+                        settings.host = info.host
+                        settings.port = info.port
+                        settings.pairingCode = info.code
+                        isConnecting = true
+                        CompanionService.reconnect(context)
+                        Toast.makeText(context, "Pairing with ${info.pcName}…", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            IconButton(
+                onClick = { showScanner = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(20.dp)
+                    .size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close the scanner",
+                    tint = Color.White
                 )
             }
         }
@@ -894,13 +989,17 @@ fun InterconnectTab(
             modifier = Modifier.padding(start = 4.dp, top = 4.dp)
         )
 
-        // Accessibility Tile
+        // The keyboard is what carries the clipboard privilege.
         PermissionTile(
             icon = Icons.Default.Bolt,
-            title = "Copy Event Watcher",
-            subtitle = if (accessibilityGranted) "Accessibility service active" else "Required to detect copies in background",
+            title = "A+ Connect Keyboard",
+            subtitle = if (accessibilityGranted) {
+                "Active - copies sync to the computer with no tap"
+            } else {
+                "Pick it as your keyboard so copies sync with no tap"
+            },
             isGranted = accessibilityGranted,
-            actionLabel = "ENABLE",
+            actionLabel = if (accessibilityGranted) "ACTIVE" else "SET",
             onAction = onOpenAccessibility,
             surfaceColor = surfaceColor,
             elevatedColor = elevatedColor,
@@ -1150,6 +1249,11 @@ fun SettingsTab(
     onForgetPairing: () -> Unit,
     historyCount: Int,
     onClearHistory: () -> Unit,
+    downloadFolder: String,
+    onPickDownloadFolder: () -> Unit,
+    onScanQr: () -> Unit,
+    keyboardActive: Boolean,
+    onOpenKeyboardPicker: () -> Unit,
     surfaceColor: Color,
     elevatedColor: Color,
     borderColor: Color,
@@ -1204,6 +1308,41 @@ fun SettingsTab(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // The live state of the connection, so pairing shows what is
+                // happening instead of looking like nothing happened.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isConnecting) {
+                        CircularProgressIndicator(
+                            color = ColorOSGreen,
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(
+                                    if (isConnected) ColorOSGreen else textMuted,
+                                    RoundedCornerShape(5.dp)
+                                )
+                        )
+                    }
+                    Text(
+                        when {
+                            isConnecting -> "Pairing with the computer…"
+                            isConnected -> "Connected to the computer"
+                            else -> "Not connected"
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isConnected) ColorOSGreen else textSecondary
+                    )
+                }
+
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
@@ -1242,6 +1381,17 @@ fun SettingsTab(
                         modifier = Modifier.weight(0.6f)
                     )
                 }
+
+                Button(
+                    onClick = onScanQr,
+                    colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Text("Scan pairing QR", fontWeight = FontWeight.Bold, color = textPrimary)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
                     onClick = { onSaveAndConnect(host, port, code) },
@@ -1285,6 +1435,39 @@ fun SettingsTab(
             }
         }
 
+        // Where files that arrive from the computer are stored.
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, RoundedCornerShape(18.dp))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Save received files to", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                    Text(
+                        if (downloadFolder.isEmpty()) "The app's own downloads folder"
+                        else downloadFolder.substringAfterLast('/').ifEmpty { "Chosen folder" },
+                        fontSize = 12.sp,
+                        color = textSecondary,
+                        maxLines = 1
+                    )
+                }
+
+                Button(
+                    onClick = onPickDownloadFolder,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Change…", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                }
+            }
+        }
+
         // History Management
         Text("CLIPBOARD HISTORY", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted, letterSpacing = 0.8.sp, modifier = Modifier.padding(start = 4.dp))
 
@@ -1311,6 +1494,59 @@ fun SettingsTab(
                 ) {
                     Text("Clear All", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ColorOSError)
                 }
+            }
+        }
+
+        // Clipboard access, and why there is no accessibility option.
+        Text("CLIPBOARD ACCESS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textMuted, letterSpacing = 0.8.sp, modifier = Modifier.padding(start = 4.dp))
+
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, RoundedCornerShape(18.dp))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("A+ Connect Keyboard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                        Text(
+                            if (keyboardActive) "Active - copies sync with no tap"
+                            else "Not selected - copies need an extra tap",
+                            fontSize = 12.sp,
+                            color = if (keyboardActive) ColorOSGreen else textSecondary
+                        )
+                    }
+
+                    Button(
+                        onClick = onOpenKeyboardPicker,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            if (keyboardActive) "ACTIVE" else "SET",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = textPrimary
+                        )
+                    }
+                }
+
+                Text(
+                    "Android lets only the default keyboard read the clipboard in the background, so the A+ Connect Keyboard is what carries a copy to the computer. There is deliberately no accessibility option: an accessibility service makes the phone refuse contactless payments, so this app never asks for one.",
+                    fontSize = 11.sp,
+                    color = textSecondary
+                )
+
+                Text(
+                    "Updating this app can reset the default keyboard to the previous one. If copies stop syncing with no tap, set the A+ Connect Keyboard again here.",
+                    fontSize = 11.sp,
+                    color = textMuted
+                )
             }
         }
 
@@ -1676,21 +1912,36 @@ private fun queryFileName(context: Context, uri: Uri): String {
     return name
 }
 
-private fun isAccessibilityEnabled(context: Context): Boolean {
-    val service = "${context.packageName}/${ClipboardEventWatcher::class.java.canonicalName}"
-    val enabledServices = Settings.Secure.getString(
-        context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-    val splitter = TextUtils.SimpleStringSplitter(':')
-    splitter.setString(enabledServices)
-    while (splitter.hasNext()) {
-        val entry = splitter.next()
-        if (entry.equals(service, ignoreCase = true) || entry.contains("ClipboardEventWatcher")) {
-            return true
-        }
+/**
+ * Opens the keyboard picker so the user can choose the companion keyboard.
+ *
+ * This is deliberately not the accessibility settings: an accessibility
+ * service makes Android block contactless payments, so the app does not use
+ * one and does not ask for one.
+ */
+private fun openKeyboardPicker(context: Context) {
+    try {
+        val imm = context.getSystemService(InputMethodManager::class.java)
+        imm?.showInputMethodPicker()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Could not open the keyboard picker", Toast.LENGTH_SHORT).show()
     }
-    return false
+}
+
+/**
+ * Whether the A+ Connect keyboard is the default keyboard.
+ *
+ * The keyboard is its own app (a patched HeliBoard), and *it* is what Android
+ * lets read the clipboard in the background. This app only receives what the
+ * keyboard hands over, so this is the state that decides whether copies sync
+ * with no tap.
+ */
+private fun isDefaultKeyboard(context: Context): Boolean {
+    val current = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.DEFAULT_INPUT_METHOD
+    ) ?: return false
+    return com.aplusconnect.companion.clip.KeyboardBridge.PACKAGES.any { current.startsWith(it) }
 }
 
 private fun isBatteryOptimized(context: Context): Boolean {
@@ -1699,17 +1950,6 @@ private fun isBatteryOptimized(context: Context): Boolean {
         !pm.isIgnoringBatteryOptimizations(context.packageName)
     } else {
         false
-    }
-}
-
-private fun openAccessibilitySettings(context: Context) {
-    try {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        Toast.makeText(context, "Could not open Accessibility settings", Toast.LENGTH_SHORT).show()
     }
 }
 

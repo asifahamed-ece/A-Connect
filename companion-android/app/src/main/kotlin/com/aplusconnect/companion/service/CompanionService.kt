@@ -3,6 +3,8 @@ package com.aplusconnect.companion.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.graphics.drawable.Icon
 import android.app.Service
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -14,10 +16,19 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.aplusconnect.companion.R
+import com.aplusconnect.companion.clip.ClipboardReadActivity
+import com.aplusconnect.companion.clip.ClipboardBridgeReceiver
+import com.aplusconnect.companion.clip.KeyboardBridge
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.net.CompanionClient
+import com.aplusconnect.companion.net.DownloadDestination
+import com.aplusconnect.companion.net.IncomingFile
 import com.aplusconnect.companion.protocol.ClipboardPayload
 import com.aplusconnect.companion.protocol.ClipboardPayloads
+import com.aplusconnect.companion.protocol.FeaturePayloads
+import com.aplusconnect.companion.protocol.Protocol
+import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -40,6 +51,22 @@ class CompanionService : Service() {
         @Volatile
         var lastSyncedText: String? = null
 
+        /** The last file that arrived from the computer. */
+        @Volatile
+        var lastReceivedFile: String? = null
+
+        /** The last text the computer copied, for the keyboard to offer. */
+        @Volatile
+        var lastPcClipboard: String? = null
+
+        /** The newest notification the phone forwarded, for the app UI. */
+        @Volatile
+        var lastNotification: String? = null
+
+        /** A short history of what the computer copied. */
+        @Volatile
+        var pcClipboardHistory: List<String> = emptyList()
+
         @Volatile
         var lastSyncedTime: Long = 0L
 
@@ -48,14 +75,51 @@ class CompanionService : Service() {
     }
 
     private lateinit var settings: CompanionSettings
+    private lateinit var incomingFile: IncomingFile
+    private lateinit var destination: DownloadDestination
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
+    private var reconnectRunnable: Runnable? = null
+
+    /** Guards the pending clipboard and the last sent hash. */
+    private val stateLock = Any()
+
+    /**
+     * Where clipboard sends happen.
+     *
+     * The keyboard's broadcast is delivered on the main thread, so the send
+     * cannot run there (NetworkOnMainThreadException closes the session), and
+     * it must not run on the reader thread either, which is blocked reading.
+     */
+    private val sendThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-send").apply { isDaemon = true }
+    }
     private var pendingPayload: ClipboardPayload? = null
+
+    /**
+     * Notifications waiting for the connection, oldest first.
+     *
+     * A notification that arrives while the computer is offline must still
+     * reach it, once: the queue keeps the order, and a notification that is
+     * updated replaces its own queued copy rather than piling up.
+     */
+    private val notificationQueue = ArrayDeque<Pair<String, JSONObject>>()
 
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
+        incomingFile = IncomingFile(java.io.File(cacheDir, "incoming"))
+        destination = DownloadDestination(this)
         instance = this
+
+        // Anything that arrived while the service was not running goes to the
+        // front of the queue, so it still reaches the computer.
+        val early = synchronized(earlyNotifications) {
+            val copy = earlyNotifications.toList()
+            earlyNotifications.clear()
+            copy
+        }
+        synchronized(stateLock) { notificationQueue.addAll(early) }
 
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
@@ -73,7 +137,12 @@ class CompanionService : Service() {
             }
         }
         val text = intent?.getStringExtra(EXTRA_CLIPBOARD)
-        if (text != null) send(text)
+        if (text != null) {
+            // The broadcast arrives on the main thread, and Android refuses a
+            // socket write there: it would kill the connection. Every send
+            // happens on this thread instead.
+            sendThread.execute { send(text) }
+        }
         return START_STICKY
     }
 
@@ -88,6 +157,10 @@ class CompanionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun connect() {
+        // One client at a time: stacking them leaves a closed socket behind
+        // that looks like a dropped connection.
+        if (client != null) return
+
         val host = settings.host
         if (host.isEmpty()) {
             Log.i(TAG, "no computer configured yet")
@@ -121,6 +194,32 @@ class CompanionService : Service() {
             deviceName = resolvedName,
             code = settings.pairingCode,
             pairing = settings.pairing,
+            sharedSecret = settings.sharedSecret,
+            clipboardAccess = isDefaultKeyboard(),
+            onSecretCreated = { secret -> settings.sharedSecret = secret },
+            onFileStart = { id, name, size, mime ->
+                incomingFile.start(id, name, size, mime)
+            },
+            onFileChunk = { id, index, bytes ->
+                incomingFile.chunk(id, bytes)
+            },
+            onFileDone = { id ->
+                val received = incomingFile.finish(id)
+                if (received != null) {
+                    val saved = destination.save(
+                        received.file,
+                        received.name,
+                        settings.downloadFolderUri,
+                    )
+                    received.file.delete()
+                    if (saved != null) {
+                        Status.lastReceivedFile = received.name
+                        Log.i(TAG, "saved ${received.name}")
+                    } else {
+                        Log.w(TAG, "could not save ${received.name}")
+                    }
+                }
+            },
             onPaired = { pcId, fingerprint ->
                 if (pcId.isNotEmpty()) settings.remember(pcId, fingerprint)
             },
@@ -130,10 +229,16 @@ class CompanionService : Service() {
                     Status.isConnected = true
                     Status.state = "Connected to ${settings.host}"
                     updateNotification("Connected to ${settings.host}")
-                    flushPending()
+                    sendThread.execute { flushPending(); flushNotifications() }
                 }
             },
             onClosed = { reason ->
+                if (reason.contains("auth-failed")) {
+                    // The computer does not know this phone any more: forget
+                    // the secret so the next attempt pairs with the code.
+                    settings.clearSecret()
+                    Log.w(TAG, "the computer refused our proof, pairing again")
+                }
                 if (client === thisClient) {
                     Log.i(TAG, "disconnected: $reason")
                     Status.isConnected = false
@@ -145,15 +250,32 @@ class CompanionService : Service() {
             onClipboardReceived = { text ->
                 applyIncomingClipboard(text)
             },
+            onNotificationAction = { id, action ->
+                PhoneNotificationListener.handleRemote(id, action)
+            },
         )
         client = thisClient
         thisClient.connect()
     }
 
+    /**
+     * The clipboard change listener.
+     *
+     * The platform only delivers this callback to an app that may actually
+     * read the clipboard - which, for us, means while the app is the default
+     * keyboard. So this is the seamless path: no accessibility service, no
+     * tap, no focus steal.
+     */
     private fun applyIncomingClipboard(text: String) {
         if (text.isEmpty()) return
         val payload = ClipboardPayloads.build(text)
-        lastSentHash = payload.hash
+        synchronized(stateLock) { lastSentHash = payload.hash }
+
+        // The keyboard offers what the computer copied.
+        Status.lastPcClipboard = payload.text
+        Status.pcClipboardHistory = (listOf(payload.text) + Status.pcClipboardHistory)
+            .distinct()
+            .take(8)
 
         Status.lastSyncedText = payload.text
         Status.lastSyncedTime = System.currentTimeMillis()
@@ -180,19 +302,57 @@ class CompanionService : Service() {
     }
 
     private fun scheduleReconnect() {
+        if (reconnectRunnable != null) return
         val now = System.currentTimeMillis()
         if (now < reconnectAt) return
         reconnectAt = now + RECONNECT_DELAY_MS
-        android.os.Handler(mainLooper).postDelayed({ connect() }, RECONNECT_DELAY_MS)
+
+        val runnable = Runnable {
+            reconnectRunnable = null
+            connect()
+        }
+        reconnectRunnable = runnable
+        android.os.Handler(mainLooper).postDelayed(runnable, RECONNECT_DELAY_MS)
     }
 
     /** Sends the clipboard to the computer, or queues it if not connected yet. */
-    @Synchronized
     private fun send(text: String) {
         val payload = ClipboardPayloads.build(text)
         if (payload.text.isEmpty()) return
+
+        // The same content is only sent once. Without this, the write the
+        // phone makes when the computer sends something comes straight back.
         if (payload.hash == lastSentHash) return
 
+        val c = client
+        if (c == null || !c.isReady) {
+            synchronized(stateLock) { pendingPayload = payload }
+            Log.i(TAG, "connection not ready; queued clipboard (${payload.text.length} chars)")
+            return
+        }
+
+        // The write happens outside the lock: it can block, and holding the
+        // lock would stall the rest of the service.
+        val sent = try {
+            c.sendClipboard(payload.text)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not send the clipboard: ${e.message}")
+            false
+        }
+
+        synchronized(stateLock) {
+            if (sent) {
+                lastSentHash = payload.hash
+                pendingPayload = null
+            } else {
+                pendingPayload = payload
+            }
+        }
+
+        if (sent) recordHistory(payload)
+    }
+
+    private fun recordHistory(payload: ClipboardPayload) {
         Status.lastSyncedText = payload.text
         Status.lastSyncedTime = System.currentTimeMillis()
         Status.lastDirection = "phone_to_pc"
@@ -204,54 +364,195 @@ class CompanionService : Service() {
                 timestamp = System.currentTimeMillis()
             )
         )
-
-        val c = client
-        if (c != null && c.sendClipboard(payload.text)) {
-            lastSentHash = payload.hash
-            pendingPayload = null
-        } else {
-            Log.i(TAG, "connection not ready; queued clipboard (${payload.text.length} chars)")
-            pendingPayload = payload
-        }
     }
 
-    @Synchronized
     private fun flushPending() {
-        val pending = pendingPayload ?: return
+        val pending = synchronized(stateLock) { pendingPayload } ?: return
+        val c = client
+        if (c == null || !c.isReady) return
+
         if (pending.hash == lastSentHash) {
-            pendingPayload = null
+            synchronized(stateLock) { pendingPayload = null }
             return
         }
-        val c = client
-        if (c != null && c.sendClipboard(pending.text)) {
+
+        val sent = try {
+            c.sendClipboard(pending.text)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not flush the queued clipboard: ${e.message}")
+            false
+        }
+
+        if (sent) {
             Log.i(TAG, "flushed queued clipboard (${pending.text.length} chars)")
-            lastSentHash = pending.hash
-            pendingPayload = null
+            synchronized(stateLock) {
+                lastSentHash = pending.hash
+                pendingPayload = null
+            }
         }
     }
 
-    private fun buildNotification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)
-        .setContentTitle("A+ Connect")
+    /** Forwards one notification, or queues it until the connection is up. */
+    private fun sendNotification(id: String, payload: JSONObject) {
+        Status.lastNotification = payload.optString("title")
+        val c = client
+        if (c == null || !c.isReady) {
+            queueNotification(id, payload)
+            Log.i(TAG, "connection not ready; queued notification $id")
+            return
+        }
+        if (!c.sendMessage(Protocol.TYPE_NOTIFICATION, payload)) {
+            queueNotification(id, payload)
+        }
+    }
+
+    /** Says a notification has gone away, or queues that too. */
+    private fun sendNotificationRemoved(id: String) {
+        val payload = FeaturePayloads.notificationRemoved(id)
+        val c = client
+        if (c == null || !c.isReady) {
+            queueNotification(id, payload)
+            return
+        }
+        if (!c.sendMessage(Protocol.TYPE_NOTIFICATION_REMOVED, payload)) {
+            queueNotification(id, payload)
+        }
+    }
+
+    /**
+     * Adds a notification to the queue, replacing any copy of it that is
+     * already waiting: a notification that is updated twice while the computer
+     * is offline must arrive once, with its latest text.
+     */
+    private fun queueNotification(id: String, payload: JSONObject) {
+        synchronized(stateLock) {
+            notificationQueue.removeAll { it.first == id }
+            notificationQueue.addLast(id to payload)
+        }
+    }
+
+    /** Sends the queued notifications, oldest first, stopping on the first failure. */
+    private fun flushNotifications() {
+        val c = client
+        if (c == null || !c.isReady) return
+        while (true) {
+            val next = synchronized(stateLock) {
+                if (notificationQueue.isEmpty()) null else notificationQueue.removeFirst()
+            } ?: return
+
+            val type = next.second.optString("type", Protocol.TYPE_NOTIFICATION)
+            if (!c.sendMessage(type, next.second)) {
+                synchronized(stateLock) { notificationQueue.addFirst(next) }
+                return
+            }
+        }
+    }
+
+    private fun buildNotification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)        .setContentTitle("A+ Connect")
         .setContentText(text)
         .setSmallIcon(android.R.drawable.ic_menu_edit)
         .setOngoing(true)
+        .addAction(
+            Notification.Action.Builder(
+                Icon.createWithResource(this, R.drawable.ic_aplus_clipboard),
+                "Copy to PC",
+                copyActionIntent(),
+            ).build()
+        )
         .build()
+
+    /**
+     * The "Copy to PC" action.
+     *
+     * Tapping it raises the transparent reader, which takes focus for a moment
+     * and can therefore read the clipboard. This is the path that needs no
+     * accessibility service - and an accessibility service is what makes
+     * Android block contactless payments.
+     */
+    private fun copyActionIntent(): PendingIntent {
+        val intent = Intent(this, ClipboardReadActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        return PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     private fun updateNotification(text: String) {
         val manager = getSystemService(NotificationManager::class.java)
         manager?.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
+    /**
+     * Whether the app is the default keyboard.
+     *
+     * That role is what lets it read the clipboard in the background, so it
+     * is also what the computer is told - otherwise the desktop looks
+     * connected while nothing can sync.
+     */
+    /**
+     * Whether the phone's clipboard can actually reach the computer.
+     *
+     * Only the default keyboard may read the clipboard in the background
+     * (ClipboardService.isDefaultIme reads
+     * Settings.Secure.DEFAULT_INPUT_METHOD), so the clipboard can sync only
+     * while the A+ Connect keyboard is the default one. The computer is told
+     * this, so it can say why instead of looking broken.
+     */
+    private fun isDefaultKeyboard(): Boolean {
+        val current = android.provider.Settings.Secure.getString(
+            contentResolver,
+            android.provider.Settings.Secure.DEFAULT_INPUT_METHOD,
+        ) ?: return false
+        return KeyboardBridge.PACKAGES.any { current.startsWith(it) }
+    }
+
     companion object {
         const val TAG = "AplusConnect"
         private const val CHANNEL_ID = "aplus_connect"
         private const val NOTIFICATION_ID = 7
-        private const val EXTRA_CLIPBOARD = "clipboard"
-        private const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
+        const val EXTRA_CLIPBOARD = "clipboard"
+        const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
         private const val RECONNECT_DELAY_MS = 5000L
 
         private var instance: CompanionService? = null
         private var lastSentHash: String? = null
+
+        /** Notifications that arrived before the service was up. */
+        private val earlyNotifications = ArrayDeque<Pair<String, JSONObject>>()
+
+        /**
+         * Hands one notification to the service, starting it if it is not
+         * running yet so that the queue has somewhere to live and flush from.
+         */
+        fun deliverNotification(context: Context, id: String, payload: JSONObject) {
+            val running = instance
+            if (running != null) {
+                // onNotificationPosted is delivered on the main thread, and a
+                // socket write there throws NetworkOnMainThreadException and
+                // closes the session - the same trap the clipboard hit. Every
+                // write goes through the send thread.
+                running.sendThread.execute { running.sendNotification(id, payload) }
+                return
+            }
+            synchronized(earlyNotifications) {
+                earlyNotifications.removeAll { it.first == id }
+                earlyNotifications.addLast(id to payload)
+            }
+            start(context)
+        }
+
+        /** Hands a notification removal to the service. */
+        fun deliverNotificationRemoved(context: Context, id: String) {
+            val running = instance
+            if (running != null) {
+                running.sendThread.execute { running.sendNotificationRemoved(id) }
+                return
+            }
+            start(context)
+        }
 
         /** Starts the service, so it connects to the computer. */
         fun start(context: Context) {
@@ -276,7 +577,10 @@ class CompanionService : Service() {
         fun deliverClipboard(context: Context, text: String) {
             val running = instance
             if (running != null) {
-                running.send(text)
+                // The Send Text and Paste buttons call this from the UI thread,
+                // and a socket write there throws NetworkOnMainThreadException
+                // and drops the connection. Sends run on the send thread.
+                running.sendThread.execute { running.send(text) }
                 return
             }
             val intent = Intent(context, CompanionService::class.java)

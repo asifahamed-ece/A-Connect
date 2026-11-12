@@ -33,6 +33,8 @@ const FIXTURE_DIR = path.join(
 );
 const KOTLIN_FIXTURE = path.join(FIXTURE_DIR, 'protocol-frames.json');
 const NODE_FIXTURE = path.join(FIXTURE_DIR, 'protocol-frames-node.json');
+const BINARY_FIXTURE = path.join(FIXTURE_DIR, 'frames.json');
+const FEATURE_FIXTURE = path.join(FIXTURE_DIR, 'feature-payloads.json');
 
 function readFrames(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8')).frames;
@@ -136,6 +138,188 @@ function writeNodeFixture() {
   console.log(`wrote ${frames.length} frames to ${NODE_FIXTURE}`);
 }
 
+/**
+ * The shared binary fixture holds one payload in an implementation-neutral
+ * file; both sides must frame it to the same bytes. The Kotlin side asserts
+ * the same literal frame in FrameCodecTest.
+ */
+function checkBinaryFrames() {
+  const fixture = JSON.parse(fs.readFileSync(BINARY_FIXTURE, 'utf8'));
+  assert.strictEqual(fixture.kind, 'binary', 'the binary fixture is not marked binary');
+  const payload = Buffer.from(fixture.hex, 'hex');
+
+  const frame = protocol.encodeBinary(payload);
+  assert.strictEqual(
+    frame.readInt32BE(0),
+    1 + payload.length,
+    'the frame length must count the kind byte and the payload'
+  );
+  assert.strictEqual(frame.readUInt8(4), protocol.KIND_BINARY, 'the kind byte must be binary');
+  assert.strictEqual(frame.toString('hex'), '0000000501000102fa', 'the binary frame bytes changed');
+
+  const decoded = protocol.decodeBinary(frame);
+  assert.ok(decoded && decoded.equals(payload), 'the binary frame did not round trip');
+
+  const jsonFrame = protocol.encode({ v: 2, type: 'ping', id: '1', ts: 1, payload: {} });
+  assert.strictEqual(
+    protocol.decodeBinary(jsonFrame),
+    null,
+    'a JSON frame was read as a binary frame'
+  );
+  assert.strictEqual(protocol.decode(jsonFrame).type, 'ping', 'a JSON frame stopped decoding');
+}
+
+/**
+ * The four features' payloads, against the one fixture both implementations
+ * read. The Kotlin side asserts the same fixture bytes in FeaturePayloadsTest,
+ * so a key that is renamed on one side fails there as well as here.
+ */
+function checkFeaturePayloads() {
+  const expected = JSON.parse(fs.readFileSync(FEATURE_FIXTURE, 'utf8'));
+
+  for (const name of [
+    'NOTIFICATION',
+    'NOTIFICATION_REMOVED',
+    'NOTIFICATION_ACTION',
+    'MEDIA_STATE',
+    'MEDIA_COMMAND',
+    'FILE_LIST_REQUEST',
+    'FILE_LIST',
+    'MIRROR_START',
+    'MIRROR_STOP',
+  ]) {
+    assert.ok(protocol.TYPES[name], `TYPES is missing ${name}`);
+  }
+
+  const notification = protocol.buildNotification({
+    id: 'com.example:7:null',
+    pkg: 'com.example',
+    app: 'Example',
+    title: 'Ada',
+    text: 'hello',
+    ts: 1700000000000,
+    ongoing: false,
+    actions: [
+      { id: 'reply', title: 'Reply' },
+      { id: 'archive', title: 'Archive' },
+    ],
+  });
+  assert.deepStrictEqual(notification, expected.notification, 'the notification payload changed');
+  assert.deepStrictEqual(
+    protocol.parseNotification(expected.notification).actions,
+    expected.notification.actions,
+    'the action order did not survive the parser'
+  );
+  assert.strictEqual(
+    protocol.parseNotification({ pkg: 'com.example' }),
+    null,
+    'a notification without an id parsed'
+  );
+
+  const mediaState = protocol.buildMediaState({
+    app: 'Music',
+    title: 'Song',
+    artist: 'Band',
+    album: 'Album',
+    playing: true,
+    positionMs: 1000,
+    durationMs: 180000,
+  });
+  assert.deepStrictEqual(mediaState, expected.mediaState, 'the media state payload changed');
+  assert.strictEqual(protocol.parseMediaState(mediaState).playing, true, 'playing did not survive');
+
+  const fileList = protocol.buildFileList('root', [
+    { name: 'Pictures', size: 0, isDir: true, mime: '' },
+    { name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
+  ]);
+  assert.deepStrictEqual(fileList, expected.fileList, 'the file list payload changed');
+  assert.strictEqual(
+    protocol.parseFileList(fileList).entries[1].name,
+    'photo.jpg',
+    'the file entries did not survive the parser'
+  );
+}
+
+/**
+ * The envelope version must always come from PROTOCOL_VERSION.
+ *
+ * A literal `version: 1` left behind when the constant moved to 2 makes the
+ * phone refuse the computer's hello-ack with "protocol-version", which looks
+ * exactly like an unreachable computer. This caught five of them.
+ */
+function checkNoHardcodedVersion() {
+  const offenders = [];
+  for (const dir of ['services', 'scripts']) {
+    const full = path.join(__dirname, '..', dir);
+    for (const name of fs.readdirSync(full)) {
+      if (!name.endsWith('.js')) continue;
+      // This file necessarily contains the pattern it looks for.
+      if (name === 'protocol-check.js') continue;
+      const text = fs.readFileSync(path.join(full, name), 'utf8');
+      text.split('\n').forEach((line, index) => {
+        if (/version:\s*\d/.test(line)) offenders.push(`${dir}/${name}:${index + 1}`);
+      });
+    }
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `the envelope version must come from PROTOCOL_VERSION, not a literal: ${offenders.join(', ')}`
+  );
+}
+
+function checkProofRules() {
+  // The same vector the Kotlin side asserts, so a divergence between the two
+  // implementations is a test failure rather than a pairing that mysteriously
+  // fails on one phone.
+  const secret = Buffer.from('s3cr3t-secret', 'utf8');
+  const proof = protocol.computeProof(secret, 'phone-1', 'nonce-1');
+
+  assert.strictEqual(
+    proof,
+    '67f2e8753992a2b530ecd2f2359f2ead1d231e93859227ceaadf086d4f91050d',
+    'the proof is not the expected hmac'
+  );
+  assert.strictEqual(protocol.verifyProof(secret, 'phone-1', 'nonce-1', proof), true, 'a valid proof was refused');
+  assert.strictEqual(
+    protocol.verifyProof(Buffer.from('other', 'utf8'), 'phone-1', 'nonce-1', proof),
+    false,
+    'a proof verified against the wrong secret'
+  );
+  assert.strictEqual(
+    protocol.verifyProof(secret, 'phone-1', 'nonce-2', proof),
+    false,
+    'a proof verified against the wrong nonce'
+  );
+  assert.strictEqual(
+    protocol.verifyProof(secret, 'phone-2', 'nonce-1', proof),
+    false,
+    'a proof verified against the wrong device id'
+  );
+}
+
+function checkPairingPayload() {
+  const info = {
+    pcName: 'Studio PC',
+    host: '192.168.1.39',
+    port: 24443,
+    code: '123456',
+    fingerprint: 'AA:BB:CC',
+    pcId: 'pc-1',
+  };
+
+  const text = JSON.stringify(protocol.buildPairingPayload(info));
+  const parsed = protocol.parsePairingPayload(text);
+
+  assert.deepStrictEqual(parsed, info, 'the pairing payload did not round trip');
+  assert.strictEqual(protocol.parsePairingPayload('hello'), null, 'a foreign payload was accepted');
+  assert.strictEqual(
+    protocol.parsePairingPayload(JSON.stringify({ v: 1, type: 'aplus-pairing', host: '1.2.3.4', port: 24443 })),
+    null,
+    'a payload without a code was accepted'
+  );
+}
+
 function main() {
   const write = process.argv.includes('--write');
 
@@ -148,10 +332,16 @@ function main() {
 
   for (const frame of frames) checkFrame(frame);
   checkClipboardRules();
+  checkBinaryFrames();
+  checkFeaturePayloads();
+  checkNoHardcodedVersion();
+  checkProofRules();
+  checkPairingPayload();
 
   if (write) writeNodeFixture();
 
   console.log(`protocol-check: ${frames.length} frames decoded, round tripped and matched`);
+  console.log('protocol-check: frames matched');
 }
 
 main();

@@ -19,7 +19,8 @@ const protocol = require('../services/companion-protocol');
 const { ensureCertificate } = require('../services/companion-cert');
 
 const PORT = Number(process.argv[2] || 24443);
-const CODE = process.env.PAIRING_CODE || process.argv[3] || '099368';
+const CODE = process.env.PAIRING_CODE || process.argv[3] ||
+  String(Math.floor(100000 + Math.random() * 900000));
 const PC_ID = 'pc-test';
 
 const { certPath, keyPath, fingerprint } = ensureCertificate();
@@ -106,7 +107,7 @@ const server = tls.createServer(
           if (message.payload.code !== CODE) {
             console.log(`[server] refusing: wrong pairing code`);
             socket.write(protocol.encode({
-              version: 1,
+              version: protocol.PROTOCOL_VERSION,
               type: protocol.TYPES.HELLO_ERROR,
               id: 'err',
               ts: Date.now(),
@@ -118,7 +119,7 @@ const server = tls.createServer(
           handshakeDone = true;
           console.log(`[server] paired with ${message.payload.deviceName} (${message.payload.deviceId})`);
           socket.write(protocol.encode({
-            version: 1,
+            version: protocol.PROTOCOL_VERSION,
             type: protocol.TYPES.HELLO_ACK,
             id: 'ack',
             ts: Date.now(),
