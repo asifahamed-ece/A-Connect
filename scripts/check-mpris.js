@@ -49,4 +49,12 @@ assert.strictEqual(playbackStatus(null), 'Stopped', 'no state must be Stopped');
 const empty = toMetadata(null);
 assert.strictEqual(empty['xesam:title'], undefined, 'an empty state must carry no title');
 
+// The cover: the shell draws whatever mpris:artUrl points at.
+const withArt = toMetadata({ ...state, artUrl: 'file:///tmp/cover.jpg' });
+assert.strictEqual(
+  withArt['mpris:artUrl'].value,
+  'file:///tmp/cover.jpg',
+  'the cover URL did not survive'
+);
+
 console.log('mpris mapping: ok');

@@ -129,7 +129,11 @@ class CompanionService : Service() {
         mediaBridge = MediaSessionBridge(
             context = this,
             listener = android.content.ComponentName(this, PhoneNotificationListener::class.java),
-            send = { payload -> sendThread.execute { sendMediaState(payload) } },
+            // Synchronous, so the bridge knows whether the cover really went
+            // out. Every caller of publish() is a background thread (the
+            // ticker, the session callbacks, the send thread), which is what
+            // makes a socket write legal here.
+            send = { payload -> sendMediaState(payload) },
         ).also { it.start() }
 
         val manager = getSystemService(NotificationManager::class.java)
@@ -451,10 +455,10 @@ class CompanionService : Service() {
     }
 
     /** Sends the now-playing state, or drops it when the session is down. */
-    private fun sendMediaState(payload: JSONObject) {
+    private fun sendMediaState(payload: JSONObject): Boolean {
         val c = client
-        if (c == null || !c.isReady) return
-        c.sendMessage(Protocol.TYPE_MEDIA_STATE, payload)
+        if (c == null || !c.isReady) return false
+        return c.sendMessage(Protocol.TYPE_MEDIA_STATE, payload)
     }
 
     /** Sends the queued notifications, oldest first, stopping on the first failure. */

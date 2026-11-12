@@ -26,7 +26,7 @@ import org.json.JSONObject
 class MediaSessionBridge(
     private val context: Context,
     private val listener: ComponentName,
-    private val send: (JSONObject) -> Unit,
+    private val send: (JSONObject) -> Boolean,
 ) {
     data class MediaState(
         val app: String,
@@ -40,6 +40,15 @@ class MediaSessionBridge(
 
     private var manager: MediaSessionManager? = null
     private var controller: MediaController? = null
+
+    /** The track whose cover was already delivered; the cover goes once per track. */
+    private var lastCoverKey: String? = null
+
+    /** The track whose cover is in hand, waiting to be delivered. */
+    private var pendingCoverKey: String? = null
+
+    /** When the last cover attempt was made, so a miss is not retried every second. */
+    private var lastCoverAttemptAt = 0L
 
     @Volatile
     private var running = false
@@ -105,6 +114,7 @@ class MediaSessionBridge(
         }
         manager = null
         controller = null
+        lastCoverKey = null
     }
 
     /** A session worth showing: it is playing, or it is paused mid-track. */
@@ -150,17 +160,100 @@ class MediaSessionBridge(
     /** Sends the current state, when there is one worth sending. */
     fun publish() {
         val state = currentState() ?: return
-        send(
-            FeaturePayloads.mediaState(
-                app = state.app,
-                title = state.title,
-                artist = state.artist,
-                album = state.album,
-                playing = state.playing,
-                positionMs = state.positionMs,
-                durationMs = state.durationMs,
-            )
+        val art = encodeCover()
+        val payload = FeaturePayloads.mediaState(
+            app = state.app,
+            title = state.title,
+            artist = state.artist,
+            album = state.album,
+            playing = state.playing,
+            positionMs = state.positionMs,
+            durationMs = state.durationMs,
+            art = art,
         )
+
+        val sent = send(payload)
+        // Only a cover that actually reached the computer counts as delivered.
+        // Marking it sent while the computer was still connecting would leave
+        // that track without art for its whole length.
+        if (sent && art != null) {
+            lastCoverKey = pendingCoverKey
+            Log.i(TAG, "sent the cover for $pendingCoverKey")
+        }
+    }
+
+    /**
+     * The cover as base64 JPEG, or null when there is none, it is unchanged,
+     * or it was tried recently and is not there yet.
+     *
+     * The shell asks for `mpris:artUrl`, which the computer serves from this.
+     * It goes once per track, not once per position update.
+     */
+    private fun encodeCover(): String? {
+        val metadata = controller?.metadata ?: return null
+        val key = "${metadata.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()}|" +
+            "${metadata.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()}|" +
+            "${metadata.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty()}"
+
+        if (key == lastCoverKey) return null
+
+        // A player often attaches the cover a moment after the track starts,
+        // so a miss is not final. Try again - but not every second.
+        val now = System.currentTimeMillis()
+        if (now - lastCoverAttemptAt < COVER_RETRY_MS) return null
+        lastCoverAttemptAt = now
+
+        val bitmap = coverBitmap(metadata)
+        if (bitmap == null) {
+            Log.i(TAG, "no cover for this track yet")
+            return null
+        }
+
+        return try {
+            val largest = maxOf(bitmap.width, bitmap.height)
+            val scaled = if (largest > COVER_MAX_PX) {
+                val ratio = COVER_MAX_PX.toFloat() / largest
+                android.graphics.Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * ratio).toInt().coerceAtLeast(1),
+                    (bitmap.height * ratio).toInt().coerceAtLeast(1),
+                    true,
+                )
+            } else {
+                bitmap
+            }
+            val out = java.io.ByteArrayOutputStream()
+            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, COVER_QUALITY, out)
+            pendingCoverKey = key
+            android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not encode the cover: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * The cover bitmap, however the session offers it.
+     *
+     * Some players hand over the decoded bitmap, others only a content URI -
+     * YouTube Music does the latter - so both are tried before giving up.
+     */
+    private fun coverBitmap(metadata: MediaMetadata): android.graphics.Bitmap? {
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return it }
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return it }
+
+        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
+            ?: return null
+
+        return try {
+            context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use { stream ->
+                android.graphics.BitmapFactory.decodeStream(stream)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read the cover from $uri: ${e.message}")
+            null
+        }
     }
 
     /**
@@ -215,6 +308,13 @@ class MediaSessionBridge(
     companion object {
         private const val TAG = "AplusConnect"
         private const val TICK_MS = 1000L
+
+        /** Covers are sent at most this wide/tall, to keep the frame small. */
+        private const val COVER_MAX_PX = 512
+        private const val COVER_QUALITY = 85
+
+        /** How often a cover that is not there yet is looked for again. */
+        private const val COVER_RETRY_MS = 10_000L
 
         /**
          * The pure mapping, so it can be tested without a device. A session

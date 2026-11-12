@@ -227,7 +227,7 @@ function parseNotification(payload) {
 }
 
 function buildMediaState(s) {
-  return {
+  const state = {
     type: TYPES.MEDIA_STATE,
     app: s.app,
     title: s.title,
@@ -237,11 +237,13 @@ function buildMediaState(s) {
     positionMs: s.positionMs,
     durationMs: s.durationMs,
   };
+  if (s.art) state.art = s.art;
+  return state;
 }
 
 function parseMediaState(payload) {
   if (!payload || typeof payload.title !== 'string') return null;
-  return {
+  const state = {
     app: payload.app || '',
     title: payload.title,
     artist: payload.artist || '',
@@ -250,6 +252,9 @@ function parseMediaState(payload) {
     positionMs: payload.positionMs || 0,
     durationMs: payload.durationMs || 0,
   };
+  // The cover travels only when it changed, so it is optional.
+  if (payload.art) state.art = payload.art;
+  return state;
 }
 
 function buildFileList(path, entries) {

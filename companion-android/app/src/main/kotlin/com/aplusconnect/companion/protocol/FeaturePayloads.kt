@@ -81,15 +81,22 @@ object FeaturePayloads {
         playing: Boolean,
         positionMs: Long,
         durationMs: Long,
-    ): JSONObject = JSONObject()
-        .put("type", Protocol.TYPE_MEDIA_STATE)
-        .put("app", app)
-        .put("title", title)
-        .put("artist", artist)
-        .put("album", album)
-        .put("playing", playing)
-        .put("positionMs", positionMs)
-        .put("durationMs", durationMs)
+        art: String? = null,
+    ): JSONObject {
+        val payload = JSONObject()
+            .put("type", Protocol.TYPE_MEDIA_STATE)
+            .put("app", app)
+            .put("title", title)
+            .put("artist", artist)
+            .put("album", album)
+            .put("playing", playing)
+            .put("positionMs", positionMs)
+            .put("durationMs", durationMs)
+        // The cover, base64 JPEG, only when it changed. Sending it with every
+        // one second position update would dwarf the state itself.
+        if (art != null) payload.put("art", art)
+        return payload
+    }
 
     fun fileList(path: String, entries: List<FileEntry>): JSONObject = JSONObject()
         .put("type", Protocol.TYPE_FILE_LIST)

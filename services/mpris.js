@@ -14,6 +14,9 @@
  */
 
 const { EventEmitter } = require('events');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const dbus = require('dbus-next');
 
 const { Interface, ACCESS_READ } = dbus.interface;
@@ -41,6 +44,7 @@ function toMetadata(state, trackPath = TRACK_PATH) {
     // MPRIS lengths and positions are microseconds, as signed 64 bit integers.
     metadata['mpris:length'] = new Variant('x', BigInt(Math.round(state.durationMs * 1000)));
   }
+  if (state.artUrl) metadata['mpris:artUrl'] = new Variant('s', state.artUrl);
   return metadata;
 }
 
@@ -48,6 +52,25 @@ function toMetadata(state, trackPath = TRACK_PATH) {
 function playbackStatus(state) {
   if (!state) return 'Stopped';
   return state.playing ? 'Playing' : 'Paused';
+}
+
+/**
+ * Writes a cover to a cache file and returns its file:// URL.
+ *
+ * MPRIS points at the art with `mpris:artUrl`, so the bitmap has to exist
+ * somewhere the shell can read. It is content-addressed, so the same cover is
+ * only written once no matter how often the track is re-announced.
+ */
+function saveArt(base64) {
+  // The user's cache directory, not /tmp: a reboot would wipe the covers and
+  // the shell would lose the art until the next track change.
+  const cacheRoot = process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
+  const dir = path.join(cacheRoot, 'aplus-connect', 'art');
+  fs.mkdirSync(dir, { recursive: true });
+  const hash = crypto.createHash('sha256').update(base64).digest('hex').slice(0, 16);
+  const file = path.join(dir, `${hash}.jpg`);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from(base64, 'base64'));
+  return `file://${file}`;
 }
 
 class RootInterface extends Interface {
@@ -270,6 +293,8 @@ class MprisService extends EventEmitter {
     this.bus = null;
     this.player = null;
     this.state = null;
+    this.artUrl = null;
+    this.artKey = null;
     this.started = false;
   }
 
@@ -300,13 +325,25 @@ class MprisService extends EventEmitter {
 
   /** Takes a state from the phone and tells every listener about it. */
   update(state) {
-    this.state = state;
+    const key = `${state.title}|${state.artist}|${state.album}`;
+    if (state.art) {
+      this.artUrl = saveArt(state.art);
+      this.artKey = key;
+    } else if (key !== this.artKey) {
+      // A different track that arrived without a cover: showing the previous
+      // track's cover would be a lie.
+      this.artUrl = null;
+      this.artKey = key;
+    }
+    this.state = { ...state, artUrl: this.artUrl };
     this.publishChanged();
   }
 
   /** The phone went away: stop claiming something is playing. */
   clear() {
     this.state = null;
+    this.artUrl = null;
+    this.artKey = null;
     this.publishChanged();
   }
 
@@ -353,6 +390,7 @@ module.exports = {
   MprisService,
   toMetadata,
   playbackStatus,
+  saveArt,
   BUS_NAME,
   OBJECT_PATH,
 };
