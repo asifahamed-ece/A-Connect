@@ -46,6 +46,7 @@ const REASONS = {
   ALREADY_PAIRED: 'already-paired',
   NONCE_MISMATCH: 'nonce-mismatch',
   PROTOCOL_VERSION: 'protocol-version',
+  AUTH_FAILED: 'auth-failed',
 };
 
 /** Only the current major version is understood. */
@@ -143,6 +144,28 @@ function truncateToBytes(text, maxBytes) {
   return buf.subarray(0, end).toString('utf8');
 }
 
+/**
+ * The proof a returning phone presents: an HMAC over its id and the nonce of
+ * this connection. The computer stores the secret from the first pairing and
+ * can therefore tell the real phone from anyone who merely knows its id.
+ *
+ * Mirrors Handshake.proofFor in the Android app - the conformance script
+ * checks that both sides produce the same bytes.
+ */
+function computeProof(secret, deviceId, nonce) {
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${deviceId}:${nonce}`, 'utf8')
+    .digest('hex');
+}
+
+function verifyProof(secret, deviceId, nonce, proof) {
+  if (typeof proof !== 'string' || !proof) return false;
+  const expected = computeProof(secret, deviceId, nonce);
+  if (expected.length !== proof.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(proof, 'utf8'));
+}
+
 module.exports = {
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
@@ -154,6 +177,8 @@ module.exports = {
   decode,
   buildClipboardPayload,
   shouldSendClipboard,
+  computeProof,
+  verifyProof,
   normalize,
   truncateToBytes,
 };

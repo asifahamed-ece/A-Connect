@@ -375,13 +375,14 @@ class ClipboardSyncService extends EventEmitter {
       this.lastPhoneText = text;
       let sent = false;
 
+      // One transport per event. Sending over both would write the text to
+      // the phone twice, and the phone's copy watcher would treat the copy it
+      // received over ADB as a fresh user copy and send it back.
       if (this.companion && this.companion.isConnected) {
         if (this.companion.sendClipboard(text)) {
           sent = true;
         }
-      }
-
-      if (this.child) {
+      } else if (this.child) {
         try {
           this.child.send({ cmd: 'set', text });
           sent = true;

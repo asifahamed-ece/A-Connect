@@ -3,6 +3,8 @@ package com.aplusconnect.companion.protocol
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /** The computer this phone is paired with. */
 data class Pairing(val pcId: String, val fingerprint: String)
@@ -22,18 +24,58 @@ object Handshake {
     /** A fingerprint is 32 colon separated uppercase hex bytes. */
     private val FINGERPRINT = Regex("^([0-9A-F]{2}:){31}[0-9A-F]{2}$")
 
-    fun buildHello(deviceId: String, deviceName: String, code: String, nonce: String): ProtocolMessage =
-        ProtocolMessage(
+    fun buildHello(
+        deviceId: String,
+        deviceName: String,
+        code: String,
+        nonce: String,
+        secret: ByteArray? = null,
+        proof: String? = null,
+    ): ProtocolMessage {
+        val payload = JSONObject()
+            .put("deviceId", deviceId)
+            .put("deviceName", deviceName)
+            .put("code", code)
+            .put("nonce", nonce)
+            .put("protocolVersion", Protocol.VERSION)
+
+        // The first contact carries the secret; every later one carries a proof
+        // that only the holder of the secret can produce.
+        if (secret != null) {
+            payload.put("secret", java.util.Base64.getEncoder().encodeToString(secret))
+        }
+        if (proof != null) {
+            payload.put("proof", proof)
+        }
+
+        return ProtocolMessage(
             type = Protocol.TYPE_HELLO,
             id = java.util.UUID.randomUUID().toString(),
             ts = System.currentTimeMillis(),
-            payload = JSONObject()
-                .put("deviceId", deviceId)
-                .put("deviceName", deviceName)
-                .put("code", code)
-                .put("nonce", nonce)
-                .put("protocolVersion", Protocol.VERSION),
+            payload = payload,
         )
+    }
+
+    /**
+     * The proof a returning device presents: an HMAC over its id and the
+     * nonce of this connection. The computer stores the secret from the first
+     * pairing and can therefore tell the real phone from anyone who merely
+     * knows its id.
+     */
+    fun proofFor(secret: ByteArray, deviceId: String, nonce: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(secret, "HmacSHA256"))
+        return mac.doFinal("$deviceId:$nonce".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
+
+    fun verifyProof(secret: ByteArray, deviceId: String, nonce: String, proof: String): Boolean {
+        val expected = proofFor(secret, deviceId, nonce)
+        return MessageDigest.isEqual(
+            expected.toByteArray(Charsets.UTF_8),
+            proof.toByteArray(Charsets.UTF_8),
+        )
+    }
 
     fun verifyHelloAck(
         message: ProtocolMessage,

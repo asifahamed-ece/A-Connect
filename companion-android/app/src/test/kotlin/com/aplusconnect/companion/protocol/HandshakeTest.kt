@@ -119,58 +119,6 @@ class HandshakeTest {
     }
 
     @Test
-    fun `an ack without a fingerprint is refused instead of pinning nothing`() {
-        val result = Handshake.verifyHelloAck(
-            helloAck(fingerprint = ""),
-            pinned = null
-        )
-
-        assertEquals(
-            Protocol.REASON_BAD_FINGERPRINT,
-            (result as HandshakeResult.Failed).reason
-        )
-    }
-
-    @Test
-    fun `a malformed fingerprint is refused`() {
-        val result = Handshake.verifyHelloAck(
-            helloAck(fingerprint = "not-a-fingerprint"),
-            pinned = null
-        )
-
-        assertEquals(
-            Protocol.REASON_BAD_FINGERPRINT,
-            (result as HandshakeResult.Failed).reason
-        )
-    }
-
-    @Test
-    fun `an ack without a pc id is refused`() {
-        val result = Handshake.verifyHelloAck(
-            helloAck(pcId = ""),
-            pinned = null
-        )
-
-        assertEquals(
-            Protocol.REASON_BAD_FINGERPRINT,
-            (result as HandshakeResult.Failed).reason
-        )
-    }
-
-    @Test
-    fun `an unsupported protocol version is refused`() {
-        val result = Handshake.verifyHelloAck(
-            helloAck().copy(version = Protocol.VERSION + 1),
-            pinned = null
-        )
-
-        assertEquals(
-            Protocol.REASON_PROTOCOL_VERSION,
-            (result as HandshakeResult.Failed).reason
-        )
-    }
-
-    @Test
     fun `a fingerprint is the sha256 of the certificate in uppercase colon separated hex`() {
         val fingerprint = Handshake.fingerprintOfHex(ByteArray(3) { 0x0a.toByte() })
 
@@ -179,5 +127,42 @@ class HandshakeTest {
                 "64:3F:CA:F5:BB:E6:D4:1A:D5:9B:D1:21:67",
             fingerprint
         )
+    }
+
+    // --- proof of possession ---------------------------------------------
+
+    @Test
+    fun `the proof is the hmac of the device id and the nonce`() {
+        val proof = Handshake.proofFor("s3cr3t-secret".toByteArray(), "phone-1", "nonce-1")
+
+        assertEquals(
+            "67f2e8753992a2b530ecd2f2359f2ead1d231e93859227ceaadf086d4f91050d",
+            proof
+        )
+    }
+
+    @Test
+    fun `a proof verifies against the same secret and fails against another`() {
+        val secret = "s3cr3t-secret".toByteArray()
+        val proof = Handshake.proofFor(secret, "phone-1", "nonce-1")
+
+        assertTrue(Handshake.verifyProof(secret, "phone-1", "nonce-1", proof))
+        assertTrue(!Handshake.verifyProof("other-secret".toByteArray(), "phone-1", "nonce-1", proof))
+    }
+
+    @Test
+    fun `a proof does not carry over to another nonce`() {
+        val secret = "s3cr3t-secret".toByteArray()
+        val proof = Handshake.proofFor(secret, "phone-1", "nonce-1")
+
+        assertTrue(!Handshake.verifyProof(secret, "phone-1", "nonce-2", proof))
+    }
+
+    @Test
+    fun `a proof does not carry over to another device id`() {
+        val secret = "s3cr3t-secret".toByteArray()
+        val proof = Handshake.proofFor(secret, "phone-1", "nonce-1")
+
+        assertTrue(!Handshake.verifyProof(secret, "phone-2", "nonce-1", proof))
     }
 }

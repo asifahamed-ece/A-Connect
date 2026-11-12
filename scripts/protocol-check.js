@@ -136,6 +136,36 @@ function writeNodeFixture() {
   console.log(`wrote ${frames.length} frames to ${NODE_FIXTURE}`);
 }
 
+function checkProofRules() {
+  // The same vector the Kotlin side asserts, so a divergence between the two
+  // implementations is a test failure rather than a pairing that mysteriously
+  // fails on one phone.
+  const secret = Buffer.from('s3cr3t-secret', 'utf8');
+  const proof = protocol.computeProof(secret, 'phone-1', 'nonce-1');
+
+  assert.strictEqual(
+    proof,
+    '67f2e8753992a2b530ecd2f2359f2ead1d231e93859227ceaadf086d4f91050d',
+    'the proof is not the expected hmac'
+  );
+  assert.strictEqual(protocol.verifyProof(secret, 'phone-1', 'nonce-1', proof), true, 'a valid proof was refused');
+  assert.strictEqual(
+    protocol.verifyProof(Buffer.from('other', 'utf8'), 'phone-1', 'nonce-1', proof),
+    false,
+    'a proof verified against the wrong secret'
+  );
+  assert.strictEqual(
+    protocol.verifyProof(secret, 'phone-1', 'nonce-2', proof),
+    false,
+    'a proof verified against the wrong nonce'
+  );
+  assert.strictEqual(
+    protocol.verifyProof(secret, 'phone-2', 'nonce-1', proof),
+    false,
+    'a proof verified against the wrong device id'
+  );
+}
+
 function main() {
   const write = process.argv.includes('--write');
 
@@ -148,6 +178,7 @@ function main() {
 
   for (const frame of frames) checkFrame(frame);
   checkClipboardRules();
+  checkProofRules();
 
   if (write) writeNodeFixture();
 

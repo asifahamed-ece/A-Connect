@@ -33,15 +33,21 @@ class CompanionClient(
     private val deviceName: String,
     private val code: String,
     private val pairing: Pairing?,
+    private val sharedSecret: String,
     private val onPaired: (pcId: String, fingerprint: String) -> Unit,
     private val onReady: () -> Unit,
     private val onClosed: (String) -> Unit,
     private val onClipboardReceived: (String) -> Unit = {},
+    private val onSecretCreated: (String) -> Unit = {},
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
     private var output: OutputStream? = null
     private var reader: Thread? = null
+    private var watchdog: Thread? = null
+
+    @Volatile
+    private var lastHeardAt = 0L
 
     @Volatile
     private var running = false
@@ -55,8 +61,32 @@ class CompanionClient(
     fun connect() {
         if (running) return
         running = true
+        lastHeardAt = System.currentTimeMillis()
 
         reader = Thread({ readLoop() }, "companion-client").apply {
+            isDaemon = true
+            start()
+        }
+
+        // A link that carries no traffic is dropped by the network. The
+        // computer pings every 30 seconds; if nothing comes back for 75
+        // seconds the link is gone, and the service reconnects at once
+        // instead of waiting for the next copy to fail.
+        watchdog = Thread({
+            while (running) {
+                try {
+                    Thread.sleep(WATCHDOG_INTERVAL_MS)
+                } catch (e: InterruptedException) {
+                    return@Thread
+                }
+                if (!running) return@Thread
+                if (System.currentTimeMillis() - lastHeardAt > PEER_TIMEOUT_MS) {
+                    Log.w(TAG, "the computer stopped answering, dropping the link")
+                    close()
+                    return@Thread
+                }
+            }
+        }, "companion-watchdog").apply {
             isDaemon = true
             start()
         }
@@ -193,7 +223,30 @@ class CompanionClient(
             output = BufferedOutputStream(ssl.outputStream)
 
             val nonce = UUID.randomUUID().toString()
-            val hello = Handshake.buildHello(deviceId, deviceName, code, nonce)
+
+            // The first contact carries the secret, so the computer can
+            // remember it. Every later contact carries a proof that only the
+            // holder of the secret can produce.
+            val hello = if (sharedSecret.isEmpty()) {
+                val secret = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+                onSecretCreated(java.util.Base64.getEncoder().encodeToString(secret))
+                Handshake.buildHello(
+                    deviceId = deviceId,
+                    deviceName = deviceName,
+                    code = code,
+                    nonce = nonce,
+                    secret = secret,
+                )
+            } else {
+                val secretBytes = java.util.Base64.getDecoder().decode(sharedSecret)
+                Handshake.buildHello(
+                    deviceId = deviceId,
+                    deviceName = deviceName,
+                    code = code,
+                    nonce = nonce,
+                    proof = Handshake.proofFor(secretBytes, deviceId, nonce),
+                )
+            }
             val stream = output!!
             stream.write(FrameCodec.encode(hello))
             stream.flush()
@@ -217,6 +270,31 @@ class CompanionClient(
             while (running) {
                 val inStreamLoop = input ?: break
                 val message = FrameCodec.readFrom(inStreamLoop)
+                lastHeardAt = System.currentTimeMillis()
+
+                if (message.type == Protocol.TYPE_PING) {
+                    val pong = ProtocolMessage(
+                        type = Protocol.TYPE_PONG,
+                        id = message.id,
+                        ts = System.currentTimeMillis(),
+                        payload = org.json.JSONObject(),
+                    )
+                    try {
+                        val pongStream = output
+                        if (pongStream != null) {
+                            synchronized(pongStream) {
+                                pongStream.write(FrameCodec.encode(pong))
+                                pongStream.flush()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "could not answer the ping: ${e.message}")
+                        close()
+                        break
+                    }
+                    continue
+                }
+
                 if (message.type == Protocol.TYPE_BYE) {
                     Log.i(TAG, "the computer closed the session")
                     reason = "the computer closed the session"
@@ -246,5 +324,7 @@ class CompanionClient(
 
     companion object {
         const val TAG = "AplusConnect"
+        private const val WATCHDOG_INTERVAL_MS = 10_000L
+        private const val PEER_TIMEOUT_MS = 75_000L
     }
 }

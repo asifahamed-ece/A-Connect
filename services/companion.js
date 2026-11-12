@@ -13,6 +13,13 @@ const { ensureCertificate } = require('./companion-cert');
 const DEFAULT_PORT = 24443;
 const PAIRING_CODE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// A link that carries no traffic is dropped by the network (Wi-Fi sleep,
+// NAT timeouts). The protocol has PING and PONG for exactly this: the
+// computer pings, the phone answers, and a client that stops answering is
+// closed instead of lingering as a half-open socket.
+const PING_INTERVAL_MS = 30 * 1000;
+const PEER_TIMEOUT_MS = 75 * 1000;
+
 const PAIRED_DEVICES_FILE = path.join(
   process.env.HOME || process.env.USERPROFILE || '.',
   '.config',
@@ -136,6 +143,9 @@ class CompanionService extends EventEmitter {
       this.emit('status', { status: 'error', detail: err.message });
     });
 
+    this.pingTimer = setInterval(() => this.pingClients(), PING_INTERVAL_MS);
+    if (this.pingTimer.unref) this.pingTimer.unref();
+
     this.server.listen(this.port, '0.0.0.0', () => {
       this.status = 'listening';
       console.log(`[companion] TLS server listening on ${this.localAddress()}:${this.port}`);
@@ -150,6 +160,10 @@ class CompanionService extends EventEmitter {
   }
 
   stop() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
     for (const socket of this.clients) {
       try {
         socket.destroy();
@@ -170,6 +184,7 @@ class CompanionService extends EventEmitter {
     socket.buffer = Buffer.alloc(0);
     socket.handshakeDone = false;
     socket.connectedAt = Date.now();
+    socket.lastSeen = Date.now();
     this.clients.add(socket);
 
     socket.on('data', (chunk) => this.handleData(socket, chunk));
@@ -194,7 +209,36 @@ class CompanionService extends EventEmitter {
     });
   }
 
+  /** Pings the connected phones and drops the ones that stopped answering. */
+  pingClients() {
+    const now = Date.now();
+    for (const socket of this.clients) {
+      if (!socket.handshakeDone || socket.destroyed) continue;
+
+      if (now - (socket.lastSeen || 0) > PEER_TIMEOUT_MS) {
+        console.log(`[companion] ${socket.deviceName || socket.clientIp} stopped answering, closing`);
+        socket.destroy();
+        continue;
+      }
+
+      try {
+        socket.write(
+          protocol.encode({
+            version: protocol.PROTOCOL_VERSION,
+            type: protocol.TYPES.PING,
+            id: crypto.randomUUID(),
+            ts: now,
+            payload: {},
+          })
+        );
+      } catch (e) {
+        socket.destroy();
+      }
+    }
+  }
+
   handleData(socket, chunk) {
+    socket.lastSeen = Date.now();
     socket.buffer = Buffer.concat([socket.buffer, chunk]);
 
     for (;;) {
@@ -226,7 +270,8 @@ class CompanionService extends EventEmitter {
 
       if (!isAlreadyPaired) {
         const isCodeValid = this.isPairingCodeValid(message.payload.code);
-        if (!isCodeValid) {
+        const secret = message.payload.secret;
+        if (!isCodeValid || !secret) {
           console.log(`[companion] refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
           socket.write(
             protocol.encode({
@@ -241,15 +286,40 @@ class CompanionService extends EventEmitter {
           return;
         }
 
-        // Successfully paired with code
+        // Paired with the code: keep the phone's secret so it can prove it is
+        // the same phone next time.
         this.pairedDevices[deviceId] = {
           deviceId,
           deviceName,
           pairedAt: Date.now(),
+          secret: String(secret),
         };
         this.savePairedDevices();
         console.log(`[companion] newly paired with ${deviceName} (${deviceId})`);
       } else {
+        // A known device has to prove it still holds the secret from the
+        // pairing. Knowing the device id is not enough: ids leak through logs
+        // and backups, and a leaked id would otherwise hand over the whole
+        // clipboard.
+        const paired = this.pairedDevices[deviceId];
+        const secret = paired.secret ? Buffer.from(paired.secret, 'base64') : null;
+        const proof = message.payload.proof;
+        const nonce = message.payload.nonce;
+
+        if (!secret || !proof || !protocol.verifyProof(secret, deviceId, nonce, proof)) {
+          console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
+          socket.write(
+            protocol.encode({
+              version: 1,
+              type: protocol.TYPES.HELLO_ERROR,
+              id: 'err',
+              ts: Date.now(),
+              payload: { reason: protocol.REASONS.AUTH_FAILED },
+            })
+          );
+          socket.end();
+          return;
+        }
         console.log(`[companion] recognized returning paired device: ${deviceName} (${deviceId})`);
       }
 

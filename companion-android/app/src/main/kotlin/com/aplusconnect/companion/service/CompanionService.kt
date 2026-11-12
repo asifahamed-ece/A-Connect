@@ -121,6 +121,8 @@ class CompanionService : Service() {
             deviceName = resolvedName,
             code = settings.pairingCode,
             pairing = settings.pairing,
+            sharedSecret = settings.sharedSecret,
+            onSecretCreated = { secret -> settings.sharedSecret = secret },
             onPaired = { pcId, fingerprint ->
                 if (pcId.isNotEmpty()) settings.remember(pcId, fingerprint)
             },
@@ -134,6 +136,12 @@ class CompanionService : Service() {
                 }
             },
             onClosed = { reason ->
+                if (reason.contains("auth-failed")) {
+                    // The computer does not know this phone any more: forget
+                    // the secret so the next attempt pairs with the code.
+                    settings.clearSecret()
+                    Log.w(TAG, "the computer refused our proof, pairing again")
+                }
                 if (client === thisClient) {
                     Log.i(TAG, "disconnected: $reason")
                     Status.isConnected = false
