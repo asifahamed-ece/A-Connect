@@ -425,8 +425,9 @@ class CompanionService extends EventEmitter {
       return;
     }
 
-    if (message.type === protocol.TYPES.PING) {
-      socket.write(
+    if (routeNotification(this, message)) return;
+
+    if (message.type === protocol.TYPES.PING) {      socket.write(
         protocol.encode({
           version: 1,
           type: protocol.TYPES.PONG,
@@ -709,5 +710,45 @@ class CompanionService extends EventEmitter {
     };
   }
 }
+
+/**
+ * Routes one notification message to the service's events.
+ *
+ * Exported as a property of the class so the conformance check can drive it
+ * without a socket; production calls it from `handleMessage`.
+ *
+ * Returns true when the message was a notification one.
+ */
+function routeNotification(service, message) {
+  if (message.type === protocol.TYPES.NOTIFICATION) {
+    const notif = protocol.parseNotification(message.payload);
+    if (!notif) return false;
+    service.emit('notification-received', {
+      id: notif.id,
+      app: notif.app || notif.pkg,
+      title: notif.title,
+      text: notif.text,
+      // The ADB path calls the body `message`; both keys carry the text so the
+      // renderer does not care which transport delivered it.
+      message: notif.text,
+      key: notif.id,
+      time: notif.ts,
+      actions: notif.actions,
+      fromCompanion: true,
+    });
+    return true;
+  }
+
+  if (message.type === protocol.TYPES.NOTIFICATION_REMOVED) {
+    const id = message.payload && message.payload.id;
+    if (typeof id !== 'string') return false;
+    service.emit('notification-dismissed', { id });
+    return true;
+  }
+
+  return false;
+}
+
+CompanionService.routeNotification = routeNotification;
 
 module.exports = CompanionService;

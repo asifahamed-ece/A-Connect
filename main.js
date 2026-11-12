@@ -257,6 +257,10 @@ function setupServiceEvents() {
 
   companion.on('client-paired', (data) => {
     console.log(`[companion] paired phone: ${data.deviceName} (${data.deviceId})`);
+    // One transport per event: once the companion is up, notifications come
+    // over it, so the ADB poller stands down rather than reporting everything
+    // twice.
+    notifications.stop();
     updateTrayMenu();
     sendToRenderer('event:companion-paired', data);
   });
@@ -270,8 +274,26 @@ function setupServiceEvents() {
 
   companion.on('client-disconnected', (data) => {
     console.log(`[companion] disconnected phone: ${data.deviceId}`);
+    // The companion is gone. If a phone is still on USB, the ADB poller takes
+    // the notifications back.
+    adb.getDevices()
+      .then((devices) => {
+        if (devices && devices.length > 0) notifications.start(devices[0].id);
+      })
+      .catch(() => {});
     updateTrayMenu();
     sendToRenderer('event:companion-disconnected', data);
+  });
+
+  // The companion channel's notifications join the same history and the same
+  // renderer event the ADB path uses, so the Notifications panel needs no
+  // change at all.
+  companion.on('notification-received', (notif) => {
+    notifications.addFromCompanion(notif);
+  });
+
+  companion.on('notification-dismissed', ({ id }) => {
+    notifications.removeById(id);
   });
 
   companion.on('file-transfer-start', (data) => {
