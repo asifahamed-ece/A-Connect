@@ -38,6 +38,19 @@ class MediaSessionBridge(
         val durationMs: Long,
     )
 
+        /**
+     * Where publishing and the commands run.
+     *
+     * The session listener and the session callbacks are delivered on the
+     * main thread, and a socket write there throws NetworkOnMainThreadException
+     * and drops the connection - which is exactly what a seek from the
+     * computer used to do. Everything that touches the socket goes through
+     * this thread instead.
+     */
+    private val work = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-media-work").apply { isDaemon = true }
+    }
+
     private var manager: MediaSessionManager? = null
     private var controller: MediaController? = null
 
@@ -46,6 +59,10 @@ class MediaSessionBridge(
 
     /** The track whose cover is in hand, waiting to be delivered. */
     private var pendingCoverKey: String? = null
+
+    /** Where we last told the session to seek, until the session agrees. */
+    private var seekTargetMs: Long? = null
+    private var seekTargetAt = 0L
 
     /** When the last cover attempt was made, so a miss is not retried every second. */
     private var lastCoverAttemptAt = 0L
@@ -100,6 +117,7 @@ class MediaSessionBridge(
 
     fun stop() {
         running = false
+        work.shutdown()
         ticker?.interrupt()
         ticker = null
         try {
@@ -152,13 +170,52 @@ class MediaSessionBridge(
             artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
             album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty(),
             playing = playback?.state == PlaybackState.STATE_PLAYING,
-            position = playback?.position ?: 0L,
+            position = currentPositionMs(playback),
             duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION),
         )
     }
 
+    /**
+     * Where the track actually is.
+     *
+     * A session refreshes its position only now and then, so it is advanced by
+     * the time since the session last published its state. And after a seek a
+     * session can go on reporting a stale zero for a while, so the target we
+     * seeked to is used until the session catches up with it.
+     */
+    private fun currentPositionMs(playback: PlaybackState?): Long {
+        if (playback == null) return 0
+        val now = android.os.SystemClock.elapsedRealtime()
+        val sessionPosition = playback.position
+
+        var position = sessionPosition
+        val updatedAt = playback.lastPositionUpdateTime
+        if (playback.state == PlaybackState.STATE_PLAYING && updatedAt in 1..now) {
+            position = sessionPosition + (now - updatedAt)
+        }
+
+        val target = seekTargetMs
+        if (target != null) {
+            val ours = target + (now - seekTargetAt)
+            if (now - seekTargetAt < SEEK_WINDOW_MS && position < ours) {
+                // The session has not caught up with the seek yet: a session
+                // often reports a reset position for a moment after one, and
+                // publishing that would send the shell's clock back to zero.
+                position = ours
+            } else {
+                seekTargetMs = null
+            }
+        }
+        return position
+    }
+
     /** Sends the current state, when there is one worth sending. */
     fun publish() {
+        // Never on the caller's thread: the callers are the main thread.
+        work.execute { publishNow() }
+    }
+
+    private fun publishNow() {
         val state = currentState() ?: return
         val art = encodeCover()
         val payload = FeaturePayloads.mediaState(
@@ -261,20 +318,44 @@ class MediaSessionBridge(
      * unknown command, or a session that has gone away, is ignored.
      */
     fun command(command: String, positionMs: Long?) {
-        val controls = controller?.transportControls ?: return
-        when (command) {
-            "play" -> controls.play()
-            "pause" -> controls.pause()
-            "toggle" -> if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) {
-                controls.pause()
-            } else {
-                controls.play()
+        // A transport control call is a binder call into the player, which can
+        // take a while. Doing it on the reader thread would stop the phone
+        // answering the computer's pings, and the computer would drop the link.
+        work.execute { commandNow(command, positionMs) }
+    }
+
+    private fun commandNow(command: String, positionMs: Long?) {
+        val controls = try {
+            controller?.transportControls
+        } catch (e: Exception) {
+            Log.w(TAG, "could not reach the session: ${e.message}")
+            return
+        } ?: return
+        try {
+            when (command) {
+                "play" -> controls.play()
+                "pause" -> controls.pause()
+                "toggle" -> if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) {
+                    controls.pause()
+                } else {
+                    controls.play()
+                }
+                "next" -> controls.skipToNext()
+                "previous" -> controls.skipToPrevious()
+                "stop" -> controls.stop()
+                "seek" -> if (positionMs != null) {
+                    // The session may report a stale position for a moment
+                    // after a seek, so remember where we sent it.
+                    seekTargetMs = positionMs
+                    seekTargetAt = android.os.SystemClock.elapsedRealtime()
+                    controls.seekTo(positionMs)
+                } else {
+                    Log.i(TAG, "ignoring a seek without a position")
+                }
             }
-            "next" -> controls.skipToNext()
-            "previous" -> controls.skipToPrevious()
-            "stop" -> controls.stop()
-            "seek" -> if (positionMs != null) controls.seekTo(positionMs)
-            else -> Log.i(TAG, "ignoring unknown media command: $command")
+        } catch (e: Exception) {
+            // A player that refuses a seek must not cost us the connection.
+            Log.w(TAG, "the media command $command failed: ${e.message}")
         }
     }
 
@@ -315,6 +396,9 @@ class MediaSessionBridge(
 
         /** How often a cover that is not there yet is looked for again. */
         private const val COVER_RETRY_MS = 10_000L
+
+        /** How long after a seek the position we asked for is trusted. */
+        private const val SEEK_WINDOW_MS = 10_000L
 
         /**
          * The pure mapping, so it can be tested without a device. A session

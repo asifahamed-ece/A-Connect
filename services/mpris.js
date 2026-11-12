@@ -155,8 +155,7 @@ class PlayerInterface extends Interface {
   }
 
   get Position() {
-    const positionMs = this.service.state ? this.service.state.positionMs : 0;
-    return BigInt(Math.round(positionMs * 1000));
+    return BigInt(Math.round(this.service.positionMs() * 1000));
   }
 
   get Rate() {
@@ -295,6 +294,7 @@ class MprisService extends EventEmitter {
     this.state = null;
     this.artUrl = null;
     this.artKey = null;
+    this.positionAt = Date.now();
     this.started = false;
   }
 
@@ -336,7 +336,24 @@ class MprisService extends EventEmitter {
       this.artKey = key;
     }
     this.state = { ...state, artUrl: this.artUrl };
+    this.positionAt = Date.now();
     this.publishChanged();
+  }
+
+  /**
+   * The position now, in milliseconds.
+   *
+   * The phone sends its position once a second, so the last one it sent is
+   * already a moment old. Advancing it by the time since then is what makes
+   * the clock in the shell smooth, and what makes a relative seek land where
+   * the user asked instead of where the track was a second ago.
+   */
+  positionMs() {
+    const state = this.state;
+    if (!state) return 0;
+    if (!state.playing) return state.positionMs;
+    const elapsed = Date.now() - this.positionAt;
+    return state.positionMs + Math.max(0, elapsed);
   }
 
   /** The phone went away: stop claiming something is playing. */
@@ -359,18 +376,23 @@ class MprisService extends EventEmitter {
 
   /** Sends a command to the phone, through the companion channel. */
   command(name) {
+    console.log(`[mpris] command ${name}`);
     this.emit('command', name, undefined);
   }
 
   seekTo(positionMicroseconds) {
     if (!this.state) return;
     const positionMs = Math.max(0, Math.round(positionMicroseconds / 1000));
+    console.log(
+      `[mpris] seek to ${positionMs} ms (the shell sees ${Math.round(this.positionMs())} ms)`,
+    );
     this.emit('command', 'seek', positionMs);
   }
 
   seekBy(offsetMicroseconds) {
     if (!this.state) return;
-    const target = this.state.positionMs * 1000 + offsetMicroseconds;
+    console.log(`[mpris] seek by ${offsetMicroseconds} us`);
+    const target = this.positionMs() * 1000 + offsetMicroseconds;
     this.seekTo(target);
   }
 

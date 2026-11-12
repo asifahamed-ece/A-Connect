@@ -372,22 +372,32 @@ class CompanionClient(
                 }
 
                 if (message.type == Protocol.TYPE_NOTIFICATION_ACTION) {
-                    onNotificationAction(
-                        message.payload.optString("id"),
-                        message.payload.optString("action"),
-                    )
+                    try {
+                        onNotificationAction(
+                            message.payload.optString("id"),
+                            message.payload.optString("action"),
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "the notification action failed: ${e.message}")
+                    }
                     continue
                 }
 
                 if (message.type == Protocol.TYPE_MEDIA_COMMAND) {
-                    onMediaCommand(
-                        message.payload.optString("command"),
-                        if (message.payload.has("positionMs")) {
-                            message.payload.optLong("positionMs")
-                        } else {
-                            null
-                        },
-                    )
+                    try {
+                        onMediaCommand(
+                            message.payload.optString("command"),
+                            if (message.payload.has("positionMs")) {
+                                message.payload.optLong("positionMs")
+                            } else {
+                                null
+                            },
+                        )
+                    } catch (e: Exception) {
+                        // A player that refuses a command must not cost us the
+                        // connection: this runs on the reader thread.
+                        Log.w(TAG, "the media command failed: ${e.message}")
+                    }
                     continue
                 }
             }

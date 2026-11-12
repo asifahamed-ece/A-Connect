@@ -120,7 +120,7 @@ fun sendClipboard(text: String) {
 **Fix:** null `input`/`output` in `close()`, and have `sendClipboard` return `false` when
 there is no live socket, so the caller can queue it.
 
-### Bug 3 — a copy that arrives before the handshake completes is silently lost
+### Bug 3 — a copy that arrives before the handshake completes is dropped without a trace
 
 `CompanionService.send()` calls `client?.sendClipboard(...)`, but the client connects
 asynchronously. A copy in the first seconds after the app starts is dropped with no
@@ -144,7 +144,7 @@ top.
 The watcher currently triggers on **any** SystemUI window event, debounced 1.5 s. That
 includes unrelated SystemUI activity (the shade opening, a notification arriving). A false
 trigger is mostly harmless — the hash dedupe means the same content is not re-sent — but
-each trigger steals focus for a moment. Worth narrowing, or at least measuring how often
+each trigger takes focus for a moment. Worth narrowing, or at least measuring how often
 it fires when nothing was copied.
 
 ---

@@ -92,7 +92,7 @@ than the one the plan assumed: not as a privilege, but as a **copy-event detecto
 ### Honest comparison with the ADB path we have today
 
 The scrcpy server runs as the `shell` UID, which Android exempts from the clipboard
-restriction outright. That gives today's app a read with no focus stealing, no
+restriction outright. That gives today's app a read with no focus taking, no
 accessibility service, no notification and no keyboard change. The companion app trades
 that reliability for the thing it was built for: **the phone exposes no listening port on
 the network**, so a campus Wi-Fi has nothing to attack.

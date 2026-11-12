@@ -57,4 +57,16 @@ assert.strictEqual(
   'the cover URL did not survive'
 );
 
+// The position advances on its own while the track plays, so the clock in the
+// shell is smooth and a relative seek lands where the user asked.
+const { MprisService } = require('../services/mpris');
+const service = new MprisService();
+service.update(state);
+const advanced = service.positionMs();
+assert.ok(advanced >= 1000, 'the position went backwards');
+assert.ok(advanced < 3000, 'the position jumped ahead');
+
+service.update({ ...state, playing: false, positionMs: 5000 });
+assert.strictEqual(service.positionMs(), 5000, 'a paused position must not advance');
+
 console.log('mpris mapping: ok');

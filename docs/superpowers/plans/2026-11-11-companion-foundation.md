@@ -39,10 +39,10 @@
 Five input classes the spec implies that the tasks below must each pin down with a test:
 
 1. **A non-text clipboard** (an image, a file URI) must never be pushed through the transport as bytes — it is coerced to text, and if there is no text it is skipped. *Test: `ClipboardPayloadTest` — empty text is not sent. The coercion itself is the phone's job in phase P2.*
-2. **A clipboard value larger than 256 KiB** must arrive truncated *and flagged*, never silently cut and never dropped whole. *Test: `ClipboardPayloadTest.truncatesAndFlags`.*
+2. **A clipboard value larger than 256 KiB** must arrive truncated *and flagged*, never cut without a flag and never dropped whole. *Test: `ClipboardPayloadTest.truncatesAndFlags`.*
 3. **The same content copied twice** must produce exactly one transfer; the app's own write must not echo back to the PC. *Test: `ClipboardPayloadTest.suppressesRepeats`.*
-4. **A paired PC whose certificate changed** must be refused, not silently re-trusted; a phone that moves to a new IP must reconnect on its own. *Test: `HandshakeTest.a changed certificate is refused`; reconnection is phase P2.*
-5. **A second PC must not be able to pair** with a phone that is already paired — the attempt is refused, not silently allowed to replace the first. *Test: `HandshakeTest.a second pairing is refused`.*
+4. **A paired PC whose certificate changed** must be refused, not re-trusted without a flag; a phone that moves to a new IP must reconnect on its own. *Test: `HandshakeTest.a changed certificate is refused`; reconnection is phase P2.*
+5. **A second PC must not be able to pair** with a phone that is already paired — the attempt is refused, not allowed without a flag to replace the first. *Test: `HandshakeTest.a second pairing is refused`.*
 
 ---
 
