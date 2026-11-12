@@ -45,6 +45,7 @@ class CompanionClient(
     private val onFileChunk: (id: String, index: Int, bytes: ByteArray) -> Unit = { _, _, _ -> },
     private val onFileDone: (id: String) -> Unit = { },
     private val onNotificationAction: (id: String, action: String) -> Unit = { _, _ -> },
+    private val onMediaCommand: (command: String, positionMs: Long?) -> Unit = { _, _ -> },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -374,6 +375,18 @@ class CompanionClient(
                     onNotificationAction(
                         message.payload.optString("id"),
                         message.payload.optString("action"),
+                    )
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_MEDIA_COMMAND) {
+                    onMediaCommand(
+                        message.payload.optString("command"),
+                        if (message.payload.has("positionMs")) {
+                            message.payload.optLong("positionMs")
+                        } else {
+                            null
+                        },
                     )
                     continue
                 }

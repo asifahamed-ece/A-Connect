@@ -105,6 +105,9 @@ class CompanionService : Service() {
      */
     private val notificationQueue = ArrayDeque<Pair<String, JSONObject>>()
 
+    /** What the phone is playing, and the controls for it. */
+    private var mediaBridge: MediaSessionBridge? = null
+
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
@@ -120,6 +123,14 @@ class CompanionService : Service() {
             copy
         }
         synchronized(stateLock) { notificationQueue.addAll(early) }
+
+        // Playback control needs notification access. Without that grant the
+        // bridge's start() is a no-op and the feature simply stays absent.
+        mediaBridge = MediaSessionBridge(
+            context = this,
+            listener = android.content.ComponentName(this, PhoneNotificationListener::class.java),
+            send = { payload -> sendThread.execute { sendMediaState(payload) } },
+        ).also { it.start() }
 
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
@@ -148,6 +159,8 @@ class CompanionService : Service() {
 
     override fun onDestroy() {
         instance = null
+        mediaBridge?.stop()
+        mediaBridge = null
         val activeClient = client
         client = null
         activeClient?.close()
@@ -230,6 +243,9 @@ class CompanionService : Service() {
                     Status.state = "Connected to ${settings.host}"
                     updateNotification("Connected to ${settings.host}")
                     sendThread.execute { flushPending(); flushNotifications() }
+                    // A desktop that just connected wants the current track,
+                    // not one that appears at the next state change.
+                    mediaBridge?.publish()
                 }
             },
             onClosed = { reason ->
@@ -252,6 +268,9 @@ class CompanionService : Service() {
             },
             onNotificationAction = { id, action ->
                 PhoneNotificationListener.handleRemote(id, action)
+            },
+            onMediaCommand = { command, positionMs ->
+                mediaBridge?.command(command, positionMs)
             },
         )
         client = thisClient
@@ -429,6 +448,13 @@ class CompanionService : Service() {
             notificationQueue.removeAll { it.first == id }
             notificationQueue.addLast(id to payload)
         }
+    }
+
+    /** Sends the now-playing state, or drops it when the session is down. */
+    private fun sendMediaState(payload: JSONObject) {
+        val c = client
+        if (c == null || !c.isReady) return
+        c.sendMessage(Protocol.TYPE_MEDIA_STATE, payload)
     }
 
     /** Sends the queued notifications, oldest first, stopping on the first failure. */
