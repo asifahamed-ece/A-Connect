@@ -50,7 +50,9 @@ DONE - WORKING TODAY
    Each row says when it arrived: "just now" / "2 min ago" for the
    last hour, then a clock ("14:32"), "Yesterday 14:32" or
    "12 Nov 14:32"; newest first, exact moment in the tooltip, and the
-   relative text re-renders while the view is open.
+   relative text re-renders while the view is open. The app does not
+   mirror its own "Connected to ..." notification - it is about this
+   very connection and there is nothing to do with it.
    Phone: service/PhoneNotificationListener.kt
    Desktop: services/notifications.js + services/companion.js
             + src/format.js (the wording), scripts/check-notification-time.js
@@ -147,10 +149,16 @@ DESKTOP - services/ and scripts/
   scripts/check-companion-notifications.js  notification routing
   scripts/ensure-deps.js         fails fast if npm install was skipped
 
-TESTS - 58 Android unit tests, plus four desktop node checks.
+TESTS - 86 Android unit tests, plus six desktop node checks.
   The guard tests matter as much as the feature tests:
    NoAccessibilityServiceTest  no accessibility service, ever
    NoMainThreadSendTest        no socket write on the main thread
+   NoContextInServiceFieldsTest  no Service field reads the context before
+                               Android attaches one (that crash stopped the
+                               app from opening at all)
+   PhoneFileBrowserTest        the browser cannot change anything on the phone
+   StorageSearchTest           a search answers without walking, a change this
+                               app made is never answered from a stale index
 
 ====================================================================
 UPCOMING - NOT YET BUILT

@@ -146,6 +146,37 @@ class CompanionService : Service() {
         Thread(runnable, "companion-search").apply { isDaemon = true }
     }
 
+    /**
+     * Watches the phone's media database for files this app did not write.
+     *
+     * A download finishing in another app, a photo just taken, a document
+     * saved by an editor - none of those go through this app, so the search
+     * index would keep answering from names it gathered earlier. The database
+     * change is the phone telling us something arrived.
+     */
+    private val mediaObserver = object : android.database.ContentObserver(
+        // Looper.getMainLooper(), not mainLooper: property initialisers run
+        // before the Service has a context attached, and this one would crash
+        // the app on startup with a null Context.
+        android.os.Handler(android.os.Looper.getMainLooper())
+    ) {
+        override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+            // A download posts hundreds of changes as it grows. Dropping the
+            // walking of the whole storage after every one of them would keep
+            // the CPU busy for the length of the download, so the rebuild waits
+            // for the changes to settle.
+            mediaSettled.removeCallbacks(mediaRebuild)
+            mediaSettled.postDelayed(mediaRebuild, MEDIA_SETTLE_MS)
+        }
+    }
+
+    /** Rebuilds the search index once the media database has stopped churning. */
+    private val mediaRebuild = Runnable {
+        searcher?.invalidate()
+    }
+
+    private val mediaSettled = android.os.Handler(android.os.Looper.getMainLooper())
+
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
@@ -153,6 +184,7 @@ class CompanionService : Service() {
         destination = DownloadDestination(this)
         fileBrowser = PhoneFileBrowser(this)
         instance = this
+        watchMediaDatabase()
 
         // Anything that arrived while the service was not running goes to the
         // front of the queue, so it still reaches the computer.
@@ -202,6 +234,12 @@ class CompanionService : Service() {
 
     override fun onDestroy() {
         instance = null
+        try {
+            contentResolver.unregisterContentObserver(mediaObserver)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not stop watching the media database: ${e.message}")
+        }
+        mediaSettled.removeCallbacks(mediaRebuild)
         mediaBridge?.stop()
         mediaBridge = null
         val activeClient = client
@@ -408,7 +446,7 @@ class CompanionService : Service() {
             connect()
         }
         reconnectRunnable = runnable
-        android.os.Handler(mainLooper).postDelayed(runnable, RECONNECT_DELAY_MS)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(runnable, RECONNECT_DELAY_MS)
     }
 
     /** Sends the clipboard to the computer, or queues it if not connected yet. */
@@ -610,6 +648,32 @@ class CompanionService : Service() {
     }
 
     /**
+     * Starts watching the media database, so a file another app writes is
+     * findable without the user pressing Refresh.
+     *
+     * MediaStore is the phone's own record of what is on its storage: a
+     * download, a screenshot, a photo or a document saved by an editor all
+     * land there. Watching it costs nothing while nothing changes, and the
+     * rebuild it triggers is the same one [StorageSearch.invalidate] already
+     * provides.
+     */
+    private fun watchMediaDatabase() {
+        val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.provider.MediaStore.Files.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL)
+        } else {
+            android.net.Uri.parse("content://media/external/file")
+        }
+        try {
+            contentResolver.registerContentObserver(uri, true, mediaObserver)
+            Log.i(TAG, "watching the media database for new files")
+        } catch (e: Exception) {
+            // Without the observer search simply behaves as it did before:
+            // the user presses Refresh. Not worth failing the service over.
+            Log.w(TAG, "could not watch the media database: ${e.message}")
+        }
+    }
+
+    /**
      * Sends one file the computer asked for.
      *
      * The streaming is the existing phone-to-computer transfer, so both
@@ -722,6 +786,13 @@ class CompanionService : Service() {
         const val EXTRA_CLIPBOARD = "clipboard"
         const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
         private const val RECONNECT_DELAY_MS = 5000L
+
+        /**
+         * How long the media database must stay quiet before the index is
+         * rebuilt. A download posts a change per chunk; walking 34,000 entries
+         * after each one would cost more than the download.
+         */
+        private const val MEDIA_SETTLE_MS = 1500L
 
         private var instance: CompanionService? = null
         private var lastSentHash: String? = null

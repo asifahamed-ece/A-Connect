@@ -109,6 +109,13 @@ So `StorageSearch` builds a **name index once** and filters it in memory:
   is missing the file that just arrived. Without this a sent file stayed
   invisible until the index aged out or the phone reconnected - the bug found
   in use, where a file only appeared after reconnecting the phone.
+- **Another app's download is noticed.** A ContentObserver on the phone's media
+  database invalidates the index when a file appears that this app did not
+  write - a download, a screenshot, a photo, a document saved by an editor. It
+  waits for the changes to settle (1.5 s) first, because a growing download
+  posts a change per chunk and a walk per chunk would cost more than the
+  download. Refresh is still the escape hatch for anything the media database
+  never sees.
 - **Refresh re-reads the storage.** The browser's Refresh button sends the
   search with a `fresh` flag and the phone walks before answering. That covers
   changes this app did not make - a download finishing in another app, a photo

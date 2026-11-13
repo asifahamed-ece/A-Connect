@@ -53,4 +53,24 @@ class PhoneNotificationListenerTest {
             )
         )
     }
+
+    @Test
+    fun `the app does not mirror its own notification`() {
+        // The foreground notification says "Connected to ...", which is about
+        // this connection; sending it back to the computer is noise.
+        assertTrue(
+            PhoneNotificationListener.isOwnNotification(
+                "com.aplusconnect.companion",
+                "com.aplusconnect.companion",
+            )
+        )
+        assertFalse(
+            PhoneNotificationListener.isOwnNotification(
+                "com.google.android.youtube",
+                "com.aplusconnect.companion",
+            )
+        )
+        // A notification with no package cannot be proven to be ours.
+        assertFalse(PhoneNotificationListener.isOwnNotification(null, "com.aplusconnect.companion"))
+    }
 }

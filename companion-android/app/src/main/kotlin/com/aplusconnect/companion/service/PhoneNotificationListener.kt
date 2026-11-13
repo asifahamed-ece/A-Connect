@@ -29,6 +29,12 @@ class PhoneNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
+        // This app's own foreground notification is about this very
+        // connection ("Connected to ..."). Mirroring it back to the computer
+        // gives the user a row they cannot act on and cannot make sense of.
+        if (isOwnPackage(sbn.packageName)) {
+            return
+        }
         val id = FeaturePayloads.notificationId(sbn.packageName, sbn.id, sbn.tag)
 
         // A chat posts one notification per message and a group summary that
@@ -72,6 +78,7 @@ class PhoneNotificationListener : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         if (sbn == null) return
+        if (isOwnPackage(sbn.packageName)) return
         val id = FeaturePayloads.notificationId(sbn.packageName, sbn.id, sbn.tag)
         live.remove(id)
         CompanionService.deliverNotificationRemoved(this, id)
@@ -126,6 +133,9 @@ class PhoneNotificationListener : NotificationListenerService() {
         pkg
     }
 
+    /** Whether a notification belongs to this app and is not worth mirroring. */
+    private fun isOwnPackage(pkg: String?): Boolean = isOwnNotification(pkg, packageName)
+
     /**
      * The groups that have a message of their own right now.
      *
@@ -164,6 +174,16 @@ class PhoneNotificationListener : NotificationListenerService() {
             group: String?,
             groupsWithMessages: Set<String>,
         ): Boolean = isSummary && group != null && groupsWithMessages.contains(group)
+
+        /**
+         * Whether a notification is this app's own.
+         *
+         * Its foreground notification says "Connected to ..." - that is about
+         * this very connection, so mirroring it to the computer shows the user
+         * a row that tells them nothing and that they cannot act on.
+         */
+        fun isOwnNotification(pkg: String?, self: String): Boolean =
+            pkg != null && pkg == self
 
         /** A command to remove the notification, rather than press a button. */
         const val ACTION_DISMISS = "dismiss"
