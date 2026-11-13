@@ -405,6 +405,14 @@ function checkFileBrowser() {
     'the search request lost its type'
   );
   assert.strictEqual(searchRequest.query, 'dune', 'the search request lost the query');
+  // Refresh asks for a walk; typing must not. The phone reads this flag, so its
+  // absence would silently mean "never re-walk".
+  assert.strictEqual(searchRequest.fresh, false, 'a typed search asked for a storage walk');
+  assert.strictEqual(
+    protocol.buildFileSearchRequest('dune', true).fresh,
+    true,
+    'a refreshed search did not ask for a storage walk'
+  );
   assert.strictEqual(protocol.SEARCH_KEY_PREFIX, 'search:', 'the search key prefix changed');
 
   const searchAnswer = protocol.buildFileList(protocol.searchKey('dune'), [

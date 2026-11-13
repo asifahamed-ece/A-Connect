@@ -85,6 +85,19 @@ DONE - WORKING TODAY
    The companion client dials out; there is no inbound socket, not
    even for discovery. Discovery is by address or QR on purpose.
 
+9. DISCONNECT FROM THE PC STICKS (added 2026-11-13)
+   The Disconnect button acts on the transport the user has selected,
+   so on the "Companion · TLS 1.3" row it hangs up the TLS link rather
+   than calling adb at a phone that may not even be on adb. The PC
+   writes a `bye` frame before closing, and the phone treats that as
+   deliberate: it stops its 5 second redial loop and shows
+   "Disconnected by the computer" until the user taps Reconnect.
+   A bare socket close would have been undone within five seconds and
+   looked like the button did nothing.
+   Desktop: services/companion.js disconnectClients(), IPC
+            companion:disconnect
+   Phone:   CompanionClient.REASON_BYE, CompanionService.onClosed
+
 ====================================================================
 THE COMPONENTS (where the code lives)
 ====================================================================

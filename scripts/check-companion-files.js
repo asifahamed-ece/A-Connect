@@ -149,6 +149,11 @@ async function checkSearch() {
     'the frame is not a file-search-request'
   );
   assert.strictEqual(request.payload.query, 'dune', 'the query did not reach the wire');
+  assert.strictEqual(
+    request.payload.fresh,
+    false,
+    'typing asked the phone to walk its storage again for every keystroke'
+  );
 
   // A folder listing arriving while a search is in flight must not resolve it.
   CompanionService.prototype.handleFileList.call(
@@ -191,6 +196,80 @@ async function checkSearchWithNoPhone() {
   assert.strictEqual(service.pendingFileLists.size, 0, 'a waiting search was left behind');
 }
 
+/**
+ * Refresh means "look again now", and it is the only thing that walks the
+ * phone's storage. Without this a file that had just arrived stayed invisible
+ * to search until the index aged out - the bug the user hit.
+ */
+async function checkRefreshIsFresh() {
+  const service = connectedService();
+  const pending = CompanionService.prototype.requestFileSearch.call(service, 'dune', {
+    fresh: true,
+  });
+
+  const request = protocol.decode(service.written[0]);
+  assert.strictEqual(request.payload.fresh, true, 'Refresh did not ask for a fresh walk');
+  assert.strictEqual(request.payload.query, 'dune', 'the query was lost with the flag');
+
+  CompanionService.prototype.handleFileList.call(
+    service,
+    answer(protocol.searchKey('dune'), [
+      { id: 'Download/dune.txt', name: 'dune.txt', size: 3, isDir: false, mime: 'text/plain' },
+    ]).payload
+  );
+  const result = await pending;
+  assert.strictEqual(result.success, true, `the refreshed search did not resolve: ${result.error}`);
+  assert.strictEqual(result.entries[0].name, 'dune.txt', 'the refreshed search lost its answer');
+}
+
+/**
+ * Disconnect must be deliberate, not a dropped link.
+ *
+ * The phone redials after any drop, so a bare destroy would be undone within
+ * five seconds. The computer says `bye` first, and that frame has to be on the
+ * wire before the socket closes - under TLS 1.3, closing early loses it.
+ */
+async function checkHangUp() {
+  const service = new EventEmitter();
+  const written = [];
+  let ended = 0;
+  let destroyed = 0;
+  service.clients = [
+    {
+      handshakeDone: true,
+      destroyed: false,
+      clientIp: '127.0.0.1',
+      write: (buf) => written.push(Buffer.from(buf)),
+      end: () => {
+        ended += 1;
+      },
+      destroy: () => {
+        destroyed += 1;
+      },
+    },
+  ];
+
+  const hungUp = CompanionService.prototype.disconnectClients.call(service);
+
+  assert.strictEqual(hungUp, 1, 'the connected phone was not hung up on');
+  assert.strictEqual(written.length, 1, 'no bye frame was written');
+  const frame = protocol.decode(written[0]);
+  assert.strictEqual(frame.type, protocol.TYPES.BYE, 'a disconnect did not say bye');
+  assert.strictEqual(ended, 1, 'the socket was not ended after the bye');
+
+  // The bye must come before the close, or the phone sees a dropped link and
+  // redials instead of staying disconnected.
+  assert.strictEqual(destroyed, 0, 'the socket was destroyed before the bye could be flushed');
+
+  // A socket that never finished its handshake is not a phone to hang up on.
+  service.clients = [{ handshakeDone: false, destroyed: false }];
+  assert.strictEqual(
+    CompanionService.prototype.disconnectClients.call(service),
+    0,
+    'a phone that never paired was counted as hung up on'
+  );
+}
+
 async function checkSendRequest() {
   const service = connectedService();
   const result = CompanionService.prototype.requestFileSend.call(service, 'doc:9');
@@ -208,6 +287,8 @@ async function run() {
   await checkSendRequest();
   await checkSearch();
   await checkSearchWithNoPhone();
+  await checkRefreshIsFresh();
+  await checkHangUp();
   console.log('companion files: ok');
 }
 

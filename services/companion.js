@@ -240,6 +240,49 @@ class CompanionService extends EventEmitter {
     });
   }
 
+  /**
+   * Hangs up on the phone at the user's request.
+   *
+   * Not a plain destroy: the phone redials after any dropped link, so five
+   * seconds later it would be back and the button would look broken. Saying
+   * `bye` first tells the phone this was deliberate - it stops retrying and
+   * shows the user that the computer hung up, and only tapping Reconnect on
+   * the phone brings it back.
+   *
+   * Returns how many links were hung up on.
+   */
+  disconnectClients(reason = 'the computer disconnected') {
+    let hungUp = 0;
+    for (const socket of this.clients) {
+      if (!socket.handshakeDone || socket.destroyed) continue;
+      hungUp += 1;
+      try {
+        socket.write(
+          protocol.encode({
+            version: protocol.PROTOCOL_VERSION,
+            type: protocol.TYPES.BYE,
+            id: crypto.randomUUID(),
+            ts: Date.now(),
+            payload: { reason },
+          })
+        );
+      } catch (e) {
+        log(`could not say bye: ${e.message}`);
+      }
+      // end() rather than destroy(): the write above must be flushed first.
+      // Under TLS 1.3 that flush is what carries the frame before the close,
+      // and a destroy() here races it and silently drops the bye.
+      socket.end();
+      // A peer that never completes the close must not keep the link open.
+      const timer = setTimeout(() => {
+        if (!socket.destroyed) socket.destroy();
+      }, 2000);
+      if (typeof timer.unref === 'function') timer.unref();
+    }
+    if (hungUp > 0) log(`hung up on ${hungUp} phone${hungUp === 1 ? '' : 's'}`);
+    return hungUp;
+  }
+
   stop() {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
@@ -635,9 +678,13 @@ class CompanionService extends EventEmitter {
    * The answer is a `file-list` keyed by the query rather than by a path, so
    * two searches in flight cannot be confused with each other or with a folder
    * listing the user opened in the meantime.
+   *
+   * `fresh` is for the Refresh button, not for typing: it asks the phone to
+   * walk its storage again before answering, so a file saved since the last
+   * walk is found. A keystroke must never pay for that walk.
    */
-  requestFileSearch(query = '') {
-    const payload = protocol.buildFileSearchRequest(query);
+  requestFileSearch(query = '', options = {}) {
+    const payload = protocol.buildFileSearchRequest(query, options.fresh === true);
     return awaitListing(
       this,
       protocol.searchKey(payload.query),

@@ -86,6 +86,16 @@ class CompanionService : Service() {
     private var reconnectAt = 0L
     private var reconnectRunnable: Runnable? = null
 
+    /**
+     * Set when the computer hung up on purpose.
+     *
+     * The reconnect loop exists for network drops. Retrying after a deliberate
+     * hang-up would put the phone back within five seconds and make the
+     * computer's Disconnect button look broken, so the loop stays off until
+     * the user taps Reconnect on the phone.
+     */
+    private var hungUpByComputer = false
+
     /** Guards the pending clipboard and the last sent hash. */
     private val stateLock = Any()
 
@@ -203,9 +213,11 @@ class CompanionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun connect() {
-        // One client at a time: stacking them leaves a closed socket behind
-        // that looks like a dropped connection.
         if (client != null) return
+
+        // Connecting is the user's word (Reconnect, or the service starting),
+        // so a previous hang-up no longer applies.
+        hungUpByComputer = false
 
         val host = settings.host
         if (host.isEmpty()) {
@@ -261,6 +273,10 @@ class CompanionService : Service() {
                     if (saved != null) {
                         Status.lastReceivedFile = received.name
                         Log.i(TAG, "saved ${received.name}")
+                        // The search index was built before this file existed,
+                        // so without this the file is invisible to search until
+                        // the index ages out or the user reconnects.
+                        searcher?.invalidate()
                     } else {
                         Log.w(TAG, "could not save ${received.name}")
                     }
@@ -293,10 +309,23 @@ class CompanionService : Service() {
                 }
                 if (client === thisClient) {
                     Log.i(TAG, "disconnected: $reason")
+                    // Clearing the slot is what lets the reconnect loop (and
+                    // the Reconnect button) actually connect again: connect()
+                    // refuses to run while a client is still recorded.
+                    client = null
                     Status.isConnected = false
-                    Status.state = "Disconnected · retrying"
-                    updateNotification("Disconnected · retrying")
-                    scheduleReconnect()
+                    if (reason == CompanionClient.REASON_BYE) {
+                        // A hang-up, not a drop. Retrying would undo the
+                        // user's Disconnect on the computer within five
+                        // seconds, so this waits for the phone's Reconnect.
+                        hungUpByComputer = true
+                        Status.state = "Disconnected by the computer"
+                        updateNotification("Disconnected by the computer")
+                    } else {
+                        Status.state = "Disconnected · retrying"
+                        updateNotification("Disconnected · retrying")
+                        scheduleReconnect()
+                    }
                 }
             },
             onClipboardReceived = { text ->
@@ -314,8 +343,8 @@ class CompanionService : Service() {
             onFileSendRequest = { path ->
                 fileThread.execute { answerFileSend(path) }
             },
-            onFileSearchRequest = { query ->
-                searchThread.execute { answerFileSearch(query) }
+            onFileSearchRequest = { query, fresh ->
+                searchThread.execute { answerFileSearch(query, fresh) }
             },
         )
         client = thisClient
@@ -366,6 +395,9 @@ class CompanionService : Service() {
     }
 
     private fun scheduleReconnect() {
+        // A deliberate hang-up is not a drop: the loop stays off until the
+        // user taps Reconnect.
+        if (hungUpByComputer) return
         if (reconnectRunnable != null) return
         val now = System.currentTimeMillis()
         if (now < reconnectAt) return
@@ -530,15 +562,22 @@ class CompanionService : Service() {
      * The answer is an ordinary file list whose path marks it as a search, so
      * the computer resolves it with the same map it uses for folders. An empty
      * list is the honest answer for "nothing matches" and for "no access yet".
+     *
+     * [fresh] comes from the computer's Refresh button: the user has asked to
+     * see what is on the phone now, so the storage is walked again before the
+     * answer instead of being filtered from remembered names. A keystroke never
+     * sets it, because a keystroke must not pay for a walk.
      */
-    private fun answerFileSearch(query: String) {
+    private fun answerFileSearch(query: String, fresh: Boolean) {
         val c = client
         if (c == null || !c.isReady) return
 
         val entries = if (query.isBlank() || !fileBrowser.isGranted()) {
             emptyList()
         } else {
-            searcher()?.results(query)?.map { hit ->
+            val search = searcher()
+            if (fresh) search?.refreshNow()
+            search?.results(query)?.map { hit ->
                 PhoneFileBrowser.row(
                     id = hit.id,
                     name = hit.name,

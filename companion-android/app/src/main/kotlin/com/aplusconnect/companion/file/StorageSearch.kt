@@ -4,7 +4,6 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
-import java.util.concurrent.TimeUnit
 
 /**
  * The walk thread is a daemon: the index is a cache, and a walk that is still
@@ -32,8 +31,11 @@ private fun daemonExecutor(): ExecutorService =
  *    for it twice.
  *  - A stale index is still used. A search answers from it immediately and
  *    refreshes in the background, so typing never waits for a re-walk.
+ *  - A change this app made itself is not stale-but-useful: [invalidate] drops
+ *    the index, so the next search cannot answer with a file list that is
+ *    missing the file that just arrived.
  *
- * The only search that waits is the very first one on a cold service, and it
+ * The only search that waits is one with nothing usable to answer from, and it
  * waits for the walk already in flight rather than starting another.
  */
 class StorageSearch(
@@ -62,6 +64,17 @@ class StorageSearch(
     private var index: List<Hit>? = null
     private var indexedAt = 0L
     private var pending: Future<List<Hit>>? = null
+
+    /**
+     * How many times the caller has declared the storage out of date.
+     *
+     * A walk records the generation it started at. If the generation moved on
+     * while it ran - the user received another file, then another - the walk
+     * is finished but already stale, and running it again is the only honest
+     * answer.
+     */
+    private var generation = 0L
+    private var walkedGeneration = -1L
 
     /** Called whenever a walk finished, for the log. */
     var onRebuild: ((Int) -> Unit)? = null
@@ -97,27 +110,87 @@ class StorageSearch(
         startWalker()
     }
 
+    /**
+     * Says the storage has changed, without waiting for a walk.
+     *
+     * Called when this app writes a file - a transfer from the computer - so
+     * the file is findable at the next search instead of up to [TTL_MS] later.
+     * The index is dropped rather than kept: an answer from names that are
+     * known to be out of date is exactly the bug this exists to prevent, and
+     * the replacement walk is already running by the time the search gets here.
+     */
+    fun invalidate() {
+        synchronized(lock) {
+            generation += 1
+            index = null
+        }
+        startWalker()
+    }
+
+    /**
+     * Re-reads the storage and waits for it.
+     *
+     * The Refresh button's request: the user has asked to see what is there
+     * now, so answering from an index of any age would be a lie. Bounded like
+     * every other wait, because a search may not hang forever.
+     */
+    fun refreshNow() {
+        synchronized(lock) { generation += 1 }
+        awaitFreshWalk()
+    }
+
     /** How many entries the current index holds, for the log and the tests. */
     fun size(): Int = synchronized(lock) { index?.size ?: 0 }
 
     /**
-     * The best index available, waiting only when there is nothing at all.
+     * The best index available, waiting only when there is nothing usable.
      *
-     * A fresh index is returned as is. A stale one is returned too, with a
-     * refresh started behind it. Only a null index blocks, and then only for
-     * the walk that may already be running.
+     * A current index is returned as is. A stale one is returned too, with a
+     * refresh started behind it, so typing never waits for a re-walk. An index
+     * that does not match the current generation is not usable at all - it was
+     * built before something changed - so the search waits for the walk that
+     * is already running, or starts one.
      */
     private fun current(): List<Hit> {
         synchronized(lock) {
             val cached = index
-            if (cached != null) {
+            if (cached != null && walkedGeneration == generation) {
                 if (now() - indexedAt >= TTL_MS) {
                     startWalker()
                 }
                 return cached
             }
         }
-        return awaitFirstWalk()
+        return awaitFreshWalk()
+    }
+
+    /**
+     * Waits, bounded, for a walk that observed the current [generation].
+     *
+     * Polling rather than a future because the walk that will satisfy this
+     * request may not have been submitted yet: a walk in flight at an older
+     * generation is followed by the one that counts. Each turn also re-asks
+     * for a walk, so a walk that finished without noticing the change cannot
+     * leave the search waiting for one that was never started.
+     */
+    private fun awaitFreshWalk(): List<Hit> {
+        val deadline = System.currentTimeMillis() + COLD_WAIT_MS
+        while (true) {
+            synchronized(lock) {
+                if (walkedGeneration == generation) return index ?: emptyList()
+            }
+            startWalker()
+            if (System.currentTimeMillis() >= deadline) {
+                // Timed out: answer with the newest names there are rather
+                // than hanging the search, and let the walk finish in peace.
+                return synchronized(lock) { index } ?: emptyList()
+            }
+            try {
+                Thread.sleep(POLL_MS)
+            } catch (e: InterruptedException) {
+                return synchronized(lock) { index } ?: emptyList()
+            }
+        }
     }
 
     /**
@@ -130,13 +203,20 @@ class StorageSearch(
     private fun startWalker(): Future<List<Hit>> = synchronized(lock) {
         pending ?: background.submit<List<Hit>> {
             try {
+                val startedAt = synchronized(lock) { generation }
                 val built = walk(root, MAX_ENTRIES)
-                synchronized(lock) {
+                val outraced = synchronized(lock) {
                     index = built
                     indexedAt = now()
+                    walkedGeneration = startedAt
                     pending = null
+                    startedAt != generation
                 }
                 onRebuild?.invoke(built.size)
+                // The storage changed while this walk ran. The names it found
+                // are already out of date, so walk again rather than leave a
+                // fresh-looking index that is missing what just arrived.
+                if (outraced) startWalker()
                 built
             } catch (e: Exception) {
                 synchronized(lock) { pending = null }
@@ -145,18 +225,6 @@ class StorageSearch(
                 emptyList()
             }
         }.also { pending = it }
-    }
-
-    private fun awaitFirstWalk(): List<Hit> {
-        val walk = startWalker()
-        return try {
-            walk.get(COLD_WAIT_MS, TimeUnit.MILLISECONDS)
-        } catch (e: Exception) {
-            // Timed out or interrupted: answer honestly rather than blocking
-            // the file channel, which also answers folder listings. The walk
-            // keeps running and the next search finds it finished.
-            synchronized(lock) { index } ?: emptyList()
-        }
     }
 
     companion object {
@@ -178,6 +246,14 @@ class StorageSearch(
          * hung window.
          */
         const val COLD_WAIT_MS = 25_000L
+
+        /**
+         * How often a waiting search checks whether its walk has landed.
+         *
+         * Only a search that has nothing usable to answer from waits at all,
+         * so this is the granularity of a rare delay, not a cost on typing.
+         */
+        private const val POLL_MS = 25L
 
         /**
          * Folders whose contents another app owns.

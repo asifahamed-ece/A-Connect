@@ -338,8 +338,14 @@ function searchKey(query) {
 }
 
 /** A search over the whole phone's storage. */
-function buildFileSearchRequest(query) {
-  return { type: TYPES.FILE_SEARCH_REQUEST, query: String(query ?? '') };
+function buildFileSearchRequest(query, fresh = false) {
+  return {
+    type: TYPES.FILE_SEARCH_REQUEST,
+    query: String(query ?? ''),
+    // A keystroke must never force a walk of the phone's storage; the Refresh
+    // button is the one caller that asks for one.
+    fresh: fresh === true,
+  };
 }
 
 const PAIRING_TYPE = 'aplus-pairing';

@@ -226,9 +226,14 @@ function phoneParentOf(path) {
  *
  * The phone walks once and filters in memory, so a keystroke is cheap; the
  * sequence number drops an answer that arrives after a newer query.
+ *
+ * `fresh` is the Refresh button's word for "look again now": the phone walks
+ * its storage before answering, so a file saved a moment ago is found. Typing
+ * never passes it - a keystroke must not pay for a walk.
  */
-function searchPhoneFiles(query) {
+function searchPhoneFiles(query, options = {}) {
   const needle = String(query || '').trim();
+  const fresh = options.fresh === true;
   state.phone.query = query;
   if (!needle) {
     state.phone.results = null;
@@ -250,7 +255,7 @@ function searchPhoneFiles(query) {
 
   const seq = ++state.phone.searchSeq;
   window.api
-    .searchPhoneFiles(needle)
+    .searchPhoneFiles(needle, fresh)
     .then((result) => {
       if (seq !== state.phone.searchSeq) return;
       state.phone.searching = false;
@@ -1301,6 +1306,19 @@ function initNavigation() {
 
 function initDeviceActions() {
   $('btn-disconnect').addEventListener('click', async () => {
+    // "Disconnect" means the connection the user is looking at. The same phone
+    // can be reachable twice, and dropping the wrong one - or calling adb at a
+    // phone that is only here over TLS - is what made this button appear dead.
+    if (state.target === 'companion' && state.companion && window.api.disconnectCompanion) {
+      const result = await window.api.disconnectCompanion();
+      if (!result || !result.success) {
+        toast('The phone was not connected', 'err');
+        return;
+      }
+      toast('Disconnected');
+      return;
+    }
+
     if (!state.device) return;
     await window.api.disconnectDevice(state.device.id);
     toast('Disconnected');
@@ -1702,9 +1720,11 @@ function initClipboard() {
   if (phoneRefreshButton) {
     phoneRefreshButton.addEventListener('click', () => {
       // A refresh means "show me what is there now": re-run the search, or
-      // re-read the folder the user is standing in.
+      // re-read the folder the user is standing in. A search is re-run
+      // against a fresh walk, or it would answer from names the phone
+      // remembered rather than from what is on it.
       if (state.phone.results !== null || state.phone.query.trim()) {
-        searchPhoneFiles(state.phone.query);
+        searchPhoneFiles(state.phone.query, { fresh: true });
       } else {
         loadPhoneDirectory(state.phone.path);
       }

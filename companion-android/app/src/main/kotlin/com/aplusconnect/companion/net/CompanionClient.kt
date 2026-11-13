@@ -48,7 +48,7 @@ class CompanionClient(
     private val onMediaCommand: (command: String, positionMs: Long?) -> Unit = { _, _ -> },
     private val onFileListRequest: (path: String) -> Unit = { },
     private val onFileSendRequest: (path: String) -> Unit = { },
-    private val onFileSearchRequest: (query: String) -> Unit = { },
+    private val onFileSearchRequest: (query: String, fresh: Boolean) -> Unit = { _, _ -> },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -361,8 +361,11 @@ class CompanionClient(
                 }
 
                 if (message.type == Protocol.TYPE_BYE) {
+                    // Not a network drop: the computer hung up on purpose.
+                    // The service reports it differently and stops retrying,
+                    // so the user's Disconnect on the PC actually sticks.
                     Log.i(TAG, "the computer closed the session")
-                    reason = "the computer closed the session"
+                    reason = REASON_BYE
                     break
                 }
                 if (message.type == Protocol.TYPE_CLIPBOARD_SET) {
@@ -408,7 +411,10 @@ class CompanionClient(
 
                 if (message.type == Protocol.TYPE_FILE_SEARCH_REQUEST) {
                     try {
-                        onFileSearchRequest(message.payload.optString("query"))
+                        onFileSearchRequest(
+                            message.payload.optString("query"),
+                            message.payload.optBoolean("fresh", false),
+                        )
                     } catch (e: Exception) {
                         // A search over the whole storage is the slowest thing
                         // this channel does; it must never cost the connection.
@@ -450,6 +456,15 @@ class CompanionClient(
 
     companion object {
         const val TAG = "AplusConnect"
+
+        /**
+         * Why the link closed when the computer said `bye`.
+         *
+         * The service treats this reason differently from a dropped network:
+         * a drop is retried, a deliberate hang-up is not.
+         */
+        const val REASON_BYE = "the computer disconnected this phone"
+
         private const val WATCHDOG_INTERVAL_MS = 10_000L
         private const val PEER_TIMEOUT_MS = 75_000L
     }

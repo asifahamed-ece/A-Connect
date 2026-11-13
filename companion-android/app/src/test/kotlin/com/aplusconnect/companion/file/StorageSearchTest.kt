@@ -208,4 +208,90 @@ class StorageSearchTest {
         assertEquals(1, search.results("ready").size)
         assertEquals("a search after the warm-up walked again", 1, walks)
     }
+
+    // ---- a file this app wrote must be findable at once --------------------
+
+    @Test
+    fun `a file saved after the index was built is found once it is invalidated`() {
+        val root = tempRoot()
+        touch(root, "before.txt")
+
+        val search = StorageSearch(root)
+        assertEquals(1, search.results("before").size)
+
+        // A file arriving from the computer: the index knows nothing about it.
+        touch(root, "after.txt")
+        assertTrue(
+            "the index was supposed to be missing the new file",
+            search.results("after").isEmpty(),
+        )
+
+        // The service invalidates as soon as the file is saved. The next search
+        // must not answer from the names gathered before it existed - that is
+        // exactly the bug where a sent file stayed invisible until reconnect.
+        search.invalidate()
+        assertEquals(1, search.results("after").size)
+        assertEquals("the old names were lost by the invalidation", 1, search.results("before").size)
+    }
+
+    @Test
+    fun `a change during a walk makes the walk run again`() {
+        val root = tempRoot()
+        touch(root, "first.txt")
+
+        val scanned = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var walks = 0
+
+        // The first walk reads the storage, then holds. Everything it saw is
+        // already out of date by the time it finishes, so its answer must not
+        // become the index the user searches against.
+        val heldWalk: (File, Int) -> List<StorageSearch.Hit> = { dir, limit ->
+            walks++
+            if (walks == 1) {
+                val snapshot = StorageSearch.build(dir, limit)
+                scanned.countDown()
+                release.await()
+                snapshot
+            } else {
+                StorageSearch.build(dir, limit)
+            }
+        }
+
+        val search = StorageSearch(root, walk = heldWalk)
+        search.warm()
+        assertTrue("the first walk never started", scanned.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+        touch(root, "arrived.txt")
+        search.invalidate()
+        release.countDown()
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (search.results("arrived").isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10)
+        }
+        assertEquals("a walk that started before the change was treated as current", 1, search.results("arrived").size)
+        assertTrue("the storage was walked only once", walks >= 2)
+    }
+
+    @Test
+    fun `a forced refresh sees a file saved since the last walk`() {
+        val root = tempRoot()
+        touch(root, "before.txt")
+
+        val search = StorageSearch(root)
+        assertEquals(1, search.results("before").size)
+
+        touch(root, "after.txt")
+
+        // Typing must stay cheap: it answers from the index, which cannot know
+        // about the new file yet. This is not a bug, it is the trade the index
+        // makes, and it is why Refresh exists.
+        assertTrue("an ordinary search should not re-walk", search.results("after").isEmpty())
+
+        search.refreshNow()
+
+        assertEquals("Refresh did not re-read the storage", 1, search.results("after").size)
+        assertEquals(1, search.results("before").size)
+    }
 }

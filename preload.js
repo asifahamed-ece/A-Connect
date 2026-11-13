@@ -55,9 +55,15 @@ contextBridge.exposeInMainWorld('api', {
   // The phone's own storage, over the companion channel. `path` is a folder
   // relative to the phone's storage root, as the phone handed it out; '' is
   // that root. Searching covers every folder the phone has granted access to.
+  // `fresh` asks the phone to re-walk its storage first; only the Refresh
+  // button passes it, because a keystroke must not pay for a walk.
   listPhoneFiles: (path) => ipcRenderer.invoke('companion:listFiles', path),
-  searchPhoneFiles: (query) => ipcRenderer.invoke('companion:searchFiles', query),
+  searchPhoneFiles: (query, fresh) => ipcRenderer.invoke('companion:searchFiles', query, fresh === true),
   downloadPhoneFile: (path) => ipcRenderer.invoke('companion:downloadFile', path),
+
+  // Hangs up on the phone over the companion channel. The phone is told this
+  // was deliberate, so it stops retrying until the user reconnects it.
+  disconnectCompanion: () => ipcRenderer.invoke('companion:disconnect'),
 
   // System & Window
   minimizeWindow: () => ipcRenderer.send('window:minimize'),

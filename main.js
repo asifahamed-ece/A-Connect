@@ -490,8 +490,14 @@ function setupIpcHandlers() {
     return { success: sent, filePath, name: require('path').basename(filePath) };
   });
   ipcMain.handle('companion:listFiles', async (_, path) => companion.requestFileList(path));
-  ipcMain.handle('companion:searchFiles', async (_, query) => companion.requestFileSearch(query));
+  ipcMain.handle('companion:searchFiles', async (_, query, fresh) =>
+    companion.requestFileSearch(query, { fresh: fresh === true })
+  );
   ipcMain.handle('companion:downloadFile', async (_, path) => companion.requestFileSend(path));
+  ipcMain.handle('companion:disconnect', async () => {
+    const hungUp = companion.disconnectClients();
+    return { success: hungUp > 0, hungUp };
+  });
   ipcMain.handle('companion:stop', async () => {
     companion.stop();
     return companion.getInfo();

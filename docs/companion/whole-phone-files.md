@@ -104,7 +104,16 @@ So `StorageSearch` builds a **name index once** and filters it in memory:
 - **A stale index still answers.** Names older than five minutes are refreshed
   *in the background*; the search that notices the age answers from what it has
   and the next keystroke sees the new names.
-- **Only the first search of a session can wait**, and then only for the walk
+- **A file this app just received is never missed.** Saving a transfer from the
+  PC invalidates the index, so the next search cannot answer with a list that
+  is missing the file that just arrived. Without this a sent file stayed
+  invisible until the index aged out or the phone reconnected - the bug found
+  in use, where a file only appeared after reconnecting the phone.
+- **Refresh re-reads the storage.** The browser's Refresh button sends the
+  search with a `fresh` flag and the phone walks before answering. That covers
+  changes this app did not make - a download finishing in another app, a photo
+  just taken. Typing never sets the flag: a keystroke must not pay for a walk.
+- **Only a search with nothing usable can wait**, and then only for the walk
   already in flight, capped at 25 seconds.
 - Breadth-first, capped at 100,000 entries, 200 results, hidden names skipped,
   `Android/data` and `Android/obb` skipped.
@@ -126,12 +135,23 @@ confused. This means the desktop resolves a search with the same map it uses
 for folders - no second parser, no new payload shape - and a folder listing and
 a search in flight cannot resolve each other.
 
+The request itself is small:
+
+```json
+{ "query": "jpg", "fresh": false }
+```
+
+`fresh` is the Refresh button's word for "walk the storage again before you
+answer". It is the only thing in the whole search path that makes the phone pay
+for a walk, because typing must stay cheap.
+
 ## The desktop side
 
 - `services/companion.js` - `requestFileList(path)` and
-  `requestFileSearch(query)`, both routed through one `awaitListing()` helper
-  that keys the pending map and applies the right deadline (10 s for a folder,
-  40 s for a search, because the phone may still be walking).
+  `requestFileSearch(query, { fresh })`, both routed through one
+  `awaitListing()` helper that keys the pending map and applies the right
+  deadline (10 s for a folder, 40 s for a search, because the phone may still
+  be walking).
 - `main.js` - IPC `companion:listFiles`, `companion:searchFiles`,
   `companion:downloadFile`.
 - `preload.js` - `window.api.listPhoneFiles`, `searchPhoneFiles`,
