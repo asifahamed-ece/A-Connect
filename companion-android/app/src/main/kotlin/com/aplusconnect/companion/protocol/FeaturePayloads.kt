@@ -40,6 +40,8 @@ object FeaturePayloads {
     )
 
     data class FileEntry(
+        /** The phone's document id: what the computer sends back to open it. */
+        val id: String,
         val name: String,
         val size: Long,
         val isDir: Boolean,
@@ -105,6 +107,7 @@ object FeaturePayloads {
             entries.forEach { entry ->
                 put(
                     JSONObject()
+                        .put("id", entry.id)
                         .put("name", entry.name)
                         .put("size", entry.size)
                         .put("isDir", entry.isDir)
@@ -163,6 +166,7 @@ object FeaturePayloads {
             entries = (0 until entries.length()).mapNotNull { index ->
                 entries.optJSONObject(index)?.let {
                     FileEntry(
+                        id = it.optString("id"),
                         name = it.optString("name"),
                         size = it.optLong("size"),
                         isDir = it.optBoolean("isDir"),

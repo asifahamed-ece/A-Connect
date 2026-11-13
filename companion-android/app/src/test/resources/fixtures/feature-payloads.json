@@ -27,8 +27,8 @@
     "type": "file-list",
     "path": "root",
     "entries": [
-      { "name": "Pictures", "size": 0, "isDir": true, "mime": "" },
-      { "name": "photo.jpg", "size": 1024, "isDir": false, "mime": "image/jpeg" }
+      { "id": "doc:pictures", "name": "Pictures", "size": 0, "isDir": true, "mime": "" },
+      { "id": "doc:photo", "name": "photo.jpg", "size": 1024, "isDir": false, "mime": "image/jpeg" }
     ]
   }
 }

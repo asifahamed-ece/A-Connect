@@ -74,6 +74,7 @@ class PhoneFileBrowser(
             context.contentResolver.query(
                 children,
                 arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                     DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                     DocumentsContract.Document.COLUMN_MIME_TYPE,
                     DocumentsContract.Document.COLUMN_SIZE,
@@ -83,11 +84,12 @@ class PhoneFileBrowser(
                 null,
             )?.use { cursor ->
                 while (cursor.moveToNext()) {
-                    val mime = cursor.getString(1)
+                    val mime = cursor.getString(2)
                     entries.add(
                         entryFor(
-                            displayName = cursor.getString(0),
-                            size = if (cursor.isNull(2)) 0L else cursor.getLong(2),
+                            id = cursor.getString(0),
+                            displayName = cursor.getString(1),
+                            size = if (cursor.isNull(3)) 0L else cursor.getLong(3),
                             mime = mime,
                             isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR,
                         )
@@ -141,11 +143,13 @@ class PhoneFileBrowser(
          * a byte count next to a folder and a mime type nobody can use.
          */
         fun entryFor(
+            id: String?,
             displayName: String?,
             size: Long,
             mime: String?,
             isDir: Boolean = false,
         ): FileEntry = FileEntry(
+            id = id ?: "",
             name = displayName?.takeIf { it.isNotBlank() } ?: "unnamed",
             size = if (isDir) 0L else size,
             isDir = isDir,

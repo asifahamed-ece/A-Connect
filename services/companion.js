@@ -20,6 +20,12 @@ const PAIRING_CODE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const PING_INTERVAL_MS = 30 * 1000;
 const PEER_TIMEOUT_MS = 75 * 1000;
 
+// How long the desktop waits for a folder listing before it tells the user the
+// phone did not answer. A listing is one query on the phone, so this is
+// generous - it is here to stop the UI spinning forever, not to catch a slow
+// folder.
+const FILE_LIST_TIMEOUT_MS = 10 * 1000;
+
 const PAIRED_DEVICES_FILE = path.join(
   process.env.HOME || process.env.USERPROFILE || '.',
   '.config',
@@ -31,6 +37,29 @@ const PAIRED_DEVICES_FILE = path.join(
 /** A log line with the time, so a drop can be placed in a timeline. */
 function log(message) {
   console.log(`[companion ${new Date().toISOString().slice(11, 19)}] ${message}`);
+}
+
+/**
+ * Writes one frame to every paired, live phone, and says how many got it.
+ *
+ * A plain function rather than a method, because the checks in `scripts/`
+ * exercise the message handlers against a stand-in service with only a
+ * `clients` array. Every message the desktop sends goes through here, so "is
+ * this phone usable" is answered once.
+ */
+function sendToPhones(service, frame, what = 'a message') {
+  let sentCount = 0;
+  for (const socket of service.clients) {
+    if (socket.handshakeDone && !socket.destroyed) {
+      try {
+        socket.write(frame);
+        sentCount += 1;
+      } catch (e) {
+        console.error(`[companion] could not send ${what}: ${e.message}`);
+      }
+    }
+  }
+  return sentCount;
 }
 
 class CompanionService extends EventEmitter {
@@ -47,6 +76,12 @@ class CompanionService extends EventEmitter {
     this.pairingCode = null;
     this.pairingCodeExpiresAt = 0;
     this.destinationDir = options.destinationDir || path.join(os.homedir(), 'Downloads');
+
+    // Folder listings the user is waiting for, by the path they asked for.
+    // A Map rather than a single slot: two folders can be asked for in quick
+    // succession, and the answers carry the path back, so they cannot be
+    // confused with each other.
+    this.pendingFileLists = new Map();
 
     this.loadPairedDevices();
     this.generatePairingCode();
@@ -213,6 +248,7 @@ class CompanionService extends EventEmitter {
       this.clients.delete(socket);
       if (socket.handshakeDone) {
         log(`phone disconnected: ${socket.deviceName || socket.clientIp}`);
+        this.failPendingFileLists();
         this.emit('client-disconnected', { deviceId: socket.deviceId, ip: socket.clientIp });
       }
       this.updateStatus();
@@ -425,6 +461,11 @@ class CompanionService extends EventEmitter {
       return;
     }
 
+    if (message.type === protocol.TYPES.FILE_LIST) {
+      this.handleFileList(message.payload);
+      return;
+    }
+
     if (routeNotification(this, message)) return;
     if (routeMedia(this, message)) return;
 
@@ -529,6 +570,108 @@ class CompanionService extends EventEmitter {
   }
 
   /**
+   * Asks the phone for one folder listing.
+   *
+   * `path` is the document id the phone handed out before, or the empty string
+   * for the root of the folder the user shared on the phone. The answer
+   * carries the same path, so it is matched on that rather than on arrival
+   * order.
+   */
+  requestFileList(path = '') {
+    const payload = protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, path);
+    const key = payload.path;
+
+    return new Promise((resolve) => {
+      const previous = this.pendingFileLists.get(key);
+      if (previous) {
+        clearTimeout(previous.timer);
+        previous.resolve({ success: false, error: 'superseded' });
+      }
+
+      const timer = setTimeout(() => {
+        this.pendingFileLists.delete(key);
+        resolve({ success: false, error: 'The phone did not answer' });
+      }, FILE_LIST_TIMEOUT_MS);
+      this.pendingFileLists.set(key, { resolve, timer });
+
+      const sent = sendToPhones(
+        this,
+        protocol.encode({
+          version: protocol.PROTOCOL_VERSION,
+          type: protocol.TYPES.FILE_LIST_REQUEST,
+          id: crypto.randomUUID(),
+          ts: Date.now(),
+          payload,
+        }),
+        'a file list request'
+      );
+
+      if (sent === 0) {
+        clearTimeout(timer);
+        this.pendingFileLists.delete(key);
+        resolve({ success: false, error: 'The phone is not connected' });
+      }
+    });
+  }
+
+  /**
+   * Asks the phone to send one file.
+   *
+   * Nothing is awaited here: the file arrives as the ordinary
+   * file-start/chunk/done transfer, which the desktop already saves, so the
+   * progress the user sees is the same progress a file sent from the phone
+   * shows.
+   */
+  requestFileSend(path = '') {
+    const payload = protocol.buildFileRequest(protocol.TYPES.FILE_SEND_REQUEST, path);
+    const sent = sendToPhones(
+      this,
+      protocol.encode({
+        version: protocol.PROTOCOL_VERSION,
+        type: protocol.TYPES.FILE_SEND_REQUEST,
+        id: crypto.randomUUID(),
+        ts: Date.now(),
+        payload,
+      }),
+      'a file send request'
+    );
+    if (sent === 0) return { success: false, error: 'The phone is not connected' };
+    return { success: true };
+  }
+
+  /** Answers a listing the user asked for, and orders it the way the UI draws it. */
+  handleFileList(payload) {
+    const listing = protocol.parseFileList(payload);
+    if (!listing) {
+      console.warn('[companion] the phone sent a file list without entries');
+      return;
+    }
+    listing.entries = protocol.sortFileEntries(listing.entries);
+    this.emit('file-list', listing);
+
+    const pending = this.pendingFileLists.get(listing.path);
+    if (pending) {
+      this.pendingFileLists.delete(listing.path);
+      clearTimeout(pending.timer);
+      pending.resolve({ success: true, path: listing.path, entries: listing.entries });
+    }
+  }
+
+  /**
+   * Stops every waiting folder request.
+   *
+   * A phone that disconnects will never answer, and the user would otherwise
+   * watch a spinner for ten seconds after the connection is already gone.
+   */
+  failPendingFileLists(reason = 'The phone disconnected') {
+    for (const [, pending] of this.pendingFileLists) {
+      clearTimeout(pending.timer);
+      pending.resolve({ success: false, error: reason });
+    }
+    this.pendingFileLists.clear();
+  }
+
+  /**
    * Sends a file to the connected phones, in chunks.
    *
    * The chunks are base64 in JSON frames, the same shape the phone uses when
@@ -620,17 +763,7 @@ class CompanionService extends EventEmitter {
       },
     });
 
-    let sentCount = 0;
-    for (const socket of this.clients) {
-      if (socket.handshakeDone && !socket.destroyed) {
-        try {
-          socket.write(frame);
-          sentCount += 1;
-        } catch (e) {
-          console.error(`[companion] error sending clipboard to ${socket.clientIp || socket.remoteAddress}:`, e.message);
-        }
-      }
-    }
+    const sentCount = sendToPhones(this, frame, 'the clipboard');
 
     if (sentCount > 0) {
       this.emit('clipboard-sent', { text: payload.text, count: sentCount });
@@ -662,18 +795,7 @@ class CompanionService extends EventEmitter {
       },
     });
 
-    let sentCount = 0;
-    for (const socket of this.clients) {
-      if (socket.handshakeDone && !socket.destroyed) {
-        try {
-          socket.write(frame);
-          sentCount += 1;
-        } catch (e) {
-          console.error(`[companion] could not send a notification action: ${e.message}`);
-        }
-      }
-    }
-    return sentCount > 0;
+    return sendToPhones(this, frame, 'a notification action') > 0;
   }
 
   /**
@@ -696,18 +818,7 @@ class CompanionService extends EventEmitter {
       payload,
     });
 
-    let sentCount = 0;
-    for (const socket of this.clients) {
-      if (socket.handshakeDone && !socket.destroyed) {
-        try {
-          socket.write(frame);
-          sentCount += 1;
-        } catch (e) {
-          console.error(`[companion] could not send a media command: ${e.message}`);
-        }
-      }
-    }
-    return sentCount > 0;
+    return sendToPhones(this, frame, 'a media command') > 0;
   }
 
   updateStatus() {

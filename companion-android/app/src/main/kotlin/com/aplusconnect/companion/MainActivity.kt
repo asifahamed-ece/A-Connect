@@ -278,6 +278,12 @@ fun MainScreen(settings: CompanionSettings) {
 
     // The folder the computer may browse. Read-only: the picker grants a
     // permission, and nothing in the app can change what is inside it.
+    //
+    // The chosen folder is held in state as well as in the settings: the card
+    // is composed once, so reading the setting alone would leave it saying
+    // "Nothing shared yet" right after the user shared something.
+    var browseFolder by remember { mutableStateOf(settings.browseRootUri) }
+
     val browsePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -292,6 +298,7 @@ fun MainScreen(settings: CompanionSettings) {
                 // folder still works for this session.
             }
             settings.browseRootUri = uri.toString()
+            browseFolder = uri.toString()
             Toast.makeText(context, "The computer can now browse that folder", Toast.LENGTH_SHORT).show()
         }
     }
@@ -514,7 +521,7 @@ fun MainScreen(settings: CompanionSettings) {
                     },
                     downloadFolder = settings.downloadFolderUri,
                     onPickDownloadFolder = { folderPicker.launch(null) },
-                    browseFolder = settings.browseRootUri,
+                    browseFolder = browseFolder,
                     onPickBrowseFolder = { browsePicker.launch(null) },
                     onScanQr = {
                         cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)

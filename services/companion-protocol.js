@@ -262,6 +262,10 @@ function buildFileList(path, entries) {
     type: TYPES.FILE_LIST,
     path,
     entries: (entries || []).map((e) => ({
+      // The document id is what the phone is asked for when the user opens a
+      // folder or pulls a file, so a listing without it is a list of names
+      // nobody can act on.
+      id: e.id || '',
       name: e.name,
       size: e.size,
       isDir: Boolean(e.isDir),
@@ -275,12 +279,40 @@ function parseFileList(payload) {
   return {
     path: payload.path || '',
     entries: payload.entries.map((e) => ({
+      id: e.id || '',
       name: e.name,
       size: e.size || 0,
       isDir: Boolean(e.isDir),
       mime: e.mime || '',
     })),
   };
+}
+
+/**
+ * The same ordering rule the phone applies: folders first, then files, each by
+ * name. The phone already sorts, and this repeats it so a list that arrives in
+ * another order - an older phone, a provider that ignores the sort - is still
+ * drawn the way the user expects.
+ */
+function sortFileEntries(entries) {
+  return (entries || []).slice().sort((a, b) => {
+    if (Boolean(a.isDir) !== Boolean(b.isDir)) return a.isDir ? -1 : 1;
+    return String(a.name || '').toLowerCase().localeCompare(String(b.name || '').toLowerCase());
+  });
+}
+
+/**
+ * Asks the phone for a folder listing, or for one file.
+ *
+ * `path` is the document id the phone handed out (the empty string is the root
+ * of the folder the user shared), and it is the same key the phone's answer
+ * echoes back, so the desktop never has to invent a second identifier.
+ */
+function buildFileRequest(type, path) {
+  if (type !== TYPES.FILE_LIST_REQUEST && type !== TYPES.FILE_SEND_REQUEST) {
+    throw new Error(`not a file request: ${type}`);
+  }
+  return { type, path: typeof path === 'string' ? path : '' };
 }
 
 const PAIRING_TYPE = 'aplus-pairing';
@@ -368,6 +400,8 @@ module.exports = {
   parseMediaState,
   buildFileList,
   parseFileList,
+  sortFileEntries,
+  buildFileRequest,
   computeProof,
   verifyProof,
   buildPairingPayload,

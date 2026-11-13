@@ -660,6 +660,10 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 /* ---------- Phone file browser ---------- */
 .browser { margin-bottom: var(--s-5); overflow: hidden; }
+/* The same browser, driven by the companion channel instead of debugging. */
+.phone-browser { margin-bottom: var(--s-5); overflow: hidden; }
+.phone-browser .browser-head { justify-content: space-between; }
+.phone-browser .breadcrumb { flex: 1; }
 .browser-head {
   display: flex;
   align-items: center;

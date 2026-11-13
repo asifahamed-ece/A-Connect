@@ -23,17 +23,22 @@ class PhoneFileBrowserTest {
             displayName = "photo.jpg",
             size = 1024L,
             mime = "image/jpeg",
+            id = "doc:photo",
         )
 
         assertEquals("photo.jpg", entry.name)
         assertEquals(1024L, entry.size)
         assertEquals("image/jpeg", entry.mime)
         assertFalse(entry.isDir)
+        // The document id is what the computer sends back to ask for this
+        // file; without it a listing is a list of names nobody can open.
+        assertEquals("doc:photo", entry.id)
     }
 
     @Test
     fun `a folder entry has no size`() {
         val entry = PhoneFileBrowser.entryFor(
+            id = "doc:pictures",
             displayName = "Pictures",
             size = 4096L,
             mime = null,
@@ -50,18 +55,18 @@ class PhoneFileBrowserTest {
 
     @Test
     fun `a nameless document gets a readable name`() {
-        assertEquals("unnamed", PhoneFileBrowser.entryFor(null, 0L, null).name)
-        assertEquals("unnamed", PhoneFileBrowser.entryFor("", 0L, null).name)
+        assertEquals("unnamed", PhoneFileBrowser.entryFor(null, null, 0L, null).name)
+        assertEquals("unnamed", PhoneFileBrowser.entryFor(null, "", 0L, null).name)
     }
 
     @Test
     fun `folders sort before files and files sort by name`() {
         val sorted = PhoneFileBrowser.sortEntries(
             listOf(
-                FileEntry("zeta.txt", 10L, false, "text/plain"),
-                FileEntry("Music", 0L, true, ""),
-                FileEntry("alpha.txt", 20L, false, "text/plain"),
-                FileEntry("Download", 0L, true, ""),
+                FileEntry("doc:1", "zeta.txt", 10L, false, "text/plain"),
+                FileEntry("doc:2", "Music", 0L, true, ""),
+                FileEntry("doc:3", "alpha.txt", 20L, false, "text/plain"),
+                FileEntry("doc:4", "Download", 0L, true, ""),
             )
         )
 

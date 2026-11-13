@@ -229,14 +229,19 @@ function checkFeaturePayloads() {
   assert.strictEqual(protocol.parseMediaState(mediaState).playing, true, 'playing did not survive');
 
   const fileList = protocol.buildFileList('root', [
-    { name: 'Pictures', size: 0, isDir: true, mime: '' },
-    { name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
+    { id: 'doc:pictures', name: 'Pictures', size: 0, isDir: true, mime: '' },
+    { id: 'doc:photo', name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
   ]);
   assert.deepStrictEqual(fileList, expected.fileList, 'the file list payload changed');
   assert.strictEqual(
     protocol.parseFileList(fileList).entries[1].name,
     'photo.jpg',
     'the file entries did not survive the parser'
+  );
+  assert.strictEqual(
+    protocol.parseFileList(fileList).entries[1].id,
+    'doc:photo',
+    'the document id did not survive the parser, so nothing can be opened'
   );
 }
 
@@ -320,6 +325,74 @@ function checkPairingPayload() {
   );
 }
 
+/**
+ * The phone's file browser, from the desktop's side.
+ *
+ * The listing must survive a real frame - not just the builder - because the
+ * frame is what crosses the wire; and the two requests must carry the document
+ * id in the same `path` key the answer echoes, or the desktop sends back a
+ * value the phone does not understand and silently gets the root folder.
+ */
+function checkFileBrowser() {
+  const list = protocol.buildFileList('doc:123', [
+    { id: 'doc:pictures', name: 'Pictures', size: 0, isDir: true, mime: '' },
+    { id: 'doc:photo', name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
+  ]);
+
+  const frame = protocol.encode({
+    version: protocol.PROTOCOL_VERSION,
+    type: protocol.TYPES.FILE_LIST,
+    id: 'frame-1',
+    ts: 1,
+    payload: list,
+  });
+  const parsed = protocol.parseFileList(protocol.decode(frame).payload);
+  assert.ok(parsed, 'the file list did not survive the frame');
+  assert.strictEqual(parsed.path, 'doc:123', 'the folder id did not survive the frame');
+  assert.strictEqual(parsed.entries[0].name, 'Pictures', 'the first entry changed');
+  assert.strictEqual(parsed.entries[0].isDir, true, 'a folder was read as a file');
+  assert.strictEqual(parsed.entries[1].isDir, false, 'a file was read as a folder');
+  assert.strictEqual(parsed.entries[0].id, 'doc:pictures', 'a folder lost its document id');
+  assert.strictEqual(parsed.entries[1].id, 'doc:photo', 'a file lost its document id');
+
+  // The same ordering rule the phone applies, so a list that arrives out of
+  // order is still drawn with the folders on top.
+  const sorted = protocol.sortFileEntries([
+    { name: 'zeta.txt', size: 10, isDir: false, mime: 'text/plain' },
+    { name: 'Music', size: 0, isDir: true, mime: '' },
+    { name: 'alpha.txt', size: 20, isDir: false, mime: 'text/plain' },
+    { name: 'Download', size: 0, isDir: true, mime: '' },
+  ]);
+  assert.deepStrictEqual(
+    sorted.map((e) => e.name),
+    ['Download', 'Music', 'alpha.txt', 'zeta.txt'],
+    'folders must sort before files, each by name'
+  );
+
+  // A payload without entries is not a listing, and must not be drawn as an
+  // empty folder: that would hide a protocol mistake.
+  assert.strictEqual(protocol.parseFileList({ path: 'x' }), null, 'a list without entries parsed');
+
+  const listRequest = protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, 'doc:123');
+  assert.strictEqual(listRequest.path, 'doc:123', 'the list request lost the folder id');
+  assert.strictEqual(
+    listRequest.type,
+    protocol.TYPES.FILE_LIST_REQUEST,
+    'the list request lost its type'
+  );
+
+  const sendRequest = protocol.buildFileRequest(protocol.TYPES.FILE_SEND_REQUEST, 'doc:456');
+  assert.strictEqual(sendRequest.path, 'doc:456', 'the send request lost the file id');
+  assert.strictEqual(
+    sendRequest.type,
+    protocol.TYPES.FILE_SEND_REQUEST,
+    'the send request lost its type'
+  );
+
+  // The root is the empty string, and must be sent as one rather than dropped.
+  assert.strictEqual(protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, '').path, '', 'the root request lost its path');
+}
+
 function main() {
   const write = process.argv.includes('--write');
 
@@ -334,6 +407,7 @@ function main() {
   checkClipboardRules();
   checkBinaryFrames();
   checkFeaturePayloads();
+  checkFileBrowser();
   checkNoHardcodedVersion();
   checkProofRules();
   checkPairingPayload();

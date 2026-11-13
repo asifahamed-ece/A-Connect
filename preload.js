@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld('api', {
   selectCompanionDestinationDir: () => ipcRenderer.invoke('companion:selectDestinationDir'),
   openCompanionDestinationDir: () => ipcRenderer.invoke('companion:openCompanionDestinationDir'),
 
+  // The phone's own folder, over the companion channel. `path` is the document
+  // id the phone handed out; '' is the root of the folder shared on the phone.
+  listPhoneFiles: (path) => ipcRenderer.invoke('companion:listFiles', path),
+  downloadPhoneFile: (path) => ipcRenderer.invoke('companion:downloadFile', path),
+
   // System & Window
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   toggleMaximize: () => ipcRenderer.send('window:maximize'),

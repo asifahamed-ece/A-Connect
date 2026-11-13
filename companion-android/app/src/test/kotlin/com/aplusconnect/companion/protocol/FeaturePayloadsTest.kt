@@ -104,8 +104,8 @@ class FeaturePayloadsTest {
         val files = FeaturePayloads.fileList(
             path = "root",
             entries = listOf(
-                FeaturePayloads.FileEntry("Pictures", 0L, true, ""),
-                FeaturePayloads.FileEntry("photo.jpg", 1024L, false, "image/jpeg"),
+                FeaturePayloads.FileEntry("doc:pictures", "Pictures", 0L, true, ""),
+                FeaturePayloads.FileEntry("doc:photo", "photo.jpg", 1024L, false, "image/jpeg"),
             ),
         )
         assertEquals(fixture.getJSONObject("fileList").toString(), files.toString())

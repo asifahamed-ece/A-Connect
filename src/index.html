@@ -246,15 +246,31 @@
             </div>
           </header>
 
-          <!-- The phone file browser needs the ADB transport; over the
-               companion channel the app can send and receive files. -->
+          <!-- The phone's own folder, over the companion channel. -->
           <div class="card row-card" id="companion-files-note" style="display: none; margin-bottom: 16px;">
             <div>
-              <div class="row-title">Browsing the phone's files needs the debugging connection</div>
+              <div class="row-title">The folder shared from your phone</div>
               <div class="row-sub" id="companion-files-text"></div>
             </div>
             <div>
               <button class="btn-secondary" id="btn-send-file-to-phone" style="padding: 6px 12px; font-size: 12px;">Send a file…</button>
+            </div>
+          </div>
+
+          <!-- The phone's own folder, over the companion channel. Read-only:
+               the phone only lets the computer look and copy. -->
+          <div class="card phone-browser" id="phone-browser" hidden>
+            <div class="browser-head">
+              <div class="breadcrumb" id="phone-path">/</div>
+              <button class="icon-btn" id="phone-up" aria-label="Parent folder">
+                <svg class="icon"><use href="#i-up"/></svg>
+              </button>
+              <button class="icon-btn" id="phone-refresh" aria-label="Refresh folder">
+                <svg class="icon"><use href="#i-refresh"/></svg>
+              </button>
+            </div>
+            <div class="browser-list" id="phone-browser-list">
+              <div class="list-empty">Loading the phone's folder…</div>
             </div>
           </div>
 
