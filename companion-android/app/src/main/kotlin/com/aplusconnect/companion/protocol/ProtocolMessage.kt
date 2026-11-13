@@ -26,6 +26,18 @@ object Protocol {
     const val TYPE_FILE_LIST_REQUEST = "file-list-request"
     const val TYPE_FILE_LIST = "file-list"
     const val TYPE_FILE_SEND_REQUEST = "file-send-request"
+
+    /**
+     * A search across the whole phone, rather than one folder.
+     *
+     * The answer is an ordinary `file-list` whose `path` is [searchKey] of the
+     * query, so the desktop matches it with the same map it uses for folders
+     * and needs no separate parser.
+     */
+    const val TYPE_FILE_SEARCH_REQUEST = "file-search-request"
+    const val SEARCH_KEY_PREFIX = "search:"
+
+    fun searchKey(query: String): String = SEARCH_KEY_PREFIX + query
     const val TYPE_MIRROR_START = "mirror-start"
     const val TYPE_MIRROR_STOP = "mirror-stop"
 

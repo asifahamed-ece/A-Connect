@@ -28,18 +28,21 @@ const state = {
     recent: null,
     recentLoading: false,
   },
-  // The phone's folder, listed over the companion channel. `path` is the
-  // document id the phone handed out; '' is the root of the folder the user
-  // shared on the phone. `trail` is only for the breadcrumb - the phone is the
-  // authority on what a path means.
+  // The phone's whole storage, listed over the companion channel. `path` is
+  // relative to the phone's storage root ('' is that root), as the phone hands
+  // it out; the phone is the authority on what a path means. `results` is the
+  // search answer, null while the folder listing is what is on screen.
   phone: {
     path: '',
-    trail: [],
     entries: [],
+    results: null,
+    query: '',
+    searching: false,
     loading: false,
     loaded: false,
     error: null,
     seq: 0,
+    searchSeq: 0,
   },
 };
 
@@ -174,10 +177,9 @@ function updateFilesTransport() {
   }
 }
 
-/** Lists one folder of the phone's shared folder. */
-function loadPhoneDirectory(path, trail) {
+/** Lists one folder of the phone's storage. `path` is relative to its root. */
+function loadPhoneDirectory(path) {
   state.phone.path = path;
-  if (trail) state.phone.trail = trail;
   state.phone.loading = true;
   state.phone.error = null;
   renderPhoneBrowser();
@@ -213,27 +215,127 @@ function loadPhoneDirectory(path, trail) {
     });
 }
 
+/** The folder a phone path lives in, or '' when it is already at the root. */
+function phoneParentOf(path) {
+  const cut = String(path || '').lastIndexOf('/');
+  return cut === -1 ? '' : path.slice(0, cut);
+}
+
+/**
+ * Searches every folder the phone has granted.
+ *
+ * The phone walks once and filters in memory, so a keystroke is cheap; the
+ * sequence number drops an answer that arrives after a newer query.
+ */
+function searchPhoneFiles(query) {
+  const needle = String(query || '').trim();
+  state.phone.query = query;
+  if (!needle) {
+    state.phone.results = null;
+    state.phone.searching = false;
+    renderPhoneBrowser();
+    return;
+  }
+
+  if (!window.api.searchPhoneFiles) {
+    state.phone.results = [];
+    state.phone.error = 'This build cannot search the phone.';
+    renderPhoneBrowser();
+    return;
+  }
+
+  state.phone.searching = true;
+  state.phone.error = null;
+  renderPhoneBrowser();
+
+  const seq = ++state.phone.searchSeq;
+  window.api
+    .searchPhoneFiles(needle)
+    .then((result) => {
+      if (seq !== state.phone.searchSeq) return;
+      state.phone.searching = false;
+      if (!result || !result.success) {
+        state.phone.results = [];
+        state.phone.error = (result && result.error) || 'The phone did not answer.';
+      } else {
+        state.phone.results = result.entries || [];
+      }
+      renderPhoneBrowser();
+    })
+    .catch((e) => {
+      if (seq !== state.phone.searchSeq) return;
+      state.phone.searching = false;
+      state.phone.results = [];
+      state.phone.error = e.message;
+      renderPhoneBrowser();
+    });
+}
+
+/** Debounces the search box: one request per pause, not per keystroke. */
+let phoneSearchTimer = null;
+function schedulePhoneSearch(query) {
+  if (phoneSearchTimer) clearTimeout(phoneSearchTimer);
+  phoneSearchTimer = setTimeout(() => {
+    phoneSearchTimer = null;
+    searchPhoneFiles(query);
+  }, 220);
+}
+
 function renderPhoneBrowser() {
   const list = $('phone-browser-list');
   if (!list) return;
 
-  const { trail, entries, loading, error } = state.phone;
+  const { path, entries, results, loading, searching, query, error } = state.phone;
+  const searching0 = results !== null || Boolean(query.trim());
   const crumb = $('phone-path');
-  if (crumb) crumb.textContent = trail.length ? `/${trail.map((t) => t.name).join('/')}` : '/';
+  if (crumb) {
+    crumb.textContent = searching0 ? `Search: ${query.trim()}` : `/${path}`;
+  }
   const up = $('phone-up');
-  if (up) up.disabled = trail.length === 0;
+  if (up) up.disabled = searching0 || path === '';
+  const clear = $('phone-search-clear');
+  if (clear) clear.hidden = !query;
 
-  if (loading) {
-    list.innerHTML = '<div class="list-empty">Reading the phone…</div>';
+  if (loading || searching) {
+    list.innerHTML = '<div class="list-empty">Reading the phone...</div>';
     return;
   }
   if (error) {
     list.innerHTML = `<div class="list-empty">${escapeHtml(error)}</div>`;
     return;
   }
+
+  if (searching0) {
+    if (!results || !results.length) {
+      list.innerHTML = `<div class="list-empty">Nothing on the phone matches “${escapeHtml(
+        query.trim(),
+      )}”.</div>`;
+      return;
+    }
+    list.innerHTML = results
+      .map((entry) => {
+        const where = phoneParentOf(entry.id) || '/';
+        return `
+      <div class="browse-row ${entry.isDir ? 'dir' : 'file'}" data-id="${escapeHtml(entry.id)}" data-dir="${entry.isDir ? '1' : '0'}">
+        ${icon(entry.isDir ? 'folder' : 'file')}
+        <div class="browse-name" title="${escapeHtml(entry.id)}">${escapeHtml(entry.name)}</div>
+        <div class="browse-meta">${entry.isDir ? 'Folder' : formatBytes(entry.size)} · ${escapeHtml(where)}</div>
+        ${
+          entry.isDir
+            ? ''
+            : `<button class="icon-btn sm" data-pull="${escapeHtml(entry.id)}" title="Download">
+                 <svg class="icon"><use href="#i-download"/></svg>
+               </button>`
+        }
+      </div>`;
+      })
+      .join('');
+    return;
+  }
+
   if (!entries.length) {
     list.innerHTML =
-      '<div class="list-empty">Nothing here. Share a folder from the A+ Connect app on the phone.</div>';
+      '<div class="list-empty">Nothing here. In the A+ Connect app on the phone, allow “Files the PC can browse”.</div>';
     return;
   }
 
@@ -256,28 +358,27 @@ function renderPhoneBrowser() {
     .join('');
 }
 
-/** Opens a folder of the phone's shared folder. */
-function openPhoneFolder(id, name) {
+/** Opens a folder of the phone. `id` is its path relative to the phone's root. */
+function openPhoneFolder(id) {
   if (!id) return;
-  loadPhoneDirectory(id, [...state.phone.trail, { id, name }]);
+  clearPhoneSearch();
+  loadPhoneDirectory(id);
 }
 
-/** Goes back up one folder. */
+/** Goes back up one folder, unless a search is showing. */
 function phoneUp() {
-  if (!state.phone.trail.length) return;
-  const trail = state.phone.trail.slice(0, -1);
-  loadPhoneDirectory(trail.length ? trail[trail.length - 1].id : '', trail);
+  if (state.phone.results !== null || state.phone.query.trim()) return;
+  if (state.phone.path === '') return;
+  loadPhoneDirectory(phoneParentOf(state.phone.path));
 }
 
-/** Asks the phone to send one file; it arrives in the transfer list. */
-async function pullPhoneFile(id, name) {
-  if (!window.api.downloadPhoneFile) return;
-  const result = await window.api.downloadPhoneFile(id);
-  if (result && result.success) {
-    toast(`The phone is sending ${name}`);
-  } else {
-    toast((result && result.error) || 'Could not ask the phone for that file', 'err');
-  }
+/** Empties the search box and goes back to the folder listing. */
+function clearPhoneSearch() {
+  const box = $('phone-search');
+  if (box) box.value = '';
+  state.phone.query = '';
+  state.phone.results = null;
+  state.phone.searching = false;
 }
 
 /* ---------- Device ---------- */
@@ -1022,11 +1123,18 @@ function applyCompanionInfo(info) {
   // folder the phone no longer answers for.
   if (!state.companionConnected) {
     state.phone.path = '';
-    state.phone.trail = [];
     state.phone.entries = [];
+    state.phone.results = null;
+    state.phone.query = '';
+    state.phone.searching = false;
     state.phone.loaded = false;
     state.phone.error = null;
     state.phone.seq++;
+    state.phone.searchSeq++;
+    const box = $('phone-search');
+    if (box) box.value = '';
+    const clear = $('phone-search-clear');
+    if (clear) clear.hidden = true;
   }
 
   renderDevice();
@@ -1592,7 +1700,39 @@ function initClipboard() {
 
   const phoneRefreshButton = $('phone-refresh');
   if (phoneRefreshButton) {
-    phoneRefreshButton.addEventListener('click', () => loadPhoneDirectory(state.phone.path));
+    phoneRefreshButton.addEventListener('click', () => {
+      // A refresh means "show me what is there now": re-run the search, or
+      // re-read the folder the user is standing in.
+      if (state.phone.results !== null || state.phone.query.trim()) {
+        searchPhoneFiles(state.phone.query);
+      } else {
+        loadPhoneDirectory(state.phone.path);
+      }
+    });
+  }
+
+  // The search box: one request per pause, not one per keystroke.
+  const phoneSearch = $('phone-search');
+  if (phoneSearch) {
+    phoneSearch.addEventListener('input', (event) => {
+      const value = event.target.value;
+      const clear = $('phone-search-clear');
+      if (clear) clear.hidden = !value;
+      schedulePhoneSearch(value);
+    });
+    phoneSearch.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        clearPhoneSearch();
+        renderPhoneBrowser();
+      }
+    });
+  }
+  const phoneSearchClear = $('phone-search-clear');
+  if (phoneSearchClear) {
+    phoneSearchClear.addEventListener('click', () => {
+      clearPhoneSearch();
+      renderPhoneBrowser();
+    });
   }
 
   // One listener for the whole list: the rows are rebuilt on every listing.
@@ -1608,7 +1748,9 @@ function initClipboard() {
       }
       const row = event.target.closest('.browse-row');
       if (row && row.dataset.dir === '1') {
-        openPhoneFolder(row.dataset.id, row.querySelector('.browse-name')?.textContent || '');
+        // A search result opens the folder it lives in; the breadcrumb then
+        // shows a real path instead of the query.
+        openPhoneFolder(row.dataset.id);
       }
     });
   }

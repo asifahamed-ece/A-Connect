@@ -3,9 +3,13 @@
  * The desktop's phone file browser.
  *
  * Asking for a folder must put a `file-list-request` on the wire carrying the
- * document id in `path`, and the phone's `file-list` must resolve exactly that
- * request - matched on the path, not on arrival order, because the user can
- * click two folders faster than the phone answers.
+ * folder's path in `path`, and the phone's `file-list` must resolve exactly
+ * that request - matched on the path, not on arrival order, because the user
+ * can click two folders faster than the phone answers.
+ *
+ * A search is a different request whose answer is an ordinary `file-list`
+ * keyed by `search:<query>`, so the same map resolves it and a folder listing
+ * and a search can never resolve each other.
  *
  * There is no test runner in this repo: node scripts/check-companion-files.js
  */
@@ -133,6 +137,60 @@ async function checkBadAnswer() {
   assert.strictEqual(result.error, 'The phone disconnected', 'the disconnect was not explained');
 }
 
+async function checkSearch() {
+  const service = connectedService();
+  const pending = CompanionService.prototype.requestFileSearch.call(service, 'dune');
+
+  assert.strictEqual(service.written.length, 1, 'no search was written');
+  const request = protocol.decode(service.written[0]);
+  assert.strictEqual(
+    request.type,
+    protocol.TYPES.FILE_SEARCH_REQUEST,
+    'the frame is not a file-search-request'
+  );
+  assert.strictEqual(request.payload.query, 'dune', 'the query did not reach the wire');
+
+  // A folder listing arriving while a search is in flight must not resolve it.
+  CompanionService.prototype.handleFileList.call(
+    service,
+    answer('Download', [{ name: 'a.pdf', size: 1, isDir: false, mime: 'application/pdf' }]).payload
+  );
+  assert.strictEqual(
+    service.pendingFileLists.size,
+    1,
+    'a folder listing resolved a search it had nothing to do with'
+  );
+
+  // The answer is an ordinary file list, keyed by the query.
+  CompanionService.prototype.handleFileList.call(
+    service,
+    answer(protocol.searchKey('dune'), [
+      { id: 'Download/books/Dune.epub', name: 'Dune.epub', size: 42, isDir: false, mime: 'application/epub+zip' },
+      { id: 'Download/books', name: 'books', size: 0, isDir: true, mime: '' },
+    ]).payload
+  );
+
+  const result = await pending;
+  assert.strictEqual(result.success, true, `the search did not resolve: ${result.error}`);
+  assert.strictEqual(result.path, 'search:dune', 'the answer lost the query it belongs to');
+  assert.deepStrictEqual(
+    result.entries.map((e) => e.name),
+    ['books', 'Dune.epub'],
+    'search results must still be drawn folders first'
+  );
+  // Every hit carries the path that opens it, relative to the phone's root.
+  assert.strictEqual(result.entries[1].id, 'Download/books/Dune.epub', 'a hit lost its path');
+}
+
+async function checkSearchWithNoPhone() {
+  const service = connectedService();
+  service.clients = [];
+  const result = await CompanionService.prototype.requestFileSearch.call(service, 'dune');
+  assert.strictEqual(result.success, false, 'a search with no phone reported success');
+  assert.strictEqual(result.error, 'The phone is not connected', 'the reason was not explained');
+  assert.strictEqual(service.pendingFileLists.size, 0, 'a waiting search was left behind');
+}
+
 async function checkSendRequest() {
   const service = connectedService();
   const result = CompanionService.prototype.requestFileSend.call(service, 'doc:9');
@@ -148,6 +206,8 @@ async function run() {
   await checkNoPhone();
   await checkBadAnswer();
   await checkSendRequest();
+  await checkSearch();
+  await checkSearchWithNoPhone();
   console.log('companion files: ok');
 }
 

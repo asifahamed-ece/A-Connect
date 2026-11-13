@@ -18,12 +18,23 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <!--
-        No storage permission, deliberately. The folder the computer may browse
-        is chosen with the system folder picker, and the picker's grant IS the
-        permission: adding READ_EXTERNAL_STORAGE or MANAGE_EXTERNAL_STORAGE
-        would widen what this app can see for no gain, and neither is needed to
-        list a tree or to read a document inside it.
+        Reading the phone's files for the computer.
+
+        The folder picker cannot do this job: since Android 11 it refuses the
+        storage root, the SD card root and the Download directory, which are
+        most of what a user wants to reach. All files access is the special
+        permission Android provides for a file browser, granted once from
+        Settings. It is not an accessibility service, so contactless payments
+        keep working.
+
+        The browser is read-only by construction (PhoneFileBrowserTest fails
+        the build if it ever calls a write API).
     -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Only for Android 10 and older, which predate all files access. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
 
     <!--
         The shipping app.

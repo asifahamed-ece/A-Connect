@@ -257,20 +257,36 @@
             </div>
           </div>
 
-          <!-- The phone's own folder, over the companion channel. Read-only:
-               the phone only lets the computer look and copy. -->
+          <!-- The phone's whole storage, over the companion channel. Read-only:
+               the phone only lets the computer look, search and copy. -->
           <div class="card phone-browser" id="phone-browser" hidden>
             <div class="browser-head">
-              <div class="breadcrumb" id="phone-path">/</div>
-              <button class="icon-btn" id="phone-up" aria-label="Parent folder">
-                <svg class="icon"><use href="#i-up"/></svg>
-              </button>
+              <div class="search-field">
+                <svg class="icon"><use href="#i-search"/></svg>
+                <input
+                  id="phone-search"
+                  type="search"
+                  placeholder="Search every folder on the phone"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="Search the phone"
+                >
+                <button class="icon-btn sm" id="phone-search-clear" hidden aria-label="Clear search">
+                  <svg class="icon"><use href="#i-close"/></svg>
+                </button>
+              </div>
               <button class="icon-btn" id="phone-refresh" aria-label="Refresh folder">
                 <svg class="icon"><use href="#i-refresh"/></svg>
               </button>
             </div>
+            <div class="browser-bar">
+              <button class="icon-btn" id="phone-up" aria-label="Parent folder">
+                <svg class="icon"><use href="#i-up"/></svg>
+              </button>
+              <div class="breadcrumb" id="phone-path">/</div>
+            </div>
             <div class="browser-list" id="phone-browser-list">
-              <div class="list-empty">Loading the phone's folder…</div>
+              <div class="list-empty">Loading the phone's files...</div>
             </div>
           </div>
 

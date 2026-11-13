@@ -20,11 +20,22 @@ const PAIRING_CODE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const PING_INTERVAL_MS = 30 * 1000;
 const PEER_TIMEOUT_MS = 75 * 1000;
 
-// How long the desktop waits for a folder listing before it tells the user the
-// phone did not answer. A listing is one query on the phone, so this is
-// generous - it is here to stop the UI spinning forever, not to catch a slow
-// folder.
+/**
+ * How long the desktop waits for a folder listing.
+ *
+ * A listing is one directory read, so this is generous - it is here to stop
+ * the UI spinning forever, not to catch a slow folder.
+ */
 const FILE_LIST_TIMEOUT_MS = 10 * 1000;
+
+/**
+ * How long the desktop waits for a search.
+ *
+ * Longer than a listing because the phone's first search of a session may
+ * still be waiting for the storage walk that its connection started. Once that
+ * walk is done a search is instant, so the extra patience is only spent once.
+ */
+const FILE_SEARCH_TIMEOUT_MS = 40 * 1000;
 
 const PAIRED_DEVICES_FILE = path.join(
   process.env.HOME || process.env.USERPROFILE || '.',
@@ -60,6 +71,31 @@ function sendToPhones(service, frame, what = 'a message') {
     }
   }
   return sentCount;
+}
+
+/** The one place a listing - a folder or a search - waits for its answer. */
+function awaitListing(service, key, frame, description, timeoutMs = FILE_LIST_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const previous = service.pendingFileLists.get(key);
+    if (previous) {
+      clearTimeout(previous.timer);
+      previous.resolve({ success: false, error: 'superseded' });
+    }
+
+    const timer = setTimeout(() => {
+      service.pendingFileLists.delete(key);
+      resolve({ success: false, error: 'The phone did not answer' });
+    }, timeoutMs);
+    service.pendingFileLists.set(key, { resolve, timer });
+
+    const sent = sendToPhones(service, protocol.encode(frame), description);
+
+    if (sent === 0) {
+      clearTimeout(timer);
+      service.pendingFileLists.delete(key);
+      resolve({ success: false, error: 'The phone is not connected' });
+    }
+  });
 }
 
 class CompanionService extends EventEmitter {
@@ -579,39 +615,42 @@ class CompanionService extends EventEmitter {
    */
   requestFileList(path = '') {
     const payload = protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, path);
-    const key = payload.path;
+    return awaitListing(
+      this,
+      payload.path,
+      {
+        version: protocol.PROTOCOL_VERSION,
+        type: protocol.TYPES.FILE_LIST_REQUEST,
+        id: crypto.randomUUID(),
+        ts: Date.now(),
+        payload,
+      },
+      'a file list request'
+    );
+  }
 
-    return new Promise((resolve) => {
-      const previous = this.pendingFileLists.get(key);
-      if (previous) {
-        clearTimeout(previous.timer);
-        previous.resolve({ success: false, error: 'superseded' });
-      }
-
-      const timer = setTimeout(() => {
-        this.pendingFileLists.delete(key);
-        resolve({ success: false, error: 'The phone did not answer' });
-      }, FILE_LIST_TIMEOUT_MS);
-      this.pendingFileLists.set(key, { resolve, timer });
-
-      const sent = sendToPhones(
-        this,
-        protocol.encode({
-          version: protocol.PROTOCOL_VERSION,
-          type: protocol.TYPES.FILE_LIST_REQUEST,
-          id: crypto.randomUUID(),
-          ts: Date.now(),
-          payload,
-        }),
-        'a file list request'
-      );
-
-      if (sent === 0) {
-        clearTimeout(timer);
-        this.pendingFileLists.delete(key);
-        resolve({ success: false, error: 'The phone is not connected' });
-      }
-    });
+  /**
+   * Asks the phone to search its whole storage.
+   *
+   * The answer is a `file-list` keyed by the query rather than by a path, so
+   * two searches in flight cannot be confused with each other or with a folder
+   * listing the user opened in the meantime.
+   */
+  requestFileSearch(query = '') {
+    const payload = protocol.buildFileSearchRequest(query);
+    return awaitListing(
+      this,
+      protocol.searchKey(payload.query),
+      {
+        version: protocol.PROTOCOL_VERSION,
+        type: protocol.TYPES.FILE_SEARCH_REQUEST,
+        id: crypto.randomUUID(),
+        ts: Date.now(),
+        payload,
+      },
+      'a file search',
+      FILE_SEARCH_TIMEOUT_MS
+    );
   }
 
   /**

@@ -48,6 +48,7 @@ class CompanionClient(
     private val onMediaCommand: (command: String, positionMs: Long?) -> Unit = { _, _ -> },
     private val onFileListRequest: (path: String) -> Unit = { },
     private val onFileSendRequest: (path: String) -> Unit = { },
+    private val onFileSearchRequest: (query: String) -> Unit = { },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -401,6 +402,17 @@ class CompanionClient(
                         onFileSendRequest(message.payload.optString("path"))
                     } catch (e: Exception) {
                         Log.w(TAG, "the file send request failed: ${e.message}")
+                    }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_SEARCH_REQUEST) {
+                    try {
+                        onFileSearchRequest(message.payload.optString("query"))
+                    } catch (e: Exception) {
+                        // A search over the whole storage is the slowest thing
+                        // this channel does; it must never cost the connection.
+                        Log.w(TAG, "the search request failed: ${e.message}")
                     }
                     continue
                 }

@@ -52,6 +52,15 @@ const TYPES = {
   FILE_LIST_REQUEST: 'file-list-request',
   FILE_LIST: 'file-list',
   FILE_SEND_REQUEST: 'file-send-request',
+
+  /**
+   * A search across the whole phone, not just the folder being shown.
+   *
+   * The answer is an ordinary `file-list` whose `path` is `searchKey(query)`,
+   * so a search resolves through the same map as a folder listing and needs no
+   * separate parser. Both sides must spell the prefix the same way.
+   */
+  FILE_SEARCH_REQUEST: 'file-search-request',
   MIRROR_START: 'mirror-start',
   MIRROR_STOP: 'mirror-stop',
 };
@@ -315,6 +324,24 @@ function buildFileRequest(type, path) {
   return { type, path: typeof path === 'string' ? path : '' };
 }
 
+/**
+ * The prefix that marks a `file-list` as the answer to a search.
+ *
+ * A folder path is relative to the phone's storage root and never contains a
+ * colon at the start, so the two kinds of answer cannot be confused.
+ */
+const SEARCH_KEY_PREFIX = 'search:';
+
+/** The key a search's answer carries in `path`. Mirrored in Kotlin. */
+function searchKey(query) {
+  return SEARCH_KEY_PREFIX + String(query ?? '');
+}
+
+/** A search over the whole phone's storage. */
+function buildFileSearchRequest(query) {
+  return { type: TYPES.FILE_SEARCH_REQUEST, query: String(query ?? '') };
+}
+
 const PAIRING_TYPE = 'aplus-pairing';
 const PAIRING_VERSION = 1;
 
@@ -402,6 +429,9 @@ module.exports = {
   parseFileList,
   sortFileEntries,
   buildFileRequest,
+  buildFileSearchRequest,
+  searchKey,
+  SEARCH_KEY_PREFIX,
   computeProof,
   verifyProof,
   buildPairingPayload,

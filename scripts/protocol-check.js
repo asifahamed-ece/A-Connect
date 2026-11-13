@@ -329,14 +329,17 @@ function checkPairingPayload() {
  * The phone's file browser, from the desktop's side.
  *
  * The listing must survive a real frame - not just the builder - because the
- * frame is what crosses the wire; and the two requests must carry the document
- * id in the same `path` key the answer echoes, or the desktop sends back a
- * value the phone does not understand and silently gets the root folder.
+ * frame is what crosses the wire; and a request must carry the id in the same
+ * `path` key the answer echoes, or the desktop sends back a value the phone
+ * does not understand and silently gets the root folder.
+ *
+ * Ids are paths relative to the phone's storage root, because that is what the
+ * browser opens: `Download/Pictures`, not an opaque document id.
  */
 function checkFileBrowser() {
-  const list = protocol.buildFileList('doc:123', [
-    { id: 'doc:pictures', name: 'Pictures', size: 0, isDir: true, mime: '' },
-    { id: 'doc:photo', name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
+  const list = protocol.buildFileList('Download', [
+    { id: 'Download/Pictures', name: 'Pictures', size: 0, isDir: true, mime: '' },
+    { id: 'Download/photo.jpg', name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },
   ]);
 
   const frame = protocol.encode({
@@ -348,12 +351,12 @@ function checkFileBrowser() {
   });
   const parsed = protocol.parseFileList(protocol.decode(frame).payload);
   assert.ok(parsed, 'the file list did not survive the frame');
-  assert.strictEqual(parsed.path, 'doc:123', 'the folder id did not survive the frame');
+  assert.strictEqual(parsed.path, 'Download', 'the folder path did not survive the frame');
   assert.strictEqual(parsed.entries[0].name, 'Pictures', 'the first entry changed');
   assert.strictEqual(parsed.entries[0].isDir, true, 'a folder was read as a file');
   assert.strictEqual(parsed.entries[1].isDir, false, 'a file was read as a folder');
-  assert.strictEqual(parsed.entries[0].id, 'doc:pictures', 'a folder lost its document id');
-  assert.strictEqual(parsed.entries[1].id, 'doc:photo', 'a file lost its document id');
+  assert.strictEqual(parsed.entries[0].id, 'Download/Pictures', 'a folder lost its path');
+  assert.strictEqual(parsed.entries[1].id, 'Download/photo.jpg', 'a file lost its path');
 
   // The same ordering rule the phone applies, so a list that arrives out of
   // order is still drawn with the folders on top.
@@ -373,16 +376,16 @@ function checkFileBrowser() {
   // empty folder: that would hide a protocol mistake.
   assert.strictEqual(protocol.parseFileList({ path: 'x' }), null, 'a list without entries parsed');
 
-  const listRequest = protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, 'doc:123');
-  assert.strictEqual(listRequest.path, 'doc:123', 'the list request lost the folder id');
+  const listRequest = protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, 'Download');
+  assert.strictEqual(listRequest.path, 'Download', 'the list request lost the folder path');
   assert.strictEqual(
     listRequest.type,
     protocol.TYPES.FILE_LIST_REQUEST,
     'the list request lost its type'
   );
 
-  const sendRequest = protocol.buildFileRequest(protocol.TYPES.FILE_SEND_REQUEST, 'doc:456');
-  assert.strictEqual(sendRequest.path, 'doc:456', 'the send request lost the file id');
+  const sendRequest = protocol.buildFileRequest(protocol.TYPES.FILE_SEND_REQUEST, 'Download/a.pdf');
+  assert.strictEqual(sendRequest.path, 'Download/a.pdf', 'the send request lost the file path');
   assert.strictEqual(
     sendRequest.type,
     protocol.TYPES.FILE_SEND_REQUEST,
@@ -391,6 +394,39 @@ function checkFileBrowser() {
 
   // The root is the empty string, and must be sent as one rather than dropped.
   assert.strictEqual(protocol.buildFileRequest(protocol.TYPES.FILE_LIST_REQUEST, '').path, '', 'the root request lost its path');
+
+  // A search is its own request, and its answer is an ordinary file list keyed
+  // by the query. Both sides must spell that key the same way, or a search
+  // answer resolves nothing and the desktop spins for ten seconds.
+  const searchRequest = protocol.buildFileSearchRequest('dune');
+  assert.strictEqual(
+    searchRequest.type,
+    protocol.TYPES.FILE_SEARCH_REQUEST,
+    'the search request lost its type'
+  );
+  assert.strictEqual(searchRequest.query, 'dune', 'the search request lost the query');
+  assert.strictEqual(protocol.SEARCH_KEY_PREFIX, 'search:', 'the search key prefix changed');
+
+  const searchAnswer = protocol.buildFileList(protocol.searchKey('dune'), [
+    { id: 'Download/books/Dune.epub', name: 'Dune.epub', size: 42, isDir: false, mime: 'application/epub+zip' },
+  ]);
+  const parsedSearch = protocol.parseFileList(
+    protocol.decode(
+      protocol.encode({
+        version: protocol.PROTOCOL_VERSION,
+        type: protocol.TYPES.FILE_LIST,
+        id: 'frame-2',
+        ts: 1,
+        payload: searchAnswer,
+      })
+    ).payload
+  );
+  assert.strictEqual(parsedSearch.path, 'search:dune', 'a search answer is not keyed by its query');
+  assert.strictEqual(
+    parsedSearch.entries[0].id,
+    'Download/books/Dune.epub',
+    'a search result lost the path that opens it'
+  );
 }
 
 function main() {

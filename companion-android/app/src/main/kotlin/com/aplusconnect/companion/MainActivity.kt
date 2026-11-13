@@ -98,6 +98,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -106,6 +107,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -123,6 +127,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aplusconnect.companion.data.ClipHistoryEntry
 import com.aplusconnect.companion.data.CompanionSettings
+import com.aplusconnect.companion.file.PhoneFileBrowser
 import com.aplusconnect.companion.protocol.PairingPayload
 import com.aplusconnect.companion.qr.QrScannerView
 import com.aplusconnect.companion.service.CompanionService
@@ -276,31 +281,20 @@ fun MainScreen(settings: CompanionSettings) {
         }
     }
 
-    // The folder the computer may browse. Read-only: the picker grants a
-    // permission, and nothing in the app can change what is inside it.
-    //
-    // The chosen folder is held in state as well as in the settings: the card
-    // is composed once, so reading the setting alone would leave it saying
-    // "Nothing shared yet" right after the user shared something.
-    var browseFolder by remember { mutableStateOf(settings.browseRootUri) }
+    // All files access, for the computer's file browser. It has no runtime
+    // dialog by design, so the card sends the user to the system page and the
+    // state is re-read whenever the app comes back to the front.
+    var allFilesGranted by remember { mutableStateOf(hasAllFilesAccess(context)) }
 
-    val browsePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (e: Exception) {
-                // Some providers do not offer a persistable permission; the
-                // folder still works for this session.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                allFilesGranted = hasAllFilesAccess(context)
             }
-            settings.browseRootUri = uri.toString()
-            browseFolder = uri.toString()
-            Toast.makeText(context, "The computer can now browse that folder", Toast.LENGTH_SHORT).show()
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // The camera is only used while the pairing screen is open.
@@ -521,8 +515,8 @@ fun MainScreen(settings: CompanionSettings) {
                     },
                     downloadFolder = settings.downloadFolderUri,
                     onPickDownloadFolder = { folderPicker.launch(null) },
-                    browseFolder = browseFolder,
-                    onPickBrowseFolder = { browsePicker.launch(null) },
+                    allFilesGranted = allFilesGranted,
+                    onGrantAllFiles = { context.startActivity(allFilesIntent(context)) },
                     onScanQr = {
                         cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
                     },
@@ -1280,8 +1274,8 @@ fun SettingsTab(
     onClearHistory: () -> Unit,
     downloadFolder: String,
     onPickDownloadFolder: () -> Unit,
-    browseFolder: String,
-    onPickBrowseFolder: () -> Unit,
+    allFilesGranted: Boolean,
+    onGrantAllFiles: () -> Unit,
     onScanQr: () -> Unit,
     keyboardActive: Boolean,
     onOpenKeyboardPicker: () -> Unit,
@@ -1499,8 +1493,9 @@ fun SettingsTab(
             }
         }
 
-        // The folder the computer may look inside. Read-only on purpose: the
-        // computer can list it and ask for a copy, nothing more.
+        // The whole storage the computer may look inside, read-only. This
+        // needs Android's all-files access: the system folder picker refuses
+        // the storage root, the SD card root and Download.
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = surfaceColor),
@@ -1512,28 +1507,36 @@ fun SettingsTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Folder the PC can browse", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                    Text("Files the PC can browse", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
                     Text(
-                        if (browseFolder.isEmpty()) "Nothing shared yet"
-                        else browseFolder.substringAfterLast('/').ifEmpty { "Chosen folder" },
+                        if (allFilesGranted) "Every folder on this phone" else "Not granted yet",
                         fontSize = 12.sp,
-                        color = textSecondary,
+                        color = if (allFilesGranted) textSecondary else ColorOSError,
                         maxLines = 1
                     )
                     Text(
-                        "Read only: the computer can look and copy, never change anything",
+                        if (allFilesGranted) {
+                            "Read only: the computer can look, search and copy, never change anything"
+                        } else {
+                            "Needs all files access in Settings. It is not an accessibility service, so payments keep working"
+                        },
                         fontSize = 11.sp,
                         color = textMuted
                     )
                 }
 
                 Button(
-                    onClick = onPickBrowseFolder,
+                    onClick = onGrantAllFiles,
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Text(if (browseFolder.isEmpty()) "Choose…" else "Change…", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                    Text(
+                        if (allFilesGranted) "Manage" else "Allow...",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = textPrimary
+                    )
                 }
             }
         }
@@ -2006,6 +2009,20 @@ private fun openKeyboardPicker(context: Context) {
  * keyboard hands over, so this is the state that decides whether copies sync
  * with no tap.
  */
+/**
+ * Whether the computer's file browser may read this phone.
+ *
+ * All files access is the only way to reach the storage root, the SD card and
+ * Download; the system folder picker refuses all three. It has no runtime
+ * dialog, so the Settings card sends the user to the system page instead.
+ */
+private fun hasAllFilesAccess(context: Context): Boolean =
+    PhoneFileBrowser(context).isGranted()
+
+/** The system page where the user grants all-files access. */
+private fun allFilesIntent(context: Context): Intent =
+    PhoneFileBrowser(context).grantIntent()
+
 private fun isDefaultKeyboard(context: Context): Boolean {
     val current = Settings.Secure.getString(
         context.contentResolver,

@@ -22,6 +22,7 @@ import com.aplusconnect.companion.clip.ClipboardBridgeReceiver
 import com.aplusconnect.companion.clip.KeyboardBridge
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.file.PhoneFileBrowser
+import com.aplusconnect.companion.file.StorageSearch
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
 import com.aplusconnect.companion.net.IncomingFile
@@ -79,6 +80,8 @@ class CompanionService : Service() {
     private lateinit var incomingFile: IncomingFile
     private lateinit var destination: DownloadDestination
     private lateinit var fileBrowser: PhoneFileBrowser
+    /** Built on first search; the file thread is the only thread that touches it. */
+    private var searcher: StorageSearch? = null
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
     private var reconnectRunnable: Runnable? = null
@@ -122,12 +125,23 @@ class CompanionService : Service() {
         Thread(runnable, "companion-files").apply { isDaemon = true }
     }
 
+    /**
+     * Searches have their own thread.
+     *
+     * The first search of a session may wait for the storage walk, and that
+     * must never make a folder listing - which shares [fileThread] - sit behind
+     * it. The index itself is shared and locked, so two threads are safe.
+     */
+    private val searchThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-search").apply { isDaemon = true }
+    }
+
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
         incomingFile = IncomingFile(java.io.File(cacheDir, "incoming"))
         destination = DownloadDestination(this)
-        fileBrowser = PhoneFileBrowser(this, settings)
+        fileBrowser = PhoneFileBrowser(this)
         instance = this
 
         // Anything that arrived while the service was not running goes to the
@@ -265,6 +279,9 @@ class CompanionService : Service() {
                     // A desktop that just connected wants the current track,
                     // not one that appears at the next state change.
                     mediaBridge?.publish()
+                    // The storage walk is slow, so it starts now rather than on
+                    // the user's first keystroke in the search box.
+                    searchThread.execute { searcher()?.warm() }
                 }
             },
             onClosed = { reason ->
@@ -296,6 +313,9 @@ class CompanionService : Service() {
             },
             onFileSendRequest = { path ->
                 fileThread.execute { answerFileSend(path) }
+            },
+            onFileSearchRequest = { query ->
+                searchThread.execute { answerFileSearch(query) }
             },
         )
         client = thisClient
@@ -485,22 +505,68 @@ class CompanionService : Service() {
     /**
      * Answers the computer's request for one folder.
      *
-     * The computer asks with a path this phone handed out before, or the empty
-     * string for the root of the shared folder. It always gets an answer: a
-     * folder that cannot be read, or no shared folder at all, answers with an
-     * empty list rather than leaving the computer waiting.
+     * The computer asks with a relative path this phone handed out before, or
+     * the empty string for the storage root. It always gets an answer: a
+     * folder that cannot be read, or no access at all, answers with an empty
+     * list rather than leaving the computer waiting.
      */
     private fun answerFileList(path: String) {
         val c = client
         if (c == null || !c.isReady) return
 
         val entries = fileBrowser.list(path) ?: run {
-            Log.i(TAG, "nothing to list: no folder is shared, or it cannot be read")
+            Log.i(TAG, "nothing to list: no access, or the folder cannot be read")
             emptyList()
         }
 
         if (!c.sendMessage(Protocol.TYPE_FILE_LIST, FeaturePayloads.fileList(path, entries))) {
             Log.w(TAG, "could not send the file list")
+        }
+    }
+
+    /**
+     * Answers a search with names matching the query.
+     *
+     * The answer is an ordinary file list whose path marks it as a search, so
+     * the computer resolves it with the same map it uses for folders. An empty
+     * list is the honest answer for "nothing matches" and for "no access yet".
+     */
+    private fun answerFileSearch(query: String) {
+        val c = client
+        if (c == null || !c.isReady) return
+
+        val entries = if (query.isBlank() || !fileBrowser.isGranted()) {
+            emptyList()
+        } else {
+            searcher()?.results(query)?.map { hit ->
+                PhoneFileBrowser.row(
+                    id = hit.id,
+                    name = hit.name,
+                    size = hit.size,
+                    mime = if (hit.isDir) "" else PhoneFileBrowser.mimeOf(hit.name),
+                    isDir = hit.isDir,
+                )
+            } ?: emptyList()
+        }
+
+        val key = Protocol.searchKey(query)
+        if (!c.sendMessage(Protocol.TYPE_FILE_LIST, FeaturePayloads.fileList(key, entries))) {
+            Log.w(TAG, "could not send the search results")
+        }
+    }
+
+    /**
+     * The one search index, built on first use.
+     *
+     * Both the warm-up when the computer connects and the searches themselves
+     * come through here, so the index is created exactly once. Null when this
+     * phone has no shared storage to walk.
+     */
+    private fun searcher(): StorageSearch? = searcher ?: run {
+        val root = fileBrowser.root() ?: return null
+        StorageSearch(root).also { fresh ->
+            fresh.onRebuild = { count -> Log.i(TAG, "indexed $count entries for search") }
+            searcher = fresh
         }
     }
 
@@ -512,18 +578,24 @@ class CompanionService : Service() {
      * computer needs no new file code.
      */
     private fun answerFileSend(path: String) {
-        val document = fileBrowser.documentUri(path)
-        if (document == null) {
-            Log.w(TAG, "the computer asked for a file outside the shared folder")
+        val file = fileBrowser.resolve(path)
+        if (file == null || !file.isFile) {
+            Log.w(TAG, "the computer asked for a file outside the phone's storage")
             return
         }
-        sendFile(this, document, onProgress = {}, onComplete = { ok, error ->
-            if (ok) {
-                Log.i(TAG, "sent the requested file to the computer")
-            } else {
-                Log.w(TAG, "could not send the requested file: $error")
+        sendFile(
+            this,
+            file,
+            PhoneFileBrowser.mimeOf(file.name),
+            onProgress = {},
+            onComplete = { ok, error ->
+                if (ok) {
+                    Log.i(TAG, "sent the requested file to the computer")
+                } else {
+                    Log.w(TAG, "could not send the requested file: $error")
+                }
             }
-        })
+        )
     }
 
     /** Sends the queued notifications, oldest first, stopping on the first failure. */
@@ -725,6 +797,62 @@ class CompanionService : Service() {
             onProgress: (Float) -> Unit,
             onComplete: (Boolean, String?) -> Unit
         ) {
+            val cr = context.contentResolver
+            var fileName = "file_${System.currentTimeMillis()}"
+            var fileSize = 0L
+            val mimeType = cr.getType(uri) ?: "application/octet-stream"
+
+            try {
+                cr.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (cursor.moveToFirst()) {
+                        if (nameIndex != -1) cursor.getString(nameIndex)?.let { fileName = it }
+                        if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
+                    }
+                }
+            } catch (e: Exception) {
+                // A provider that cannot be queried still streams; only the
+                // name and the size in the header are lost.
+            }
+
+            stream("file", fileName, fileSize, mimeType, { cr.openInputStream(uri) }, onProgress, onComplete)
+        }
+
+        /**
+         * Streams a file from the phone's storage to the PC.
+         *
+         * Used by the file browser, where the file has a real path and no
+         * content provider is involved.
+         */
+        fun sendFile(
+            context: Context,
+            file: java.io.File,
+            mime: String,
+            onProgress: (Float) -> Unit,
+            onComplete: (Boolean, String?) -> Unit
+        ) {
+            stream(
+                "file",
+                file.name,
+                file.length(),
+                mime.ifEmpty { "application/octet-stream" },
+                { java.io.FileInputStream(file) },
+                onProgress,
+                onComplete,
+            )
+        }
+
+        /** The one place a file becomes file-start/chunk/done on the wire. */
+        private fun stream(
+            idPrefix: String,
+            fileName: String,
+            fileSize: Long,
+            mimeType: String,
+            open: () -> java.io.InputStream?,
+            onProgress: (Float) -> Unit,
+            onComplete: (Boolean, String?) -> Unit,
+        ) {
             val active = instance?.client
             if (active == null || !active.isReady) {
                 onComplete(false, "Not connected to PC")
@@ -733,24 +861,11 @@ class CompanionService : Service() {
 
             Thread {
                 try {
-                    val cr = context.contentResolver
-                    var fileName = "file_${System.currentTimeMillis()}"
-                    var fileSize = 0L
-                    val mimeType = cr.getType(uri) ?: "application/octet-stream"
-
-                    cr.query(uri, null, null, null, null)?.use { cursor ->
-                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                        val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                        if (cursor.moveToFirst()) {
-                            if (nameIndex != -1) cursor.getString(nameIndex)?.let { fileName = it }
-                            if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
-                        }
-                    }
-
-                    val inputStream = cr.openInputStream(uri) ?: throw Exception("Could not open file")
-                    val transferId = "f_${UUID.randomUUID().toString().take(8)}"
+                    val inputStream = open() ?: throw Exception("Could not open file")
+                    val transferId = "${idPrefix}_${UUID.randomUUID().toString().take(8)}"
 
                     if (!active.sendFileStart(transferId, fileName, fileSize, mimeType)) {
+                        inputStream.close()
                         onComplete(false, "PC rejected file transfer")
                         return@Thread
                     }

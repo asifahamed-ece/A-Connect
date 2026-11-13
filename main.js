@@ -490,6 +490,7 @@ function setupIpcHandlers() {
     return { success: sent, filePath, name: require('path').basename(filePath) };
   });
   ipcMain.handle('companion:listFiles', async (_, path) => companion.requestFileList(path));
+  ipcMain.handle('companion:searchFiles', async (_, query) => companion.requestFileSearch(query));
   ipcMain.handle('companion:downloadFile', async (_, path) => companion.requestFileSend(path));
   ipcMain.handle('companion:stop', async () => {
     companion.stop();
