@@ -141,6 +141,21 @@ function run() {
   assert.strictEqual(notif.title, 'Ada', 'the title did not survive');
   assert.strictEqual(notif.text, 'hello', 'the text did not survive');
 
+  // The row has to say when it arrived. The phone stamps the notification with
+  // StatusBarNotification.postTime; the event must carry it in milliseconds as
+  // `timestamp`, because a raw epoch number in `time` drew as a thirteen-digit
+  // string in the history.
+  assert.strictEqual(
+    notif.timestamp,
+    1700000000000,
+    'the arrival time did not survive the companion path'
+  );
+  assert.notStrictEqual(
+    typeof notif.time,
+    'number',
+    'the raw epoch leaked into `time`, which the renderer draws verbatim'
+  );
+
   const removed = message(protocol.TYPES.NOTIFICATION_REMOVED, {
     type: protocol.TYPES.NOTIFICATION_REMOVED,
     id: 'com.example:7:null',

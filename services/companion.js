@@ -1001,7 +1001,10 @@ function routeNotification(service, message) {
       // renderer does not care which transport delivered it.
       message: notif.text,
       key: notif.id,
-      time: notif.ts,
+      // The phone stamps a notification with StatusBarNotification.postTime
+      // (epoch ms). `timestamp` is the field both transports agree on; the
+      // renderer formats it, and the tooltip shows the exact moment.
+      timestamp: Number(notif.ts) || Date.now(),
       actions: notif.actions,
       fromCompanion: true,
     });

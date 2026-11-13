@@ -123,6 +123,7 @@ function showView(name) {
   if (name === 'notifications') {
     state.unreadNotifications = 0;
     renderBadges();
+    startNotifClock();
     loadNotificationHistory();
   }
   if (name === 'clipboard') {
@@ -1002,6 +1003,13 @@ async function uploadHere() {
 
 /* ---------- Notifications ---------- */
 
+/**
+ * The notifications, newest first, each saying when it arrived.
+ *
+ * The history is unshifted on arrival, but a phone that queued a notification
+ * while the PC was away can deliver them slightly out of order, so the rows are
+ * ordered by their own timestamp rather than by however they reached us.
+ */
 function renderNotifications() {
   const list = $('notifications-list');
   if (state.notifications.length === 0) {
@@ -1009,22 +1017,54 @@ function renderNotifications() {
     return;
   }
 
-  list.innerHTML = state.notifications
-    .map(
-      (n) => `
+  const rows = newestFirst(state.notifications);
+
+  list.innerHTML = rows
+    .map((n) => {
+      const when = notifWhen(n);
+      const exact = fullTime(n.timestamp);
+      return `
       <div class="notif">
         <div class="notif-icon">${icon('bell')}</div>
         <div class="notif-body">
           <div class="notif-title">${escapeHtml(n.title || n.app)}</div>
           ${n.message ? `<div class="notif-message">${escapeHtml(n.message)}</div>` : ''}
-          <div class="notif-meta"><span>${escapeHtml(n.app || n.pkg || '')}</span>${n.time ? `<span>·</span><span>${escapeHtml(n.time)}</span>` : ''}</div>
+          <div class="notif-meta"><span>${escapeHtml(n.app || n.pkg || '')}</span>${
+            when ? `<span>·</span><span title="${escapeHtml(exact)}">${escapeHtml(when)}</span>` : ''
+          }</div>
         </div>
         <button class="icon-btn sm" data-notif-dismiss="${escapeHtml(n.id)}" title="Remove from history" aria-label="Remove notification">
           <svg class="icon"><use href="#i-close"/></svg>
         </button>
-      </div>`,
-    )
+      </div>`;
+    })
     .join('');
+}
+
+/**
+ * When a notification arrived, in words.
+ *
+ * The companion path used to put the raw epoch in `time`, which drew as a
+ * thirteen-digit number. `timestamp` is the one field both transports agree on;
+ * `time` is only a formatted string on the ADB path, so it is the fallback.
+ */
+function notifWhen(notif) {
+  if (Number(notif.timestamp) > 0) return relativeTime(notif.timestamp, Date.now());
+  return typeof notif.time === 'string' ? notif.time : '';
+}
+
+/**
+ * Keeps "2 min ago" true while the user is looking at it.
+ *
+ * Only the notifications view needs this, and only while it is open, so the
+ * timer is started when that view is shown rather than at boot.
+ */
+let notifClockTimer = null;
+function startNotifClock() {
+  if (notifClockTimer) return;
+  notifClockTimer = setInterval(() => {
+    if (state.view === 'notifications') renderNotifications();
+  }, 30 * 1000);
 }
 
 function renderBadges() {

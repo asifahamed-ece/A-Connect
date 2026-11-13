@@ -47,8 +47,13 @@ DONE - WORKING TODAY
    The phone's notifications reach the desktop history, and the
    desktop can dismiss them (which dismisses them on the phone).
    Queued when the PC is offline, delivered once, in order.
+   Each row says when it arrived: "just now" / "2 min ago" for the
+   last hour, then a clock ("14:32"), "Yesterday 14:32" or
+   "12 Nov 14:32"; newest first, exact moment in the tooltip, and the
+   relative text re-renders while the view is open.
    Phone: service/PhoneNotificationListener.kt
    Desktop: services/notifications.js + services/companion.js
+            + src/format.js (the wording), scripts/check-notification-time.js
 
 3. THE PHONE AS AN MPRIS PLAYER
    The phone appears in the desktop shell as a real media player, the
