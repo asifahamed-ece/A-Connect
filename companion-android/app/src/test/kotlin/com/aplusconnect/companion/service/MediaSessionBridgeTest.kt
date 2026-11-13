@@ -65,4 +65,48 @@ class MediaSessionBridgeTest {
             )
         )
     }
+
+    // ---- which session to follow -------------------------------------------
+
+    @Test
+    fun `a playing session beats a paused one whatever the order`() {
+        // The system hands sessions over in priority order, not in "which one
+        // is actually playing" order. Taking the first paused one kept the
+        // panel on a stopped player while a video ran.
+        assertEquals(1, MediaSessionBridge.chooseIndex(listOf(STATE_PAUSED, STATE_PLAYING)))
+        assertEquals(0, MediaSessionBridge.chooseIndex(listOf(STATE_PLAYING, STATE_PAUSED)))
+    }
+
+    @Test
+    fun `a paused session is followed when nothing plays`() {
+        assertEquals(1, MediaSessionBridge.chooseIndex(listOf(STATE_STOPPED, STATE_PAUSED)))
+    }
+
+    @Test
+    fun `nothing is followed when nothing is playing or paused`() {
+        assertNull(MediaSessionBridge.chooseIndex(emptyList()))
+        assertNull(MediaSessionBridge.chooseIndex(listOf(STATE_STOPPED, STATE_NONE, null)))
+    }
+
+    @Test
+    fun `a session with no text is not worth showing`() {
+        // The app has to tell the computer "nothing is playing" in that case,
+        // instead of sending a blank card that never clears.
+        assertFalse(MediaSessionBridge.isWorthShowing(STATE_PLAYING, hasText = false))
+        assertTrue(MediaSessionBridge.isWorthShowing(STATE_PLAYING, hasText = true))
+    }
+
+    @Test
+    fun `a stopped session is not worth showing`() {
+        assertFalse(MediaSessionBridge.isWorthShowing(STATE_STOPPED, hasText = true))
+        assertFalse(MediaSessionBridge.isWorthShowing(STATE_NONE, hasText = true))
+        assertFalse(MediaSessionBridge.isWorthShowing(null, hasText = true))
+    }
+
+    private companion object {
+        const val STATE_NONE = 0
+        const val STATE_STOPPED = 1
+        const val STATE_PAUSED = 2
+        const val STATE_PLAYING = 3
+    }
 }

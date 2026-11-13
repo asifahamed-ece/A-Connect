@@ -51,6 +51,21 @@ function run() {
   assert.strictEqual(states.length, 1, 'no media-state event');
   assert.strictEqual(states[0].title, 'Song', 'the title did not survive');
   assert.strictEqual(states[0].playing, true, 'the playing flag did not survive');
+  assert.ok(!states[0].idle, 'a playing track was marked idle');
+
+  // "Nothing is playing any more" is its own state, not an empty track: the
+  // desktop answers it by withdrawing the player. Without it the shell kept
+  // the last track - cover, clock and all - after the phone stopped playing.
+  if (CompanionService.routeMedia) {
+    CompanionService.routeMedia(service, {
+      type: protocol.TYPES.MEDIA_STATE,
+      id: 'm2',
+      ts: Date.now(),
+      payload: protocol.buildMediaState({ idle: true, title: '', playing: false }),
+    });
+  }
+  assert.strictEqual(states.length, 2, 'the idle state did not arrive');
+  assert.strictEqual(states[1].idle, true, 'the idle flag did not survive the wire');
 
   const sent = CompanionService.prototype.sendMediaCommand.call(service, 'next');
   assert.strictEqual(sent, true, 'the command was not sent to the phone');

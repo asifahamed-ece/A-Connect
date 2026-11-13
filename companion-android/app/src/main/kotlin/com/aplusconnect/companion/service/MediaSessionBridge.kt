@@ -60,6 +60,19 @@ class MediaSessionBridge(
     /** The track whose cover is in hand, waiting to be delivered. */
     private var pendingCoverKey: String? = null
 
+    /**
+     * The track whose placeholder (the playing app's own icon) was sent.
+     *
+     * Kept apart from [lastCoverKey] on purpose: a placeholder must not count
+     * as the track's cover, or the real artwork would never replace it.
+     */
+    private var lastPlaceholderKey: String? = null
+
+    /** When nothing worth showing started, and whether we already said so. */
+    private var quietSince = 0L
+    private var idlePublished = false
+    private var lastRescanAt = 0L
+
     /** Where we last told the session to seek, until the session agrees. */
     private var seekTargetMs: Long? = null
     private var seekTargetAt = 0L
@@ -73,20 +86,16 @@ class MediaSessionBridge(
 
     private val sessionsChanged =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-            adopt(controllers?.firstOrNull { isInteresting(it) })
+            adopt(choose(controllers))
         }
 
     /**
-     * Publish as soon as the session itself changes.
-     *
-     * OnActiveSessionsChanged only fires when the *set* of sessions changes, so
-     * a pause or a skip within the same session would otherwise be invisible
-     * until the next tick - and the tick only runs while playing. A shell that
-     * paused the phone would keep saying "Playing".
+     * Publish as soon as the session itself changes, and re-choose what to
+     * follow: a player that pauses hands over to whatever else is playing.
      */
     private val controllerCallback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
-            publish()
+            rescan()
         }
 
         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -102,7 +111,7 @@ class MediaSessionBridge(
             sessions.addOnActiveSessionsChangedListener(sessionsChanged, listener)
             manager = sessions
             running = true
-            adopt(sessions.getActiveSessions(listener).firstOrNull { isInteresting(it) })
+            adopt(choose(sessions.getActiveSessions(listener)))
         } catch (e: SecurityException) {
             // No notification access: this feature simply is not available.
             Log.i(TAG, "no notification access; playback control stays off")
@@ -136,9 +145,30 @@ class MediaSessionBridge(
     }
 
     /** A session worth showing: it is playing, or it is paused mid-track. */
-    private fun isInteresting(c: MediaController): Boolean {
-        val state = c.playbackState?.state
-        return state == PlaybackState.STATE_PLAYING || state == PlaybackState.STATE_PAUSED
+    private fun choose(controllers: List<MediaController>?): MediaController? {
+        if (controllers.isNullOrEmpty()) return null
+        val index = chooseIndex(controllers.map { it.playbackState?.state })
+        return index?.let { controllers[it] }
+    }
+
+    /**
+     * Looks at the active sessions again and follows the right one.
+     *
+     * The system only announces a *change to the set* of sessions. A player
+     * that was already active and merely starts playing - which is exactly what
+     * an in-app YouTube video does - changes its own state and nothing else, so
+     * without this the phone would only notice at the next app restart.
+     */
+    private fun rescan() {
+        val sessions = manager ?: return
+        lastRescanAt = System.currentTimeMillis()
+        val active = try {
+            sessions.getActiveSessions(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not list the media sessions: ${e.message}")
+            return
+        }
+        adopt(choose(active))
     }
 
     private fun adopt(next: MediaController?) {
@@ -217,7 +247,7 @@ class MediaSessionBridge(
 
     private fun publishNow() {
         val state = currentState() ?: return
-        val art = encodeCover()
+        val art = encodeArt()
         val payload = FeaturePayloads.mediaState(
             app = state.app,
             title = state.title,
@@ -226,27 +256,60 @@ class MediaSessionBridge(
             playing = state.playing,
             positionMs = state.positionMs,
             durationMs = state.durationMs,
-            art = art,
+            art = art?.base64,
         )
 
         val sent = send(payload)
         // Only a cover that actually reached the computer counts as delivered.
         // Marking it sent while the computer was still connecting would leave
-        // that track without art for its whole length.
-        if (sent && art != null) {
+        // that track without art for its whole length. A placeholder does not
+        // count: real art must still be able to replace it.
+        if (sent && art != null && art.real) {
             lastCoverKey = pendingCoverKey
             Log.i(TAG, "sent the cover for $pendingCoverKey")
         }
     }
 
     /**
-     * The cover as base64 JPEG, or null when there is none, it is unchanged,
-     * or it was tried recently and is not there yet.
+     * Tells the computer that nothing is playing any more.
      *
-     * The shell asks for `mpris:artUrl`, which the computer serves from this.
-     * It goes once per track, not once per position update.
+     * The phone used to send only states that had something in them, so after
+     * the user stopped a video the shell's media panel kept the last track,
+     * its cover and its clock for ever.
      */
-    private fun encodeCover(): String? {
+    private fun publishIdleNow() {
+        val payload = FeaturePayloads.mediaState(
+            app = "",
+            title = "",
+            artist = "",
+            album = "",
+            playing = false,
+            positionMs = 0,
+            durationMs = 0,
+            idle = true,
+        )
+        if (send(payload)) {
+            // Whatever plays next is a new panel, cover included.
+            lastCoverKey = null
+            pendingCoverKey = null
+            lastPlaceholderKey = null
+        }
+    }
+
+    /** Artwork ready to send, and whether it is the track's own. */
+    private class Art(val base64: String, val real: Boolean)
+
+    /**
+     * The cover as base64 JPEG, or null when there is nothing new to send.
+     *
+     * Three cases, in this order:
+     *  - the session has artwork: send it, once per track;
+     *  - it has none yet: send the playing app's own icon as a placeholder, so
+     *    the shell shows the player instead of an empty box. The placeholder is
+     *    not marked as the track's cover, so real artwork still replaces it;
+     *  - nothing new: send nothing.
+     */
+    private fun encodeArt(): Art? {
         val metadata = controller?.metadata ?: return null
         val key = "${metadata.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()}|" +
             "${metadata.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()}|" +
@@ -260,55 +323,114 @@ class MediaSessionBridge(
         if (now - lastCoverAttemptAt < COVER_RETRY_MS) return null
         lastCoverAttemptAt = now
 
-        val bitmap = coverBitmap(metadata)
-        if (bitmap == null) {
-            Log.i(TAG, "no cover for this track yet")
-            return null
+        val artwork = coverBitmap(metadata)
+        if (artwork != null) {
+            pendingCoverKey = key
+            return encodeJpeg(artwork)?.let { Art(it, real = true) }
         }
 
-        return try {
-            val largest = maxOf(bitmap.width, bitmap.height)
-            val scaled = if (largest > COVER_MAX_PX) {
-                val ratio = COVER_MAX_PX.toFloat() / largest
-                android.graphics.Bitmap.createScaledBitmap(
-                    bitmap,
-                    (bitmap.width * ratio).toInt().coerceAtLeast(1),
-                    (bitmap.height * ratio).toInt().coerceAtLeast(1),
-                    true,
-                )
-            } else {
-                bitmap
+        if (key != lastPlaceholderKey) {
+            val icon = appIcon(controller?.packageName.orEmpty())
+            if (icon != null) {
+                Log.i(TAG, "no cover for this track; using the app's icon")
+                lastPlaceholderKey = key
+                return encodeJpeg(icon)?.let { Art(it, real = false) }
             }
-            val out = java.io.ByteArrayOutputStream()
-            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, COVER_QUALITY, out)
-            pendingCoverKey = key
-            android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
-        } catch (e: Exception) {
-            Log.w(TAG, "could not encode the cover: ${e.message}")
-            null
         }
+        return null
+    }
+
+    /** Scales a bitmap down to a frame-friendly JPEG, as base64. */
+    private fun encodeJpeg(bitmap: android.graphics.Bitmap): String? = try {
+        val largest = maxOf(bitmap.width, bitmap.height)
+        val scaled = if (largest > COVER_MAX_PX) {
+            val ratio = COVER_MAX_PX.toFloat() / largest
+            android.graphics.Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * ratio).toInt().coerceAtLeast(1),
+                (bitmap.height * ratio).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else {
+            bitmap
+        }
+        val out = java.io.ByteArrayOutputStream()
+        scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, COVER_QUALITY, out)
+        android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+    } catch (e: Exception) {
+        Log.w(TAG, "could not encode the cover: ${e.message}")
+        null
     }
 
     /**
-     * The cover bitmap, however the session offers it.
+     * The artwork of the session, however the player offers it.
      *
-     * Some players hand over the decoded bitmap, others only a content URI -
-     * YouTube Music does the latter - so both are tried before giving up.
+     * There is no single key every player uses: YouTube Music hands over a
+     * content URI and no bitmap, some players fill ALBUM_ART, and others only
+     * describe the item through a MediaDescription. All of them are tried
+     * before giving up and falling back to the app's icon.
      */
     private fun coverBitmap(metadata: MediaMetadata): android.graphics.Bitmap? {
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return it }
-        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return it }
+        val bitmapKeys = listOf(
+            MediaMetadata.METADATA_KEY_ALBUM_ART,
+            MediaMetadata.METADATA_KEY_ART,
+            MediaMetadata.METADATA_KEY_DISPLAY_ICON,
+        )
+        for (key in bitmapKeys) {
+            metadata.getBitmap(key)?.let { return it }
+        }
 
-        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
-            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
-            ?: return null
+        val uriKeys = listOf(
+            MediaMetadata.METADATA_KEY_ALBUM_ART_URI,
+            MediaMetadata.METADATA_KEY_ART_URI,
+            MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI,
+        )
+        for (key in uriKeys) {
+            val uri = metadata.getString(key) ?: continue
+            decodeUri(uri)?.let { return it }
+        }
 
+        // A session that describes its item as a MediaDescription may carry the
+        // artwork only there.
+        metadata.description?.let { description ->
+            description.iconBitmap?.let { return it }
+            description.iconUri?.let { uri -> decodeUri(uri.toString())?.let { return it } }
+        }
+        return null
+    }
+
+    private fun decodeUri(uri: String): android.graphics.Bitmap? = try {
+        context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use { stream ->
+            android.graphics.BitmapFactory.decodeStream(stream)
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "could not read the cover from $uri: ${e.message}")
+        null
+    }
+
+    /**
+     * The playing app's icon, drawn into a bitmap.
+     *
+     * The last resort for artwork: a player with no cover at all still has an
+     * icon, and the shell's panel looks broken with an empty square.
+     */
+    private fun appIcon(pkg: String): android.graphics.Bitmap? {
+        if (pkg.isEmpty()) return null
         return try {
-            context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use { stream ->
-                android.graphics.BitmapFactory.decodeStream(stream)
-            }
+            val drawable = context.packageManager.getApplicationIcon(pkg)
+            val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: FALLBACK_ICON_PX
+            val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: FALLBACK_ICON_PX
+            val bitmap = android.graphics.Bitmap.createBitmap(
+                width,
+                height,
+                android.graphics.Bitmap.Config.ARGB_8888,
+            )
+            val canvas = android.graphics.Canvas(bitmap)
+            drawable.setBounds(0, 0, canvas.width, canvas.height)
+            drawable.draw(canvas)
+            bitmap
         } catch (e: Exception) {
-            Log.w(TAG, "could not read the cover from $uri: ${e.message}")
+            Log.w(TAG, "could not read the icon of $pkg: ${e.message}")
             null
         }
     }
@@ -369,14 +491,54 @@ class MediaSessionBridge(
                     return@Thread
                 }
                 if (!running) return@Thread
-                // The position only moves while playing, so only then is a
-                // per-second update worth the traffic.
-                if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) publish()
+
+                if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) {
+                    // The position only moves while playing, so only then is a
+                    // per-second update worth the traffic.
+                    quietSince = 0L
+                    idlePublished = false
+                    publish()
+                } else {
+                    // Nothing of ours is playing. Another app may have just
+                    // started one, and the system does not announce that when
+                    // the session was already active - which is exactly how an
+                    // in-app YouTube video used to be missed.
+                    if (System.currentTimeMillis() - lastRescanAt >= IDLE_RESCAN_MS) rescan()
+                    settleQuietly()
+                }
             }
         }, "companion-media").apply {
             isDaemon = true
             start()
         }
+    }
+
+    /**
+     * After a moment of nothing playing, tells the computer so.
+     *
+     * The grace period is what stops a track change, or a pause followed at
+     * once by another app, from making the shell's panel flicker away and back.
+     */
+    private fun settleQuietly() {
+        if (worthShowing()) {
+            quietSince = 0L
+            idlePublished = false
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (quietSince == 0L) {
+            quietSince = now
+            return
+        }
+        if (idlePublished || now - quietSince < IDLE_GRACE_MS) return
+        idlePublished = true
+        work.execute { publishIdleNow() }
+    }
+
+    /** Whether there is a track worth drawing: playing or paused, with text. */
+    private fun worthShowing(): Boolean {
+        val current = controller ?: return false
+        return isWorthShowing(current.playbackState?.state, currentState() != null)
     }
 
     private fun label(pkg: String): String = try {
@@ -399,6 +561,15 @@ class MediaSessionBridge(
 
         /** How long after a seek the position we asked for is trusted. */
         private const val SEEK_WINDOW_MS = 10_000L
+
+        /** How often the active sessions are looked at again while none plays. */
+        private const val IDLE_RESCAN_MS = 2_000L
+
+        /** How long nothing playing must last before the computer is told. */
+        private const val IDLE_GRACE_MS = 3_000L
+
+        /** Size used when a package reports no icon size of its own. */
+        private const val FALLBACK_ICON_PX = 192
 
         /**
          * The pure mapping, so it can be tested without a device. A session
@@ -424,5 +595,29 @@ class MediaSessionBridge(
                 durationMs = duration,
             )
         }
+
+        /**
+         * Which of the active sessions to follow, by position in the list.
+         *
+         * A playing session always beats a paused one, whatever order the
+         * system hands them over in. The old rule took the first session that
+         * was playing *or* paused, so a paused player listed first kept the
+         * panel while a video was actually playing.
+         */
+        fun chooseIndex(states: List<Int?>): Int? {
+            states.indexOfFirst { it == PlaybackState.STATE_PLAYING }
+                .takeIf { it >= 0 }
+                ?.let { return it }
+            states.indexOfFirst { it == PlaybackState.STATE_PAUSED }
+                .takeIf { it >= 0 }
+                ?.let { return it }
+            return null
+        }
+
+        /** Whether a session has a track worth drawing. */
+        fun isWorthShowing(playbackState: Int?, hasText: Boolean): Boolean =
+            hasText &&
+                (playbackState == PlaybackState.STATE_PLAYING ||
+                    playbackState == PlaybackState.STATE_PAUSED)
     }
 }

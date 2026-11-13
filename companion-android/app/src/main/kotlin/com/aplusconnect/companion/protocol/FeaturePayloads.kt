@@ -84,6 +84,7 @@ object FeaturePayloads {
         positionMs: Long,
         durationMs: Long,
         art: String? = null,
+        idle: Boolean = false,
     ): JSONObject {
         val payload = JSONObject()
             .put("type", Protocol.TYPE_MEDIA_STATE)
@@ -94,6 +95,11 @@ object FeaturePayloads {
             .put("playing", playing)
             .put("positionMs", positionMs)
             .put("durationMs", durationMs)
+        // "Nothing is playing any more". Without it the computer can only
+        // notice when a new track arrives, so the shell's media panel keeps
+        // the last track for ever after the user stops the video. Sent only
+        // when true, like the cover: a normal state stays as small as before.
+        if (idle) payload.put("idle", true)
         // The cover, base64 JPEG, only when it changed. Sending it with every
         // one second position update would dwarf the state itself.
         if (art != null) payload.put("art", art)

@@ -247,6 +247,7 @@ function buildMediaState(s) {
     durationMs: s.durationMs,
   };
   if (s.art) state.art = s.art;
+  if (s.idle) state.idle = true;
   return state;
 }
 
@@ -263,6 +264,9 @@ function parseMediaState(payload) {
   };
   // The cover travels only when it changed, so it is optional.
   if (payload.art) state.art = payload.art;
+  // "Nothing is playing any more", which is not the same as a paused track:
+  // the desktop clears the player rather than leaving the last one on screen.
+  if (payload.idle === true) state.idle = true;
   return state;
 }
 

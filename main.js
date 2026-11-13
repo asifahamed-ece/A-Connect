@@ -310,6 +310,12 @@ function setupServiceEvents() {
   });
 
   companion.on('media-state', (state) => {
+    // An idle state means the phone stopped playing: withdraw the player
+    // rather than leaving the shell showing a track that ended minutes ago.
+    if (state && state.idle) {
+      mpris.clear();
+      return;
+    }
     mpris.update(state);
   });
 

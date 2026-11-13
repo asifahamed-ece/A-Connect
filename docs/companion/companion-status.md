@@ -63,6 +63,20 @@ DONE - WORKING TODAY
    it. Cover art, title, artist, album, live position, working
    play/pause/next/previous/seek. Lyrics are fetched by the shell
    itself, once the metadata is real.
+   Which session is followed: one that is PLAYING beats one that is
+   merely paused, whatever order the system lists them in. A player
+   that starts playing after the connection is picked up within about
+   two seconds without restarting the app - the system only announces
+   *new* sessions, and an in-app YouTube video changes its own state
+   without changing the set.
+   When playback ends the computer is told, and the shell's panel goes
+   away instead of keeping the last track for ever.
+   Artwork: bitmap keys, content URIs and MediaDescription icons are
+   all tried, because no two players agree; if a session has no
+   artwork at all, the playing app's own icon stands in so the panel
+   is not an empty box. A player's own placeholder art is a real
+   bitmap as far as this is concerned, so it wins - ColourOS's music
+   player hands over its own orange note for untagged files.
    Desktop: services/mpris.js  (org.mpris.MediaPlayer2.aplusconnect)
    Phone:   service/MediaSessionBridge.kt
 
