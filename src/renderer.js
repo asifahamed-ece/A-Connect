@@ -28,6 +28,19 @@ const state = {
     recent: null,
     recentLoading: false,
   },
+  // The phone's folder, listed over the companion channel. `path` is the
+  // document id the phone handed out; '' is the root of the folder the user
+  // shared on the phone. `trail` is only for the breadcrumb - the phone is the
+  // authority on what a path means.
+  phone: {
+    path: '',
+    trail: [],
+    entries: [],
+    loading: false,
+    loaded: false,
+    error: null,
+    seq: 0,
+  },
 };
 
 const THEME_KEY = 'aplus-theme';
@@ -117,41 +130,154 @@ function showView(name) {
     renderDevice();
   }
   if (name === 'files') {
-    updateCompanionNotes();
+    updateFilesTransport();
     if (state.device) refreshBrowser();
   }
 }
 
 /**
- * The phone file browser needs the debugging connection. Over the companion
- * channel the app can send and receive files, so say that instead of showing
- * an empty browser.
+ * The Files view follows the connection the user picked.
+ *
+ * The debugging connection has its own browser, drop zone and folder actions.
+ * The companion channel has the phone's shared folder instead - listed
+ * read-only, one file pulled at a time - and the same transfer list for
+ * whatever arrives.
  */
-function updateCompanionNotes() {
+function updateFilesTransport() {
   const note = $('companion-files-note');
-  if (!note) return;
+  const companionOnly = state.target === 'companion' && Boolean(state.companion);
+  const overAdb = state.target === 'adb' && Boolean(state.device);
 
-  const companionOnly = state.target === 'companion' && state.companion;
-  note.style.display = companionOnly ? '' : 'none';
-  if (companionOnly) {
+  if (note) {
+    note.style.display = companionOnly ? '' : 'none';
     const text = $('companion-files-text');
     if (text) {
       text.textContent =
-        'You can send files to the phone and pull files from it. ' +
-        'Listing and browsing the phone folders still needs the debugging connection.';
+        'Click a file to pull it here. Nothing on the phone can be changed ' +
+        'from this computer.';
     }
   }
 
-  // The browser and the drop zone both drive the debugging connection, so
-  // they are hidden rather than left spinning forever.
-  // The browser and the drop zone drive the debugging connection, so they are
-  // hidden when the companion is the selected one.
-  const overAdb = state.target === 'adb' && Boolean(state.device);
   const dropzone = $('dropzone');
   if (dropzone) dropzone.hidden = !overAdb;
   document.querySelectorAll('#view-files .browser').forEach((el) => {
     el.hidden = !overAdb;
   });
+
+  const phoneBrowser = $('phone-browser');
+  if (phoneBrowser) phoneBrowser.hidden = !companionOnly;
+
+  // Open the root the first time the phone is shown, not on every render: an
+  // empty folder would otherwise be re-requested forever.
+  if (companionOnly && !state.phone.loaded && !state.phone.loading) {
+    loadPhoneDirectory('');
+  }
+}
+
+/** Lists one folder of the phone's shared folder. */
+function loadPhoneDirectory(path, trail) {
+  state.phone.path = path;
+  if (trail) state.phone.trail = trail;
+  state.phone.loading = true;
+  state.phone.error = null;
+  renderPhoneBrowser();
+
+  if (!window.api.listPhoneFiles) {
+    state.phone.loading = false;
+    state.phone.error = 'This build cannot browse the phone.';
+    renderPhoneBrowser();
+    return;
+  }
+
+  const seq = ++state.phone.seq;
+  window.api
+    .listPhoneFiles(path)
+    .then((result) => {
+      if (seq !== state.phone.seq) return;
+      state.phone.loading = false;
+      if (!result || !result.success) {
+        state.phone.entries = [];
+        state.phone.error = (result && result.error) || 'The phone did not answer.';
+      } else {
+        state.phone.entries = result.entries || [];
+        state.phone.loaded = true;
+      }
+      renderPhoneBrowser();
+    })
+    .catch((e) => {
+      if (seq !== state.phone.seq) return;
+      state.phone.loading = false;
+      state.phone.entries = [];
+      state.phone.error = e.message;
+      renderPhoneBrowser();
+    });
+}
+
+function renderPhoneBrowser() {
+  const list = $('phone-browser-list');
+  if (!list) return;
+
+  const { trail, entries, loading, error } = state.phone;
+  const crumb = $('phone-path');
+  if (crumb) crumb.textContent = trail.length ? `/${trail.map((t) => t.name).join('/')}` : '/';
+  const up = $('phone-up');
+  if (up) up.disabled = trail.length === 0;
+
+  if (loading) {
+    list.innerHTML = '<div class="list-empty">Reading the phone…</div>';
+    return;
+  }
+  if (error) {
+    list.innerHTML = `<div class="list-empty">${escapeHtml(error)}</div>`;
+    return;
+  }
+  if (!entries.length) {
+    list.innerHTML =
+      '<div class="list-empty">Nothing here. Share a folder from the A+ Connect app on the phone.</div>';
+    return;
+  }
+
+  list.innerHTML = entries
+    .map(
+      (entry) => `
+      <div class="browse-row ${entry.isDir ? 'dir' : 'file'}" data-id="${escapeHtml(entry.id)}" data-dir="${entry.isDir ? '1' : '0'}">
+        ${icon(entry.isDir ? 'folder' : 'file')}
+        <div class="browse-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
+        <div class="browse-meta">${entry.isDir ? 'Folder' : formatBytes(entry.size)}</div>
+        ${
+          entry.isDir
+            ? ''
+            : `<button class="icon-btn sm" data-pull="${escapeHtml(entry.id)}" title="Download">
+                 <svg class="icon"><use href="#i-download"/></svg>
+               </button>`
+        }
+      </div>`,
+    )
+    .join('');
+}
+
+/** Opens a folder of the phone's shared folder. */
+function openPhoneFolder(id, name) {
+  if (!id) return;
+  loadPhoneDirectory(id, [...state.phone.trail, { id, name }]);
+}
+
+/** Goes back up one folder. */
+function phoneUp() {
+  if (!state.phone.trail.length) return;
+  const trail = state.phone.trail.slice(0, -1);
+  loadPhoneDirectory(trail.length ? trail[trail.length - 1].id : '', trail);
+}
+
+/** Asks the phone to send one file; it arrives in the transfer list. */
+async function pullPhoneFile(id, name) {
+  if (!window.api.downloadPhoneFile) return;
+  const result = await window.api.downloadPhoneFile(id);
+  if (result && result.success) {
+    toast(`The phone is sending ${name}`);
+  } else {
+    toast((result && result.error) || 'Could not ask the phone for that file', 'err');
+  }
 }
 
 /* ---------- Device ---------- */
@@ -254,10 +380,11 @@ function selectTarget(target) {
   state.target = target;
 
   renderDevice();
-  updateCompanionNotes();
+  updateFilesTransport();
 
-  // The panels that depend on the connection reload for the new one.
-  if (state.view === 'files') refreshBrowser();
+  // The panels that depend on the connection reload for the new one. The
+  // phone's folder is opened by updateFilesTransport itself.
+  if (state.view === 'files' && state.target === 'adb') refreshBrowser();
   if (state.view === 'clipboard') {
     loadClipboardHistory();
     refreshClipboardStatus();
@@ -294,11 +421,12 @@ function renderCast() {
 
 function transferRow(t) {
   const active = t.status === 'active';
+  const verb = t.type === 'pull' ? 'Downloaded' : 'Sent';
   const meta =
     t.status === 'active'
       ? `${formatBytes(t.size)} · sending…`
       : t.status === 'done'
-        ? `Sent · ${t.targetPath || ''}`
+        ? `${verb} · ${t.targetPath || ''}`
         : t.status === 'cancelled'
           ? 'Cancelled'
           : `Failed${t.error ? ` · ${escapeHtml(t.error)}` : ''}`;
@@ -888,8 +1016,21 @@ function applyCompanionInfo(info) {
   if (!info) return;
   state.companionConnected = Boolean(info.connected);
   state.companion = state.companionConnected ? (info.clients && info.clients[0]) || null : null;
+
+  // A phone that went away takes its folder with it: forget what was listed,
+  // so the next connection starts at the root instead of showing a stale
+  // folder the phone no longer answers for.
+  if (!state.companionConnected) {
+    state.phone.path = '';
+    state.phone.trail = [];
+    state.phone.entries = [];
+    state.phone.loaded = false;
+    state.phone.error = null;
+    state.phone.seq++;
+  }
+
   renderDevice();
-  updateCompanionNotes();
+  updateFilesTransport();
   const pill = $('companion-pill');
   const detail = $('companion-detail');
   const badge = $('companion-badge');
@@ -1286,12 +1427,19 @@ function initFiles() {
       case 'started':
         upsertTransfer({ id: data.id, filename: data.filename, size: data.size, status: 'active' });
         break;
+      case 'progress':
+        // A transfer that is still running: keep its row alive. Only a row
+        // that was announced by `started` is updated, so a stray progress
+        // event cannot create a nameless row.
+        if (state.transfers.has(data.id)) upsertTransfer({ id: data.id, status: 'active' });
+        break;
       case 'completed': {
         const name = data.filename || String(data.targetPath || data.localTarget || '').split('/').pop();
         upsertTransfer({
           id: data.id,
           filename: name,
           targetPath: data.targetPath || data.localTarget,
+          type: data.type,
           status: 'done',
         });
         toast(data.type === 'pull' ? `Downloaded ${name}` : `Sent ${name}`);
@@ -1309,8 +1457,13 @@ function initFiles() {
 
 function initNotifications() {
   window.api.onNotificationReceived((notif) => {
-    state.notifications.unshift(notif);
-    if (state.notifications.length > 50) state.notifications.pop();
+    // One row per notification: a notification that is posted again (an app
+    // updating its text, or the phone re-sending after a reconnect) replaces
+    // its row instead of stacking a second copy of the same message.
+    state.notifications = [
+      notif,
+      ...state.notifications.filter((n) => n.id !== notif.id),
+    ].slice(0, 50);
 
     if (state.view === 'notifications') {
       renderNotifications();
@@ -1430,6 +1583,32 @@ function initClipboard() {
         toast(`Sent ${result.name} to the phone`);
       } else {
         toast('Could not send the file', 'err');
+      }
+    });
+  }
+
+  const phoneUpButton = $('phone-up');
+  if (phoneUpButton) phoneUpButton.addEventListener('click', phoneUp);
+
+  const phoneRefreshButton = $('phone-refresh');
+  if (phoneRefreshButton) {
+    phoneRefreshButton.addEventListener('click', () => loadPhoneDirectory(state.phone.path));
+  }
+
+  // One listener for the whole list: the rows are rebuilt on every listing.
+  const phoneList = $('phone-browser-list');
+  if (phoneList) {
+    phoneList.addEventListener('click', (event) => {
+      const pull = event.target.closest('[data-pull]');
+      if (pull) {
+        const row = pull.closest('.browse-row');
+        const name = row?.querySelector('.browse-name')?.textContent || 'the file';
+        pullPhoneFile(pull.dataset.pull, name);
+        return;
+      }
+      const row = event.target.closest('.browse-row');
+      if (row && row.dataset.dir === '1') {
+        openPhoneFolder(row.dataset.id, row.querySelector('.browse-name')?.textContent || '');
       }
     });
   }

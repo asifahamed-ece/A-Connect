@@ -30,6 +30,18 @@ class PhoneNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
         val id = FeaturePayloads.notificationId(sbn.packageName, sbn.id, sbn.tag)
+
+        // A chat posts one notification per message and a group summary that
+        // says "2 new messages". Forwarding both makes every message pop up
+        // twice on the computer.
+        val notification = sbn.notification
+        val isSummary = notification != null &&
+            (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+        if (isRedundantSummary(isSummary, notification?.group, groupsWithMessages())) {
+            Log.i(TAG, "not forwarding a group summary; its messages are already on their way")
+            return
+        }
+
         live[id] = sbn
 
         val extras = sbn.notification?.extras ?: return
@@ -114,8 +126,44 @@ class PhoneNotificationListener : NotificationListenerService() {
         pkg
     }
 
+    /**
+     * The groups that have a message of their own right now.
+     *
+     * Read from the system's live list rather than tracked here, so a message
+     * the user swiped away stops counting immediately and a summary that
+     * arrives afterwards is still forwarded.
+     */
+    private fun groupsWithMessages(): Set<String> {
+        val groups = HashSet<String>()
+        try {
+            activeNotifications?.forEach { other ->
+                val notification = other.notification ?: return@forEach
+                if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return@forEach
+                notification.group?.let { groups.add(it) }
+            }
+        } catch (e: Exception) {
+            // Without the live list, nothing is suppressed: a duplicate is
+            // better than a message that never arrives.
+            Log.w(TAG, "could not read the live notifications: ${e.message}")
+        }
+        return groups
+    }
+
     companion object {
         private const val TAG = "AplusConnect"
+
+        /**
+         * Whether this notification is a summary that only repeats what its
+         * own group's messages already say.
+         *
+         * A summary with no messages of its own is kept: some apps post only
+         * the summary, and dropping it would lose the text.
+         */
+        fun isRedundantSummary(
+            isSummary: Boolean,
+            group: String?,
+            groupsWithMessages: Set<String>,
+        ): Boolean = isSummary && group != null && groupsWithMessages.contains(group)
 
         /** A command to remove the notification, rather than press a button. */
         const val ACTION_DISMISS = "dismiss"

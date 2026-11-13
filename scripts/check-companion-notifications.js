@@ -68,6 +68,50 @@ function checkDismiss() {
   assert.strictEqual(dismissed[0].id, 'com.example:7:null', 'the dismissed id did not match');
 }
 
+/**
+ * One row per notification, and one popup per new message.
+ *
+ * The phone can post the same notification again: a chat updates its text as
+ * messages arrive, and the phone re-sends what it queued when it reconnects.
+ * The same words must not stack or pop twice; different words must replace the
+ * row, or the desktop keeps showing the first message of a conversation.
+ */
+function checkOneRowPerNotification() {
+  const NotificationService = require('../services/notifications');
+  const service = new NotificationService();
+  const received = [];
+  const popped = [];
+  service.on('notification-received', (n) => received.push(n));
+  service.sendDesktopNotification = (n) => popped.push(n);
+
+  const first = {
+    id: 'com.example:7:null',
+    key: 'com.example:7:null',
+    app: 'Example',
+    title: 'Ada',
+    text: 'hello',
+    message: 'hello',
+    time: 1,
+    fromCompanion: true,
+  };
+
+  service.addNotification(first);
+  assert.strictEqual(received.length, 1, 'the first notification did not arrive');
+  assert.strictEqual(popped.length, 1, 'the first notification did not pop up');
+
+  // The same notification again, word for word: nothing new to say.
+  service.addNotification({ ...first, time: 2 });
+  assert.strictEqual(received.length, 1, 'an unchanged re-post was announced again');
+  assert.strictEqual(popped.length, 1, 'an unchanged re-post popped up twice');
+  assert.strictEqual(service.history.length, 1, 'an unchanged re-post stacked a second row');
+
+  // The same notification with new words: one row, updated.
+  service.addNotification({ ...first, text: 'hello again', message: 'hello again', time: 3 });
+  assert.strictEqual(received.length, 2, 'an updated notification was not announced');
+  assert.strictEqual(service.history.length, 1, 'an updated notification stacked a second row');
+  assert.strictEqual(service.history[0].text, 'hello again', 'the row kept the old text');
+}
+
 function run() {
   const service = new EventEmitter();
   const received = [];
@@ -107,6 +151,7 @@ function run() {
   assert.strictEqual(dismissed[0].id, 'com.example:7:null', 'the dismissed id did not match');
 
   checkDismiss();
+  checkOneRowPerNotification();
 
   console.log('companion notifications: ok');
 }

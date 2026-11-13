@@ -179,7 +179,12 @@ function setupServiceEvents() {
     clipboardSync.start(device.id).catch((e) => {
       console.error('Clipboard sync failed to start:', e.message);
     });
-    notifications.start(device.id);
+    // One transport per event: while the phone is connected over the companion
+    // channel its notifications come over that channel. The debugging poller
+    // must not start again just because adb rediscovered the phone - which it
+    // does whenever the device id changes (USB to Wi-Fi, a reconnect) - or
+    // every notification pops twice, once per transport.
+    if (!companion.isConnected) notifications.start(device.id);
     updateTrayMenu();
     sendToRenderer('event:device-connected', device);
   });
@@ -313,15 +318,34 @@ function setupServiceEvents() {
   });
 
   companion.on('file-transfer-start', (data) => {
-    sendToRenderer('event:transfer-progress', { status: 'transferring', progress: 0, ...data });
+    // The renderer's transfer list speaks one vocabulary for both transports,
+    // so the companion's names are mapped here rather than taught to it.
+    sendToRenderer('event:transfer-progress', {
+      status: 'started',
+      type: 'pull',
+      id: data.id,
+      filename: data.name,
+      size: data.size,
+    });
   });
 
   companion.on('file-transfer-progress', (data) => {
-    sendToRenderer('event:transfer-progress', { status: 'transferring', ...data });
+    sendToRenderer('event:transfer-progress', {
+      status: 'progress',
+      id: data.id,
+      received: data.received,
+      total: data.total,
+    });
   });
 
   companion.on('file-transfer-done', (data) => {
-    sendToRenderer('event:transfer-progress', { status: 'completed', progress: 100, ...data });
+    sendToRenderer('event:transfer-progress', {
+      status: 'completed',
+      type: 'pull',
+      id: data.id,
+      filename: data.name,
+      targetPath: data.path,
+    });
     try {
       execFile('notify-send', ['-a', 'A+ Connect', 'File Received', `${data.name} saved to Downloads`]);
     } catch {}
@@ -465,6 +489,8 @@ function setupIpcHandlers() {
     const sent = companion.sendFile(filePath);
     return { success: sent, filePath, name: require('path').basename(filePath) };
   });
+  ipcMain.handle('companion:listFiles', async (_, path) => companion.requestFileList(path));
+  ipcMain.handle('companion:downloadFile', async (_, path) => companion.requestFileSend(path));
   ipcMain.handle('companion:stop', async () => {
     companion.stop();
     return companion.getInfo();

@@ -215,14 +215,31 @@ class NotificationService extends EventEmitter {
   }
 
   addNotification(notif) {
-    // Newest first; keep the same notification from stacking.
-    const duplicate = this.history.find((n) => n.key === notif.key);
-    if (duplicate) return;
+    const textOf = (n) => n.text ?? n.message ?? '';
+    const index = this.history.findIndex((n) => n.key === notif.key);
+
+    if (index !== -1) {
+      const previous = this.history[index];
+      // The same notification posted again with the same words is not news:
+      // no second row and no second popup. This is what stops a mirrored
+      // message from appearing twice when the phone re-sends what it queued.
+      if (previous.title === notif.title && textOf(previous) === textOf(notif)) return;
+      // New words in the same notification (a chat that keeps its id) replace
+      // its row instead of stacking, or the desktop keeps showing the first
+      // message of the conversation for ever.
+      this.history.splice(index, 1);
+    }
 
     this.history.unshift(notif);
     if (this.history.length > 50) this.history.pop();
 
     this.emit('notification-received', notif);
+
+    // A notification that changes on a timer (a download's progress, a
+    // stopwatch) updates its row without popping up again every second.
+    const last = this.lastEmitted.get(notif.key) ?? 0;
+    if (Date.now() - last < 2000) return;
+    this.lastEmitted.set(notif.key, Date.now());
     this.sendDesktopNotification(notif);
   }
 
