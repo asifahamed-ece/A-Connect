@@ -81,6 +81,15 @@ class CompanionSettings(context: Context) {
         get() = prefs.getString(KEY_DOWNLOAD_FOLDER, "") ?: ""
         set(value) = prefs.edit().putString(KEY_DOWNLOAD_FOLDER, value).apply()
 
+    /**
+     * The folder the user shared so the computer can browse it, as a document
+     * tree the app keeps a read permission for. Empty means nothing is shared
+     * and the computer's file browser stays empty.
+     */
+    var browseRootUri: String
+        get() = prefs.getString(KEY_BROWSE_ROOT, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_BROWSE_ROOT, value).apply()
+
     /** True once the phone has been paired and holds the secret. */
     val isPaired: Boolean
         get() = sharedSecret.isNotEmpty()
@@ -154,6 +163,7 @@ class CompanionSettings(context: Context) {
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_SECRET = "shared_secret"
         private const val KEY_DOWNLOAD_FOLDER = "download_folder"
+        private const val KEY_BROWSE_ROOT = "browse_root"
         private const val KEY_PC_ID = "pc_id"
         private const val KEY_FINGERPRINT = "fingerprint"
         private const val KEY_HISTORY = "clip_history"

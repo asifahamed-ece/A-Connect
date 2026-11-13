@@ -46,6 +46,8 @@ class CompanionClient(
     private val onFileDone: (id: String) -> Unit = { },
     private val onNotificationAction: (id: String, action: String) -> Unit = { _, _ -> },
     private val onMediaCommand: (command: String, positionMs: Long?) -> Unit = { _, _ -> },
+    private val onFileListRequest: (path: String) -> Unit = { },
+    private val onFileSendRequest: (path: String) -> Unit = { },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -379,6 +381,26 @@ class CompanionClient(
                         )
                     } catch (e: Exception) {
                         Log.w(TAG, "the notification action failed: ${e.message}")
+                    }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_LIST_REQUEST) {
+                    try {
+                        onFileListRequest(message.payload.optString("path"))
+                    } catch (e: Exception) {
+                        // Reading the phone's files must never cost the
+                        // connection: this runs on the reader thread.
+                        Log.w(TAG, "the file list request failed: ${e.message}")
+                    }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_SEND_REQUEST) {
+                    try {
+                        onFileSendRequest(message.payload.optString("path"))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "the file send request failed: ${e.message}")
                     }
                     continue
                 }

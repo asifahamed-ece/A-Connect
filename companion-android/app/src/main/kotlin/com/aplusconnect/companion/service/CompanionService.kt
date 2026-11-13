@@ -21,6 +21,7 @@ import com.aplusconnect.companion.clip.ClipboardReadActivity
 import com.aplusconnect.companion.clip.ClipboardBridgeReceiver
 import com.aplusconnect.companion.clip.KeyboardBridge
 import com.aplusconnect.companion.data.CompanionSettings
+import com.aplusconnect.companion.file.PhoneFileBrowser
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
 import com.aplusconnect.companion.net.IncomingFile
@@ -77,6 +78,7 @@ class CompanionService : Service() {
     private lateinit var settings: CompanionSettings
     private lateinit var incomingFile: IncomingFile
     private lateinit var destination: DownloadDestination
+    private lateinit var fileBrowser: PhoneFileBrowser
     private var client: CompanionClient? = null
     private var reconnectAt = 0L
     private var reconnectRunnable: Runnable? = null
@@ -108,11 +110,24 @@ class CompanionService : Service() {
     /** What the phone is playing, and the controls for it. */
     private var mediaBridge: MediaSessionBridge? = null
 
+    /**
+     * Where the computer's file requests are served.
+     *
+     * Not the send thread: reading a folder, and especially streaming a whole
+     * file, can take a long time, and the clipboard must not wait behind it.
+     * Not the reader thread either, which must keep answering the computer's
+     * pings or the computer drops the link.
+     */
+    private val fileThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-files").apply { isDaemon = true }
+    }
+
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
         incomingFile = IncomingFile(java.io.File(cacheDir, "incoming"))
         destination = DownloadDestination(this)
+        fileBrowser = PhoneFileBrowser(this, settings)
         instance = this
 
         // Anything that arrived while the service was not running goes to the
@@ -275,6 +290,12 @@ class CompanionService : Service() {
             },
             onMediaCommand = { command, positionMs ->
                 mediaBridge?.command(command, positionMs)
+            },
+            onFileListRequest = { path ->
+                fileThread.execute { answerFileList(path) }
+            },
+            onFileSendRequest = { path ->
+                fileThread.execute { answerFileSend(path) }
             },
         )
         client = thisClient
@@ -459,6 +480,50 @@ class CompanionService : Service() {
         val c = client
         if (c == null || !c.isReady) return false
         return c.sendMessage(Protocol.TYPE_MEDIA_STATE, payload)
+    }
+
+    /**
+     * Answers the computer's request for one folder.
+     *
+     * The computer asks with a path this phone handed out before, or the empty
+     * string for the root of the shared folder. It always gets an answer: a
+     * folder that cannot be read, or no shared folder at all, answers with an
+     * empty list rather than leaving the computer waiting.
+     */
+    private fun answerFileList(path: String) {
+        val c = client
+        if (c == null || !c.isReady) return
+
+        val entries = fileBrowser.list(path) ?: run {
+            Log.i(TAG, "nothing to list: no folder is shared, or it cannot be read")
+            emptyList()
+        }
+
+        if (!c.sendMessage(Protocol.TYPE_FILE_LIST, FeaturePayloads.fileList(path, entries))) {
+            Log.w(TAG, "could not send the file list")
+        }
+    }
+
+    /**
+     * Sends one file the computer asked for.
+     *
+     * The streaming is the existing phone-to-computer transfer, so both
+     * directions keep using the same file-start/chunk/done messages and the
+     * computer needs no new file code.
+     */
+    private fun answerFileSend(path: String) {
+        val document = fileBrowser.documentUri(path)
+        if (document == null) {
+            Log.w(TAG, "the computer asked for a file outside the shared folder")
+            return
+        }
+        sendFile(this, document, onProgress = {}, onComplete = { ok, error ->
+            if (ok) {
+                Log.i(TAG, "sent the requested file to the computer")
+            } else {
+                Log.w(TAG, "could not send the requested file: $error")
+            }
+        })
     }
 
     /** Sends the queued notifications, oldest first, stopping on the first failure. */

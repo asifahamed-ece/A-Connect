@@ -276,6 +276,26 @@ fun MainScreen(settings: CompanionSettings) {
         }
     }
 
+    // The folder the computer may browse. Read-only: the picker grants a
+    // permission, and nothing in the app can change what is inside it.
+    val browsePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                // Some providers do not offer a persistable permission; the
+                // folder still works for this session.
+            }
+            settings.browseRootUri = uri.toString()
+            Toast.makeText(context, "The computer can now browse that folder", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // The camera is only used while the pairing screen is open.
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -494,6 +514,8 @@ fun MainScreen(settings: CompanionSettings) {
                     },
                     downloadFolder = settings.downloadFolderUri,
                     onPickDownloadFolder = { folderPicker.launch(null) },
+                    browseFolder = settings.browseRootUri,
+                    onPickBrowseFolder = { browsePicker.launch(null) },
                     onScanQr = {
                         cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
                     },
@@ -1251,6 +1273,8 @@ fun SettingsTab(
     onClearHistory: () -> Unit,
     downloadFolder: String,
     onPickDownloadFolder: () -> Unit,
+    browseFolder: String,
+    onPickBrowseFolder: () -> Unit,
     onScanQr: () -> Unit,
     keyboardActive: Boolean,
     onOpenKeyboardPicker: () -> Unit,
@@ -1464,6 +1488,45 @@ fun SettingsTab(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text("Change…", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
+                }
+            }
+        }
+
+        // The folder the computer may look inside. Read-only on purpose: the
+        // computer can list it and ask for a copy, nothing more.
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, RoundedCornerShape(18.dp))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Folder the PC can browse", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                    Text(
+                        if (browseFolder.isEmpty()) "Nothing shared yet"
+                        else browseFolder.substringAfterLast('/').ifEmpty { "Chosen folder" },
+                        fontSize = 12.sp,
+                        color = textSecondary,
+                        maxLines = 1
+                    )
+                    Text(
+                        "Read only: the computer can look and copy, never change anything",
+                        fontSize = 11.sp,
+                        color = textMuted
+                    )
+                }
+
+                Button(
+                    onClick = onPickBrowseFolder,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = elevatedColor),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(if (browseFolder.isEmpty()) "Choose…" else "Change…", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textPrimary)
                 }
             }
         }

@@ -18,6 +18,14 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <!--
+        No storage permission, deliberately. The folder the computer may browse
+        is chosen with the system folder picker, and the picker's grant IS the
+        permission: adding READ_EXTERNAL_STORAGE or MANAGE_EXTERNAL_STORAGE
+        would widen what this app can see for no gain, and neither is needed to
+        list a tree or to read a document inside it.
+    -->
+
+    <!--
         The shipping app.
 
         It deliberately registers NO accessibility service: Android blocks
