@@ -228,6 +228,58 @@ function checkFeaturePayloads() {
   assert.deepStrictEqual(mediaState, expected.mediaState, 'the media state payload changed');
   assert.strictEqual(protocol.parseMediaState(mediaState).playing, true, 'playing did not survive');
 
+  // Screen mirroring: the request, the two outcomes, and the video frame
+  // header that both ends read. A drift here shows up as a blank canvas.
+  const mirrorStart = protocol.buildMirrorStart({
+    videoPort: 24444,
+    maxLongSide: 1280,
+    fps: 30,
+    bitrate: 4000000,
+    keyframeSeconds: 1,
+  });
+  assert.deepStrictEqual(mirrorStart, expected.mirrorStart, 'the mirror request changed');
+  assert.strictEqual(
+    protocol.parseMirrorStart(mirrorStart).videoPort,
+    24444,
+    'the video port did not survive the parser'
+  );
+  assert.strictEqual(
+    protocol.parseMirrorStart({ type: 'mirror-start' }),
+    null,
+    'a mirror request without a port parsed'
+  );
+
+  assert.deepStrictEqual(
+    protocol.buildMirrorStarted({ width: 582, height: 1280, encoder: 'c2.mtk.avc.encoder' }),
+    expected.mirrorStarted,
+    'the mirror started payload changed'
+  );
+  assert.deepStrictEqual(
+    protocol.buildMirrorStopped('requested'),
+    expected.mirrorStopped,
+    'the mirror stopped payload changed'
+  );
+  assert.deepStrictEqual(
+    protocol.buildMirrorFailed('no-encoder'),
+    expected.mirrorFailed,
+    'the mirror failed payload changed'
+  );
+
+  // The 10-byte video header, and the refusal of anything that is not one.
+  const videoFrame = protocol.buildVideoFrame({
+    keyframe: true,
+    ptsMicros: 1234567,
+    payload: Buffer.from([0, 0, 0, 1, 0x65]),
+  });
+  assert.strictEqual(videoFrame.length, protocol.VIDEO_HEADER_BYTES + 5, 'the header size changed');
+  const parsedFrame = protocol.parseVideoFrame(videoFrame);
+  assert.strictEqual(parsedFrame.keyframe, true, 'the keyframe flag was lost');
+  assert.strictEqual(parsedFrame.ptsMicros, 1234567, 'the timestamp was lost');
+  assert.strictEqual(protocol.parseVideoFrame(Buffer.alloc(3)), null, 'a short frame parsed');
+  const otherStream = Buffer.from(videoFrame);
+  otherStream[0] = 2;
+  assert.strictEqual(protocol.parseVideoFrame(otherStream), null, 'a non-video stream parsed');
+
   const fileList = protocol.buildFileList('root', [
     { id: 'doc:pictures', name: 'Pictures', size: 0, isDir: true, mime: '' },
     { id: 'doc:photo', name: 'photo.jpg', size: 1024, isDir: false, mime: 'image/jpeg' },

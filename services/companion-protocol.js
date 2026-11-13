@@ -63,6 +63,35 @@ const TYPES = {
   FILE_SEARCH_REQUEST: 'file-search-request',
   MIRROR_START: 'mirror-start',
   MIRROR_STOP: 'mirror-stop',
+  MIRROR_STARTED: 'mirror-started',
+  MIRROR_STOPPED: 'mirror-stopped',
+  MIRROR_FAILED: 'mirror-failed',
+};
+
+/**
+ * The first byte of a binary frame says which stream it belongs to.
+ *
+ * One here, two reserved for audio: the day a second kind of stream exists, the
+ * frame format does not have to change to tell them apart.
+ */
+const STREAM_VIDEO = 1;
+
+/** stream id, flags, then a 64-bit timestamp. */
+const VIDEO_HEADER_BYTES = 10;
+
+/** Why a mirroring session ended, in the words the user sees. */
+const MIRROR_REASONS = {
+  REQUESTED: 'requested',
+  DISCONNECTED: 'disconnected',
+  PROJECTION_STOPPED: 'projection-stopped',
+  SCREEN_SLEPT: 'screen-slept',
+  LINK_LOST: 'link-lost',
+  CONSENT_REFUSED: 'consent-refused',
+  NO_ENCODER: 'no-encoder',
+  VIDEO_CONNECT_FAILED: 'video-connect-failed',
+  NOT_TRUSTED: 'not-trusted',
+  ALREADY_MIRRORING: 'already-mirroring',
+  NO_CONTROL_LINK: 'no-control-link',
 };
 
 const REASONS = {
@@ -270,6 +299,108 @@ function parseMediaState(payload) {
   return state;
 }
 
+/**
+ * Asks the phone to start mirroring, and everything it needs to do it.
+ *
+ * The video port travels with the request rather than being configured on the
+ * phone: the phone dials out, so the desktop is the one that decides where the
+ * listener is, and a port number that changes in one place cannot drift out of
+ * step in the other.
+ */
+function buildMirrorStart(options = {}) {
+  return {
+    type: TYPES.MIRROR_START,
+    videoPort: options.videoPort,
+    maxLongSide: options.maxLongSide,
+    fps: options.fps,
+    bitrate: options.bitrate,
+    keyframeSeconds: options.keyframeSeconds,
+  };
+}
+
+/** The quality settings a phone was asked for, or null if the request is junk. */
+function parseMirrorStart(payload) {
+  if (!payload || typeof payload.videoPort !== 'number') return null;
+  return {
+    videoPort: payload.videoPort,
+    maxLongSide: payload.maxLongSide || 1280,
+    fps: payload.fps || 30,
+    bitrate: payload.bitrate || 4_000_000,
+    keyframeSeconds: payload.keyframeSeconds || 1,
+  };
+}
+
+/** The phone is capturing: the real size, and which encoder it picked. */
+function buildMirrorStarted(payload = {}) {
+  return {
+    type: TYPES.MIRROR_STARTED,
+    width: payload.width,
+    height: payload.height,
+    encoder: payload.encoder || '',
+  };
+}
+
+/** Mirroring ended, and why. */
+function buildMirrorStopped(reason) {
+  return { type: TYPES.MIRROR_STOPPED, reason: reason || MIRROR_REASONS.REQUESTED };
+}
+
+/** Mirroring never started, and why. */
+function buildMirrorFailed(reason) {
+  return { type: TYPES.MIRROR_FAILED, reason: reason || MIRROR_REASONS.NO_ENCODER };
+}
+
+/** Either outcome, as the desktop reads it. */
+function parseMirrorOutcome(payload) {
+  if (!payload || typeof payload.reason !== 'string') return null;
+  if (payload.type === TYPES.MIRROR_STARTED) {
+    return {
+      type: TYPES.MIRROR_STARTED,
+      width: payload.width || 0,
+      height: payload.height || 0,
+      encoder: payload.encoder || '',
+    };
+  }
+  return { type: payload.type, reason: payload.reason };
+}
+
+/**
+ * One video frame, ready for the binary envelope.
+ *
+ * stream id, a flags byte, and a 64-bit microsecond presentation time. The
+ * timestamp is what WebCodecs shows on its clock and what lets the desktop
+ * notice a stalled stream instead of painting a frozen frame for ever.
+ */
+function buildVideoFrame({ keyframe = false, ptsMicros = 0, payload }) {
+  const body = payload || Buffer.alloc(0);
+  const out = Buffer.alloc(VIDEO_HEADER_BYTES + body.length);
+  out.writeUInt8(STREAM_VIDEO, 0);
+  out.writeUInt8(keyframe ? 1 : 0, 1);
+  out.writeBigUInt64BE(BigInt(Math.max(0, Math.floor(ptsMicros))), 2);
+  body.copy(out, VIDEO_HEADER_BYTES);
+  return out;
+}
+
+/**
+ * Reads one video frame. Returns null for anything that is not one: a short
+ * buffer, or a stream id this version does not know. A reader must be able to
+ * drop a frame it does not understand and keep reading, because the alternative
+ * is a socket that dies on one bad packet.
+ */
+function parseVideoFrame(buffer) {
+  if (!buffer || buffer.length < VIDEO_HEADER_BYTES) return null;
+  const streamId = buffer.readUInt8(0);
+  if (streamId !== STREAM_VIDEO) return null;
+  const flags = buffer.readUInt8(1);
+  const ptsMicros = Number(buffer.readBigUInt64BE(2));
+  return {
+    streamId,
+    keyframe: (flags & 1) !== 0,
+    ptsMicros,
+    payload: buffer.subarray(VIDEO_HEADER_BYTES),
+  };
+}
+
 function buildFileList(path, entries) {
   return {
     type: TYPES.FILE_LIST,
@@ -435,6 +566,17 @@ module.exports = {
   parseNotification,
   buildMediaState,
   parseMediaState,
+  buildMirrorStart,
+  parseMirrorStart,
+  buildMirrorStarted,
+  buildMirrorStopped,
+  buildMirrorFailed,
+  parseMirrorOutcome,
+  buildVideoFrame,
+  parseVideoFrame,
+  STREAM_VIDEO,
+  VIDEO_HEADER_BYTES,
+  MIRROR_REASONS,
   buildFileList,
   parseFileList,
   sortFileEntries,

@@ -6,10 +6,12 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.graphics.drawable.Icon
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
@@ -23,13 +25,16 @@ import com.aplusconnect.companion.clip.KeyboardBridge
 import com.aplusconnect.companion.data.CompanionSettings
 import com.aplusconnect.companion.file.PhoneFileBrowser
 import com.aplusconnect.companion.file.StorageSearch
+import com.aplusconnect.companion.mirror.ScreenMirror
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
 import com.aplusconnect.companion.net.IncomingFile
+import com.aplusconnect.companion.net.VideoClient
 import com.aplusconnect.companion.protocol.ClipboardPayload
 import com.aplusconnect.companion.protocol.ClipboardPayloads
 import com.aplusconnect.companion.protocol.FeaturePayloads
 import com.aplusconnect.companion.protocol.Protocol
+import com.aplusconnect.companion.protocol.VideoFrameHeader
 import org.json.JSONObject
 import java.util.UUID
 
@@ -74,6 +79,10 @@ class CompanionService : Service() {
 
         @Volatile
         var lastDirection: String? = null // "phone_to_pc" or "pc_to_phone"
+
+        /** Whether the screen is being mirrored right now, for the app's own UI. */
+        @Volatile
+        var mirroring: Boolean = false
     }
 
     private lateinit var settings: CompanionSettings
@@ -95,6 +104,39 @@ class CompanionService : Service() {
      * the user taps Reconnect on the phone.
      */
     private var hungUpByComputer = false
+
+    /**
+     * Screen mirroring state.
+     *
+     * [mirrorRequest] is what the computer asked for, held while the user is
+     * being asked for permission; [screenMirror] is the capture once it is
+     * running; [videoSocket] is the second connection the frames leave on.
+     */
+    private var mirrorRequest: FeaturePayloads.MirrorRequest? = null
+    private var screenMirror: ScreenMirror? = null
+    private var videoSocket: VideoClient? = null
+
+    /**
+     * Where a mirror starts and stops.
+     *
+     * Not [sendThread]: starting an encoder and creating a virtual display are
+     * binder calls that can take a moment, and the clipboard must not wait
+     * behind them. Not the reader thread either, which has to keep answering
+     * the computer's pings.
+     */
+    private val mirrorThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "companion-mirror").apply { isDaemon = true }
+    }
+
+    /** Stops mirroring when the screen goes dark, with an honest reason. */
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                Log.i(TAG, "the screen went off")
+                stopMirror("screen-slept", tellComputer = true)
+            }
+        }
+    }
 
     /** Guards the pending clipboard and the last sent hash. */
     private val stateLock = Any()
@@ -211,12 +253,27 @@ class CompanionService : Service() {
         manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "A+ Connect", NotificationManager.IMPORTANCE_LOW)
         )
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+        // The foreground type is named explicitly, and it is the connection
+        // type only. Declaring mediaProjection in the manifest is necessary
+        // but not enough: Android refuses to start a mediaProjection service
+        // until the user has actually granted a projection, so asking for that
+        // type here crashes the app on launch (SecurityException from
+        // ActiveServices.validateForegroundServiceType). The type is raised
+        // when a capture begins, in beginMirroring().
+        raiseForegroundWith(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            "Connecting…",
+        )
 
         connect()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_MIRROR) {
+            // The Stop sharing action on the foreground notification. It goes
+            // through the same teardown as every other trigger.
+            mirrorThread.execute { stopMirror("requested", tellComputer = true) }
+        }
         if (intent?.action == ACTION_CONNECT) {
             if (client == null || client?.isReady != true) {
                 connect()
@@ -234,6 +291,9 @@ class CompanionService : Service() {
 
     override fun onDestroy() {
         instance = null
+        // A projection left running with no service underneath it would keep
+        // the phone's status bar chip up for ever.
+        stopMirror("requested", tellComputer = true)
         try {
             contentResolver.unregisterContentObserver(mediaObserver)
         } catch (e: Exception) {
@@ -383,6 +443,14 @@ class CompanionService : Service() {
             },
             onFileSearchRequest = { query, fresh ->
                 searchThread.execute { answerFileSearch(query, fresh) }
+            },
+            onMirrorStart = { request ->
+                // Off the reader thread: starting an encoder is a binder call
+                // that must not delay the answers the computer is waiting for.
+                mirrorThread.execute { handleMirrorStart(request) }
+            },
+            onMirrorStop = {
+                mirrorThread.execute { stopMirror("requested", tellComputer = false) }
             },
         )
         client = thisClient
@@ -673,6 +741,286 @@ class CompanionService : Service() {
         }
     }
 
+    // ---- screen mirroring ---------------------------------------------------
+
+    /**
+     * The computer asked to see the screen.
+     *
+     * Nothing captures yet: Android insists the user allows each session, and
+     * that dialog can only be raised by an Activity. In the foreground it opens
+     * at once; in the background the platform forbids it, so the phone posts a
+     * notification that does exactly the same thing when tapped - which is the
+     * only reliable route there is.
+     */
+    private fun handleMirrorStart(payload: JSONObject) {
+        val request = FeaturePayloads.parseMirrorRequest(payload)
+        if (request == null) {
+            sendMirrorFailed("no-encoder")
+            return
+        }
+        if (screenMirror != null) {
+            sendMirrorFailed("already-mirroring")
+            return
+        }
+
+        mirrorRequest = request
+        Status.state = "Waiting for screen-share permission"
+        askForScreenCapture()
+    }
+
+    /** Puts the permission request in front of the user, by both routes. */
+    private fun askForScreenCapture() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.notify(MIRROR_NOTIFICATION_ID, buildMirrorRequestNotification())
+
+        // Works when the app is in the foreground; silently does nothing when
+        // the platform blocks a background activity start, and then the
+        // notification is the path the user takes.
+        try {
+            startActivity(
+                Intent(this, com.aplusconnect.companion.MainActivity::class.java)
+                    .setAction(ACTION_MIRROR)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (e: Exception) {
+            Log.i(TAG, "could not raise the app for the projection dialog: ${e.message}")
+        }
+    }
+
+    /**
+     * The user allowed (or refused) the capture.
+     *
+     * The foreground service must already be running with the projection type
+     * before the system hands out a projection; getting that order wrong throws
+     * on Android 14 and later.
+     */
+    private fun beginMirroring(resultCode: Int, data: Intent) {
+        val request = mirrorRequest
+        if (request == null) return
+
+        val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+        raiseForegroundWith(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+
+        val granted = try {
+            manager?.getMediaProjection(resultCode, data)
+        } catch (e: Exception) {
+            Log.w(TAG, "the projection was not granted: ${e.message}")
+            null
+        }
+        if (granted == null) {
+            mirrorRequest = null
+            sendMirrorFailed("consent-refused")
+            lowerForeground()
+            return
+        }
+
+        lateinit var socket: VideoClient
+        socket = VideoClient(
+            host = settings.host,
+            port = request.videoPort,
+            deviceId = settings.deviceId,
+            deviceName = resolvedDeviceName(),
+            pairing = settings.pairing,
+            sharedSecret = settings.sharedSecret,
+            onClosed = { reason ->
+                // The picture has nowhere to go: stop capturing rather than
+                // encode for nobody.
+                Log.i(TAG, "the video socket closed: $reason")
+                if (videoSocket === socket) stopMirror("link-lost", tellComputer = false)
+            },
+        )
+        socket.connect()
+
+        if (!socket.awaitReady(VIDEO_READY_TIMEOUT_MS)) {
+            socket.close()
+            videoSocket = null
+            mirrorRequest = null
+            sendMirrorFailed("video-connect-failed")
+            lowerForeground()
+            return
+        }
+
+        lateinit var capturing: ScreenMirror
+        capturing = ScreenMirror(
+            context = this,
+            onFrame = { payload, keyframe, pts ->
+                socket.sendFrame(VideoFrameHeader.encode(keyframe, pts, payload), keyframe)
+            },
+            onStopped = { reason ->
+                // The system ends the projection for its own reasons: the user
+                // tapped the status-bar chip, or the screen locked.
+                if (screenMirror === capturing) stopMirror(reason, tellComputer = true)
+            },
+        )
+
+        val started = capturing.start(
+            granted = granted,
+            fps = request.fps,
+            bitrate = request.bitrate,
+            keyframeSeconds = request.keyframeSeconds,
+            maxLongSide = request.maxLongSide,
+        )
+        if (!started) {
+            socket.close()
+            videoSocket = null
+            mirrorRequest = null
+            sendMirrorFailed("no-encoder")
+            lowerForeground()
+            return
+        }
+
+        videoSocket = socket
+        screenMirror = capturing
+
+        val manager2 = getSystemService(NotificationManager::class.java)
+        manager2?.cancel(MIRROR_NOTIFICATION_ID)
+        raiseForegroundWith(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+            "Mirroring the screen",
+            withStop = true,
+        )
+        registerScreenOff()
+        Status.mirroring = true
+        Status.state = "Mirroring the screen"
+
+        sendThread.execute {
+            client?.sendMessage(
+                Protocol.TYPE_MIRROR_STARTED,
+                FeaturePayloads.mirrorStarted(capturing.width, capturing.height, capturing.encoderName),
+            )
+        }
+        Log.i(TAG, "mirroring started: ${capturing.width}x${capturing.height}")
+    }
+
+    /** The user said no, or dismissed the dialog. */
+    private fun mirrorRefused() {
+        mirrorRequest = null
+        getSystemService(NotificationManager::class.java)?.cancel(MIRROR_NOTIFICATION_ID)
+        sendMirrorFailed("consent-refused")
+        lowerForeground()
+    }
+
+    /**
+     * Ends mirroring, from any of the eight triggers.
+     *
+     * Idempotent and serialized. The triggers really do run on different
+     * threads - the mirror thread, the video socket's read thread, the
+     * projection callback, the main thread for a screen-off broadcast - and
+     * without this lock two of them can both find `Status.mirroring` true and
+     * tear down twice, double-lowering the foreground service and sending the
+     * desktop two stop messages.
+     */
+    @Synchronized
+    private fun stopMirror(reason: String, tellComputer: Boolean) {
+        val capturing = screenMirror
+        val socket = videoSocket
+        val wasMirroring = Status.mirroring
+        if (!wasMirroring && capturing == null && socket == null) return
+
+        // State is cleared first, so a callback fired by any release below
+        // finds nothing to re-enter.
+        screenMirror = null
+        videoSocket = null
+        mirrorRequest = null
+        Status.mirroring = false
+
+        // Queue the reason before the video socket is touched. The desktop
+        // learns *why* on the control channel; closing the picture first makes
+        // it report a link loss for a stop the user asked for.
+        if (tellComputer && wasMirroring) sendMirrorStopped(reason)
+
+        capturing?.stop(reason)
+        socket?.close()
+        unregisterScreenOff()
+
+        getSystemService(NotificationManager::class.java)?.cancel(MIRROR_NOTIFICATION_ID)
+
+        if (wasMirroring) {
+            Status.state = "Connected to ${settings.host}"
+            lowerForeground()
+            Log.i(TAG, "mirroring stopped: $reason")
+        }
+    }
+
+    private fun sendMirrorFailed(reason: String) {
+        sendThread.execute {
+            client?.sendMessage(Protocol.TYPE_MIRROR_FAILED, FeaturePayloads.mirrorFailed(reason))
+        }
+    }
+
+    private fun sendMirrorStopped(reason: String) {
+        sendThread.execute {
+            client?.sendMessage(Protocol.TYPE_MIRROR_STOPPED, FeaturePayloads.mirrorStopped(reason))
+        }
+    }
+
+    /**
+     * Raises the foreground notification with a given service type.
+     *
+     * Android 14 and later refuse a projection unless the service is already
+     * running with the media projection type, so this is called *before*
+     * `getMediaProjection`, not after.
+     */
+    private fun raiseForegroundWith(
+        type: Int,
+        text: String = "Connected to ${settings.host}",
+        withStop: Boolean = false,
+    ) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, buildNotification(text, withStop), type)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification(text, withStop))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not raise the notification: ${e.message}")
+        }
+    }
+
+    /** Back to the ordinary connected-only service. */
+    private fun lowerForeground() {
+        raiseForegroundWith(ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+    }
+
+    private fun registerScreenOff() {
+        try {
+            registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        } catch (e: Exception) {
+            Log.w(TAG, "could not watch for the screen going off: ${e.message}")
+        }
+    }
+
+    private fun unregisterScreenOff() {
+        try {
+            unregisterReceiver(screenOffReceiver)
+        } catch (e: Exception) {
+            // Not registered.
+        }
+    }
+
+    /** The notification that asks for permission, when the app is not in front. */
+    private fun buildMirrorRequestNotification(): Notification {
+        val open = PendingIntent.getActivity(
+            this,
+            3,
+            Intent(this, com.aplusconnect.companion.MainActivity::class.java)
+                .setAction(ACTION_MIRROR)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("Screen sharing requested")
+            .setContentText("Tap to let ${settings.host} see this screen")
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+    }
+
+    private fun resolvedDeviceName(): String =
+        settings.deviceName.ifEmpty { android.os.Build.MODEL }
+
     /**
      * Sends one file the computer asked for.
      *
@@ -718,18 +1066,51 @@ class CompanionService : Service() {
         }
     }
 
-    private fun buildNotification(text: String): Notification = Notification.Builder(this, CHANNEL_ID)        .setContentTitle("A+ Connect")
-        .setContentText(text)
-        .setSmallIcon(android.R.drawable.ic_menu_edit)
-        .setOngoing(true)
-        .addAction(
-            Notification.Action.Builder(
-                Icon.createWithResource(this, R.drawable.ic_aplus_clipboard),
-                "Copy to PC",
-                copyActionIntent(),
-            ).build()
+    private fun buildNotification(text: String, withStop: Boolean = false): Notification {
+        val builder = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("A+ Connect")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setOngoing(true)
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, R.drawable.ic_aplus_clipboard),
+                    "Copy to PC",
+                    copyActionIntent(),
+                ).build()
+            )
+
+        // While the screen is shared, the notification says so and stops it.
+        // Android requires a notification for the projection service anyway;
+        // this is that notification, doing something useful.
+        if (withStop) {
+            builder.addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Stop sharing",
+                    stopMirrorActionIntent(),
+                ).build()
+            )
+        }
+        return builder.build()
+    }
+
+    /**
+     * The "Stop sharing" action.
+     *
+     * A service intent rather than an activity: stopping must not need a window,
+     * and it must work while the phone is locked or the app is in the
+     * background.
+     */
+    private fun stopMirrorActionIntent(): PendingIntent {
+        val intent = Intent(this, CompanionService::class.java).setAction(ACTION_STOP_MIRROR)
+        return PendingIntent.getService(
+            this,
+            2,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        .build()
+    }
 
     /**
      * The "Copy to PC" action.
@@ -752,7 +1133,7 @@ class CompanionService : Service() {
 
     private fun updateNotification(text: String) {
         val manager = getSystemService(NotificationManager::class.java)
-        manager?.notify(NOTIFICATION_ID, buildNotification(text))
+        manager?.notify(NOTIFICATION_ID, buildNotification(text, withStop = screenMirror != null))
     }
 
     /**
@@ -785,6 +1166,36 @@ class CompanionService : Service() {
         private const val NOTIFICATION_ID = 7
         const val EXTRA_CLIPBOARD = "clipboard"
         const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
+
+        /** The notification says the computer wants to see this screen. */
+        const val ACTION_MIRROR = "com.aplusconnect.companion.MIRROR"
+
+        /** The "Stop sharing" action on the foreground notification. */
+        const val ACTION_STOP_MIRROR = "com.aplusconnect.companion.STOP_MIRROR"
+
+        /** Separate from the service notification, so it can be cancelled alone. */
+        private const val MIRROR_NOTIFICATION_ID = 8
+
+        /** How long to wait for the video socket's handshake before giving up. */
+        private const val VIDEO_READY_TIMEOUT_MS = 6000L
+
+        /**
+         * The user granted capture. Called by MainActivity, which is the only
+         * component that can raise the platform's dialog.
+         */
+        fun onProjectionGranted(context: Context, resultCode: Int, data: Intent) {
+            val running = instance ?: return
+            running.mirrorThread.execute { running.beginMirroring(resultCode, data) }
+        }
+
+        /** The user refused, or dismissed the dialog. */
+        fun onProjectionRefused(context: Context) {
+            val running = instance ?: return
+            running.mirrorThread.execute { running.mirrorRefused() }
+        }
+
+        /** Whether a capture is waiting for the user to allow it. */
+        fun hasPendingMirrorRequest(): Boolean = instance?.mirrorRequest != null
         private const val RECONNECT_DELAY_MS = 5000L
 
         /**

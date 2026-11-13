@@ -8,6 +8,8 @@ const FileTransferService = require('./services/file-transfer');
 const ClipboardSyncService = require('./services/clipboard');
 const NotificationService = require('./services/notifications');
 const CompanionService = require('./services/companion');
+const MirrorService = require('./services/mirror');
+const h264 = require('./services/h264');
 const { MprisService } = require('./services/mpris');
 
 let mainWindow = null;
@@ -21,6 +23,18 @@ const fileTransfer = new FileTransferService();
 const clipboardSync = new ClipboardSyncService();
 const notifications = new NotificationService();
 const companion = new CompanionService();
+
+/**
+ * The live screen mirroring session, if any.
+ *
+ * The picture arrives on its own socket (services/mirror.js); starting, failing
+ * and finishing are reported on the control channel, which is the connection
+ * the UI is already watching - so a failure can say what happened instead of
+ * leaving an empty canvas.
+ */
+let mirror = null;
+let mirrorCodec = null;
+let mirrorInfo = { state: 'idle', reason: null, width: 0, height: 0, encoder: '', port: 0 };
 
 // The phone's media session, published as an MPRIS player so the desktop shell
 // (Caelestia, Waybar, playerctl) can show and control it. The app has no media
@@ -42,6 +56,138 @@ function sendToRenderer(channel, payload) {
   } catch (e) {
     console.error(`Failed to send ${channel} to renderer:`, e.message);
   }
+}
+
+/**
+ * Starts one screen mirroring session.
+ *
+ * The listener is opened before the phone is asked, because the phone dials
+ * out: it has to have somewhere to dial. The port is the control port plus one,
+ * and it travels in the request so the phone never needs its own configuration.
+ */
+async function startMirror() {
+  if (mirror) return { success: false, reason: 'already-mirroring' };
+  if (!companion.isConnected) return { success: false, reason: 'no-control-link' };
+
+  const service = new MirrorService({
+    pcId: companion.pcId,
+    fingerprint: companion.fingerprint,
+    // The same store, the same code check and the same proof as the control
+    // channel: one trust implementation, two sockets.
+    pairedDevices: companion.pairedDevices,
+    isPairingCodeValid: (code) => companion.isPairingCodeValid(code),
+    savePairedDevices: () => companion.savePairedDevices(),
+  });
+
+  try {
+    await service.start(companion.port + 1);
+  } catch (err) {
+    console.error('[mirror] could not listen for video:', err.message);
+    return { success: false, reason: 'video-connect-failed' };
+  }
+
+  service.on('frame', onMirrorFrame);
+  service.on('client-closed', () => {
+    if (mirror === service) stopMirror('link-lost', { tellPhone: false });
+  });
+  // The picture went quiet: a phone out of range, or a link that has died
+  // without saying so. The socket is already gone; end the session here so the
+  // card stops claiming to stream.
+  service.on('stalled', () => {
+    if (mirror === service) stopMirror('link-lost', { tellPhone: false });
+  });
+
+  mirror = service;
+  mirrorCodec = null;
+
+  const sent = companion.startMirror({
+    videoPort: service.port,
+    maxLongSide: 1280,
+    fps: 30,
+    bitrate: 4_000_000,
+    keyframeSeconds: 1,
+  });
+
+  if (!sent) {
+    stopMirror('no-control-link', { tellPhone: false });
+    return { success: false, reason: 'no-control-link' };
+  }
+
+  mirrorInfo = { state: 'starting', reason: null, width: 0, height: 0, encoder: '', port: service.port };
+  sendToRenderer('event:mirror-state', mirrorInfo);
+  return { success: true, port: service.port };
+}
+
+/**
+ * Ends mirroring for every reason there is.
+ *
+ * One function because there are eight triggers - the Stop button, Disconnect,
+ * the phone's notification action, the system chip, the screen sleeping, the
+ * video socket closing, the phone app dying, and this app quitting - and eight
+ * copies of a teardown is how a codec gets left running.
+ */
+function stopMirror(reason = 'requested', options = {}) {
+  const tellPhone = options.tellPhone !== false;
+  const wasMirroring = Boolean(mirror);
+
+  if (mirror) {
+    mirror.stop();
+    mirror = null;
+  }
+  mirrorCodec = null;
+
+  if (tellPhone && wasMirroring) companion.stopMirror(reason);
+
+  mirrorInfo = {
+    state: 'idle',
+    reason: wasMirroring ? reason : null,
+    width: 0,
+    height: 0,
+    encoder: '',
+    port: 0,
+  };
+  if (wasMirroring) sendToRenderer('event:mirror-state', mirrorInfo);
+  return { success: true, wasMirroring };
+}
+
+/**
+ * One video frame on its way to the renderer.
+ *
+ * The codec string is read from the first keyframe's SPS, once per session, and
+ * travels with that frame so the renderer knows how to configure its decoder.
+ * Deltas that arrive before the first keyframe are simply not shown - there is
+ * nothing to decode them against.
+ */
+function onMirrorFrame(frame) {
+  if (!mirror) return;
+
+  let codec;
+  if (!mirrorCodec && frame.keyframe) {
+    mirrorCodec = h264.codecStringFromAnnexB(frame.payload) || h264.FALLBACK_CODEC;
+    codec = mirrorCodec;
+  }
+
+  sendToRenderer('event:mirror-frame', {
+    keyframe: frame.keyframe,
+    ptsMicros: frame.ptsMicros,
+    codec,
+    data: frame.payload,
+  });
+}
+
+/**
+ * A late reason, arriving after the picture is already gone.
+ *
+ * The video socket and the control channel are two connections: the video one
+ * can close a few milliseconds before the phone's "stopped" message lands. A
+ * deliberate stop on the phone would then leave the PC showing "the connection
+ * was lost" - true about the socket, wrong about why. The control channel is
+ * authoritative about the reason, so it corrects an idle session here.
+ */
+function correctMirrorReason(reason) {
+  if (!reason || mirrorInfo.state !== 'idle' || mirrorInfo.reason === reason) return;
+  mirrorInfo = { ...mirrorInfo, reason };
+  sendToRenderer('event:mirror-state', mirrorInfo);
 }
 
 function createWindow() {
@@ -285,6 +431,9 @@ function setupServiceEvents() {
 
   companion.on('client-disconnected', (data) => {
     console.log(`[companion] disconnected phone: ${data.deviceId}`);
+    // A phone that is not on the control channel cannot be streaming to us;
+    // the video socket may linger for a moment, so end the session here.
+    if (mirror) stopMirror('link-lost', { tellPhone: false });
     // Nothing is playing on a phone that is not there.
     mpris.clear();
     // The companion is gone. If a phone is still on USB, the ADB poller takes
@@ -321,6 +470,35 @@ function setupServiceEvents() {
 
   mpris.on('command', (name, positionMs) => {
     companion.sendMediaCommand(name, positionMs);
+  });
+
+  // ---- screen mirroring ---------------------------------------------------
+  //
+  // The picture has its own socket; everything the user can see about it is
+  // reported here, on the control channel, so one place answers "what is
+  // happening".
+
+  companion.on('mirror-started', (info) => {
+    if (!mirror) return;
+    mirrorInfo = { ...mirrorInfo, state: 'streaming', width: info.width, height: info.height, encoder: info.encoder };
+    mirror.log(`streaming ${info.width}x${info.height} with ${info.encoder || 'an unnamed encoder'}`);
+    sendToRenderer('event:mirror-state', mirrorInfo);
+  });
+
+  companion.on('mirror-stopped', ({ reason }) => {
+    if (mirror) {
+      stopMirror(reason, { tellPhone: false });
+      return;
+    }
+    correctMirrorReason(reason);
+  });
+
+  companion.on('mirror-failed', ({ reason }) => {
+    if (mirror) {
+      stopMirror(reason, { tellPhone: false });
+      return;
+    }
+    correctMirrorReason(reason);
   });
 
   companion.on('file-transfer-start', (data) => {
@@ -500,7 +678,16 @@ function setupIpcHandlers() {
     companion.requestFileSearch(query, { fresh: fresh === true })
   );
   ipcMain.handle('companion:downloadFile', async (_, path) => companion.requestFileSend(path));
+  // Screen mirroring. The picture travels on its own socket; these two calls
+  // are the whole of what the renderer can ask for.
+  ipcMain.handle('mirror:start', async () => startMirror());
+  ipcMain.handle('mirror:stop', async () => stopMirror('requested'));
+  ipcMain.handle('mirror:info', async () => mirrorInfo);
+
   ipcMain.handle('companion:disconnect', async () => {
+    // Hanging up on the phone also ends the picture: the video socket has no
+    // way to mean anything once the control channel is gone.
+    if (mirror) stopMirror('disconnected', { tellPhone: false });
     const hungUp = companion.disconnectClients();
     return { success: hungUp > 0, hungUp };
   });
@@ -568,6 +755,9 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  // Tell the phone to stop capturing before this process disappears: otherwise
+  // it holds a projection and an encoder with nobody to send to.
+  if (mirror) stopMirror('requested');
   isQuitting = true;
   adb.stopPolling();
   scrcpy.stop();

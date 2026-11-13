@@ -8,6 +8,7 @@ const tls = require('tls');
 const crypto = require('crypto');
 
 const protocol = require('./companion-protocol');
+const handshake = require('./companion-handshake');
 const { ensureCertificate } = require('./companion-cert');
 
 const DEFAULT_PORT = 24443;
@@ -346,6 +347,21 @@ class CompanionService extends EventEmitter {
     if (this.listenerCount('error') > 0) this.emit('error', err);
   }
 
+  /**
+   * The two hooks the shared handshake needs from whichever service runs it.
+   *
+   * It logs in this service's own format, and a pairing is announced here so
+   * the tray, the device list and the settings card keep working exactly as
+   * they did when this logic lived inline.
+   */
+  logLine(text) {
+    log(text);
+  }
+
+  onPaired(device) {
+    this.emit('client-paired', device);
+  }
+
   /** Pings the connected phones and drops the ones that stopped answering. */
   pingClients() {
     const now = Date.now();
@@ -401,110 +417,10 @@ class CompanionService extends EventEmitter {
 
   handleMessage(socket, message) {
     if (message.type === protocol.TYPES.HELLO) {
-      const deviceId = message.payload.deviceId;
-      const deviceName = message.payload.deviceName || 'Phone';
-      const isAlreadyPaired = Boolean(this.pairedDevices[deviceId]);
-
-      if (!isAlreadyPaired) {
-        const isCodeValid = this.isPairingCodeValid(message.payload.code);
-        const secret = message.payload.secret;
-        if (!isCodeValid || !secret) {
-          log(`refusing connection from ${socket.clientIp}: invalid or expired pairing code`);
-          socket.write(
-            protocol.encode({
-              version: protocol.PROTOCOL_VERSION,
-              type: protocol.TYPES.HELLO_ERROR,
-              id: 'err',
-              ts: Date.now(),
-              payload: { reason: protocol.REASONS.BAD_CODE },
-            })
-          );
-          socket.end();
-          return;
-        }
-
-        // Paired with the code: keep the phone's secret so it can prove it is
-        // the same phone next time.
-        this.pairedDevices[deviceId] = {
-          deviceId,
-          deviceName,
-          pairedAt: Date.now(),
-          secret: String(secret),
-        };
-        this.savePairedDevices();
-        log(`newly paired with ${deviceName} (${deviceId})`);
-      } else {
-        // A known device has to prove it still holds the secret from the
-        // pairing. Knowing the device id is not enough: ids leak through logs
-        // and backups, and a leaked id would otherwise hand over the whole
-        // clipboard.
-        const paired = this.pairedDevices[deviceId];
-        const secret = paired.secret ? Buffer.from(paired.secret, 'base64') : null;
-        const proof = message.payload.proof;
-        const nonce = message.payload.nonce;
-
-        const proofIsValid =
-          secret && proof && protocol.verifyProof(secret, deviceId, nonce, proof);
-
-        if (!proofIsValid) {
-          // A phone that lost its secret (or one that was paired before the
-          // secret existed) can pair again with the live code - the same
-          // five minute window the first pairing uses. Without a valid code
-          // there is nothing to fall back on, so the connection is refused.
-          const canRePair = this.isPairingCodeValid(message.payload.code) && message.payload.secret;
-          if (canRePair) {
-            this.pairedDevices[deviceId] = {
-              deviceId,
-              deviceName,
-              pairedAt: Date.now(),
-              secret: String(message.payload.secret),
-            };
-            this.savePairedDevices();
-            log(`re-paired ${deviceName} (${deviceId}) with the live code`);
-          } else {
-            console.log(`[companion] refusing ${deviceName} (${deviceId}): no valid proof of possession`);
-            socket.write(
-              protocol.encode({
-                version: protocol.PROTOCOL_VERSION,
-                type: protocol.TYPES.HELLO_ERROR,
-                id: 'err',
-                ts: Date.now(),
-                payload: { reason: protocol.REASONS.AUTH_FAILED },
-              })
-            );
-            socket.end();
-            return;
-          }
-        } else {
-          log(`recognized returning paired device: ${deviceName} (${deviceId})`);
-        }
-      }
-
-      socket.handshakeDone = true;
-      socket.deviceId = deviceId;
-      socket.deviceName = deviceName;
-
-      socket.write(
-        protocol.encode({
-          version: protocol.PROTOCOL_VERSION,
-          type: protocol.TYPES.HELLO_ACK,
-          id: 'ack',
-          ts: Date.now(),
-          payload: {
-            sessionId: 's-' + Date.now(),
-            pcId: this.pcId,
-            fingerprint: this.fingerprint,
-            nonce: message.payload.nonce,
-          },
-        })
-      );
-
-      this.emit('client-paired', {
-        deviceId: socket.deviceId,
-        deviceName: socket.deviceName,
-        ip: socket.clientIp,
-        isNew: !isAlreadyPaired,
-      });
+      // The handshake - including proof of possession and re-pairing - lives in
+      // one place, because the video socket runs the same one with pairing
+      // switched off.
+      handshake.handleHello(this, socket, message, { allowPairing: true });
       this.updateStatus();
       return;
     }
@@ -547,6 +463,7 @@ class CompanionService extends EventEmitter {
 
     if (routeNotification(this, message)) return;
     if (routeMedia(this, message)) return;
+    if (routeMirror(this, message)) return;
 
     if (message.type === protocol.TYPES.PING) {      socket.write(
         protocol.encode({
@@ -1036,6 +953,81 @@ function routeMedia(service, message) {
   service.emit('media-state', state);
   return true;
 }
+
+/**
+ * Mirroring outcomes, which arrive on the *control* channel.
+ *
+ * The picture travels on its own socket, but starting, failing and finishing
+ * are reported here: this is the connection the user already trusts and the one
+ * the UI is watching, so a failure can say what happened instead of leaving an
+ * empty canvas.
+ *
+ * Exported as a property of the class so the checks can drive it without a
+ * socket; production calls it from `handleMessage`.
+ */
+function routeMirror(service, message) {
+  if (message.type === protocol.TYPES.MIRROR_STARTED) {
+    service.emit('mirror-started', {
+      width: message.payload.width || 0,
+      height: message.payload.height || 0,
+      encoder: message.payload.encoder || '',
+    });
+    return true;
+  }
+
+  if (message.type === protocol.TYPES.MIRROR_STOPPED) {
+    service.emit('mirror-stopped', { reason: message.payload.reason || 'requested' });
+    return true;
+  }
+
+  if (message.type === protocol.TYPES.MIRROR_FAILED) {
+    service.emit('mirror-failed', { reason: message.payload.reason || 'no-encoder' });
+    return true;
+  }
+
+  return false;
+}
+
+CompanionService.routeMirror = routeMirror;
+
+/**
+ * Asks the phone to start mirroring.
+ *
+ * The video port travels with the request: the computer listens, so it owns the
+ * port, and the phone only ever dials out.
+ */
+CompanionService.prototype.startMirror = function startMirror(options = {}) {
+  const payload = protocol.buildMirrorStart(options);
+  const sent = sendToPhones(
+    this,
+    protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.MIRROR_START,
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      payload,
+    }),
+    'a mirror request'
+  );
+  return sent > 0;
+};
+
+/** Asks the phone to stop mirroring. */
+CompanionService.prototype.stopMirror = function stopMirror(reason) {
+  const payload = protocol.buildMirrorStopped(reason);
+  const sent = sendToPhones(
+    this,
+    protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type: protocol.TYPES.MIRROR_STOP,
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      payload,
+    }),
+    'a mirror stop'
+  );
+  return sent > 0;
+};
 
 CompanionService.routeMedia = routeMedia;
 

@@ -188,4 +188,50 @@ object FeaturePayloads {
         actions.forEach { array.put(JSONObject().put("id", it.id).put("title", it.title)) }
         return array
     }
+
+    // ---- screen mirroring ---------------------------------------------------
+
+    /**
+     * What the computer asked for, as the phone reads it.
+     *
+     * The video port arrives with the request, because the computer is the one
+     * that listens: the phone only ever dials out.
+     */
+    data class MirrorRequest(
+        val videoPort: Int,
+        val maxLongSide: Int,
+        val fps: Int,
+        val bitrate: Int,
+        val keyframeSeconds: Int,
+    )
+
+    fun parseMirrorRequest(json: JSONObject): MirrorRequest? {
+        if (!json.has("videoPort")) return null
+        val port = json.optInt("videoPort", 0)
+        if (port !in 1..65535) return null
+        return MirrorRequest(
+            videoPort = port,
+            maxLongSide = json.optInt("maxLongSide", 1280),
+            fps = json.optInt("fps", 30),
+            bitrate = json.optInt("bitrate", 4_000_000),
+            keyframeSeconds = json.optInt("keyframeSeconds", 1),
+        )
+    }
+
+    /** The phone is capturing, at this size, with this encoder. */
+    fun mirrorStarted(width: Int, height: Int, encoder: String): JSONObject = JSONObject()
+        .put("type", Protocol.TYPE_MIRROR_STARTED)
+        .put("width", width)
+        .put("height", height)
+        .put("encoder", encoder)
+
+    /** Mirroring ended, and why. Every trigger reports the same way. */
+    fun mirrorStopped(reason: String): JSONObject = JSONObject()
+        .put("type", Protocol.TYPE_MIRROR_STOPPED)
+        .put("reason", reason)
+
+    /** Mirroring never started, and why. */
+    fun mirrorFailed(reason: String): JSONObject = JSONObject()
+        .put("type", Protocol.TYPE_MIRROR_FAILED)
+        .put("reason", reason)
 }

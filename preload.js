@@ -65,6 +65,14 @@ contextBridge.exposeInMainWorld('api', {
   // was deliberate, so it stops retrying until the user reconnects it.
   disconnectCompanion: () => ipcRenderer.invoke('companion:disconnect'),
 
+  // Screen mirroring over the companion channel. Separate from startMirroring
+  // above, which is the scrcpy/ADB path and needs developer options.
+  startCompanionMirror: () => ipcRenderer.invoke('mirror:start'),
+  stopCompanionMirror: () => ipcRenderer.invoke('mirror:stop'),
+  getCompanionMirror: () => ipcRenderer.invoke('mirror:info'),
+  onMirrorState: (callback) => ipcRenderer.on('event:mirror-state', (_, data) => callback(data)),
+  onMirrorFrame: (callback) => ipcRenderer.on('event:mirror-frame', (_, data) => callback(data)),
+
   // System & Window
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   toggleMaximize: () => ipcRenderer.send('window:maximize'),

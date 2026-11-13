@@ -164,6 +164,56 @@ private val LightTextSecondary = Color(0xFF6A7382)
 private val LightTextMuted = Color(0xFF98A2B3)
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * The platform's screen-capture dialog.
+     *
+     * The result is handed to the service, which is the thing that owns the
+     * projection and the encoder. Registered here because a dialog needs an
+     * Activity, and there is no way around that on any Android version.
+     */
+    private val projectionConsent = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == RESULT_OK && data != null) {
+            CompanionService.onProjectionGranted(applicationContext, result.resultCode, data)
+        } else {
+            CompanionService.onProjectionRefused(applicationContext)
+        }
+    }
+
+    /** Raises the platform's screen-capture dialog for the pending request. */
+    private fun requestScreenCapture() {
+        val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+        if (manager == null) {
+            CompanionService.onProjectionRefused(applicationContext)
+            return
+        }
+        try {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                // Whole screen, not "one app": this is a mirror, and the system
+                // would otherwise offer a single window and letterbox it.
+                manager.createScreenCaptureIntent(
+                    android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay()
+                )
+            } else {
+                manager.createScreenCaptureIntent()
+            }
+            projectionConsent.launch(intent)
+        } catch (e: Exception) {
+            CompanionService.onProjectionRefused(applicationContext)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == CompanionService.ACTION_MIRROR) {
+            requestScreenCapture()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val settings = CompanionSettings(this)
@@ -173,6 +223,10 @@ class MainActivity : ComponentActivity() {
         intent?.getStringExtra(EXTRA_CODE)?.let { settings.pairingCode = it }
         if (settings.host.isNotEmpty()) {
             CompanionService.start(applicationContext)
+        }
+
+        if (intent?.action == CompanionService.ACTION_MIRROR) {
+            requestScreenCapture()
         }
 
         setContent {

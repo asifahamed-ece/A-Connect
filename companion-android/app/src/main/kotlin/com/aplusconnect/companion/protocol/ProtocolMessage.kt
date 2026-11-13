@@ -40,6 +40,12 @@ object Protocol {
     fun searchKey(query: String): String = SEARCH_KEY_PREFIX + query
     const val TYPE_MIRROR_START = "mirror-start"
     const val TYPE_MIRROR_STOP = "mirror-stop"
+    /** The phone is capturing: the real size, and the encoder it picked. */
+    const val TYPE_MIRROR_STARTED = "mirror-started"
+    /** Mirroring ended, and why. */
+    const val TYPE_MIRROR_STOPPED = "mirror-stopped"
+    /** Mirroring never started, and why. */
+    const val TYPE_MIRROR_FAILED = "mirror-failed"
 
     /**
      * The clipboard cap is a byte budget, not a character budget: 256 KiB of

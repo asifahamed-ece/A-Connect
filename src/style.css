@@ -361,6 +361,20 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .cast-state { font-size: 12.5px; color: var(--text-3); }
 .cast-art { width: 132px; height: auto; flex: 0 0 auto; }
 
+/* The phone's screen. Drawn at the phone's own aspect ratio, never wider than
+   the card: the source is already capped at 1280 on its long side. */
+.cast-canvas {
+  display: block;
+  margin-top: var(--s-4);
+  width: 100%;
+  max-width: 360px;
+  max-height: 62vh;
+  object-fit: contain;
+  border-radius: var(--radius-md, 12px);
+  background: #000;
+}
+.cast-canvas[hidden] { display: none; }
+
 .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-3); }
 .tile {
   display: flex; flex-direction: column; align-items: center; gap: var(--s-2);

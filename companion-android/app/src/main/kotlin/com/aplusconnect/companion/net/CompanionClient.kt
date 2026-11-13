@@ -49,6 +49,8 @@ class CompanionClient(
     private val onFileListRequest: (path: String) -> Unit = { },
     private val onFileSendRequest: (path: String) -> Unit = { },
     private val onFileSearchRequest: (query: String, fresh: Boolean) -> Unit = { _, _ -> },
+    private val onMirrorStart: (request: JSONObject) -> Unit = { },
+    private val onMirrorStop: () -> Unit = { },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -357,6 +359,26 @@ class CompanionClient(
 
                 if (message.type == Protocol.TYPE_FILE_DONE) {
                     onFileDone(message.payload.optString("id"))
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_MIRROR_START) {
+                    try {
+                        onMirrorStart(message.payload)
+                    } catch (e: Exception) {
+                        // A mirror request must never cost the connection: it
+                        // arrives on the reader thread, which also answers pings.
+                        Log.w(TAG, "the mirror request failed: ${e.message}")
+                    }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_MIRROR_STOP) {
+                    try {
+                        onMirrorStop()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "the mirror stop failed: ${e.message}")
+                    }
                     continue
                 }
 

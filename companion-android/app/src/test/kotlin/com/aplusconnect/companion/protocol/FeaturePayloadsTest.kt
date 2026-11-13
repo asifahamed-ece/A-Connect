@@ -101,6 +101,28 @@ class FeaturePayloadsTest {
         )
         assertEquals(fixture.getJSONObject("mediaState").toString(), media.toString())
 
+        // The mirror messages: both sides must build the same bytes, and the
+        // request must parse back into what the phone acts on.
+        assertEquals(
+            fixture.getJSONObject("mirrorStarted").toString(),
+            FeaturePayloads.mirrorStarted(582, 1280, "c2.mtk.avc.encoder").toString(),
+        )
+        assertEquals(
+            fixture.getJSONObject("mirrorStopped").toString(),
+            FeaturePayloads.mirrorStopped("requested").toString(),
+        )
+        assertEquals(
+            fixture.getJSONObject("mirrorFailed").toString(),
+            FeaturePayloads.mirrorFailed("no-encoder").toString(),
+        )
+
+        val request = FeaturePayloads.parseMirrorRequest(fixture.getJSONObject("mirrorStart"))!!
+        assertEquals(24444, request.videoPort)
+        assertEquals(1280, request.maxLongSide)
+        assertEquals(30, request.fps)
+        assertEquals(4_000_000, request.bitrate)
+        assertEquals(1, request.keyframeSeconds)
+
         val files = FeaturePayloads.fileList(
             path = "root",
             entries = listOf(

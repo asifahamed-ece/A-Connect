@@ -119,6 +119,39 @@ DONE - WORKING TODAY
             companion:disconnect
    Phone:   CompanionClient.REASON_BYE, CompanionService.onClosed
 
+10. SCREEN MIRRORING, OVER ITS OWN SOCKET (added 2026-11-14)
+   View-only mirroring over the companion channel: no USB cable and no
+   developer options. The picture travels on a second TLS socket (the
+   control port + 1, so 24444) and reuses the control channel's pinned
+   certificate and HELLO proof. A pairing code is refused there, so the
+   second socket can only inherit trust, never create it.
+   The phone captures with MediaProjection and encodes H.264. HEVC was
+   ruled out by probing this Electron build: WebCodecs has no `hvc1`.
+   Capture is the screen capped at 1280 on the long side (582x1280 on
+   this phone), 30 fps asked for, 4 Mbit/s, a keyframe every second.
+   Each keyframe carries its own SPS/PPS, and the desktop reads its
+   WebCodecs codec string out of the SPS instead of guessing a profile.
+   Android requires consent for every session, so the phone raises the
+   system dialog itself (or a notification to tap when the app is in the
+   background). The foreground notification grows a "Stop sharing"
+   action, and the system's own status-bar chip stops it too.
+   All eight teardown triggers - the PC's Stop, Disconnect, the phone's
+   action, the chip, screen-off, the video socket closing, the app
+   dying, and quitting the desktop - go through one serialized
+   stopMirror(reason) that releases projection, codec and socket. The
+   teardown is serialized because two of those triggers really do fire
+   on different threads at once.
+   A dead link is noticed in about six seconds on both ends: the desktop
+   watches the video socket for silence, the phone watches for a write
+   that never completes. Without that pair, taking the phone out of
+   Wi-Fi range left the PC saying "streaming" over a frozen frame for
+   over a minute.
+   Desktop: services/mirror.js, services/h264.js, main.js startMirror /
+            stopMirror, IPC mirror:start / mirror:stop / mirror:info
+   Phone:   mirror/ScreenMirror.kt, mirror/MirrorConfig.kt,
+            mirror/FrameGate.kt, net/VideoClient.kt,
+            protocol/VideoFrameHeader.kt
+
 ====================================================================
 THE COMPONENTS (where the code lives)
 ====================================================================
@@ -129,9 +162,14 @@ PHONE - companion-android/app/src/main/kotlin/com/aplusconnect/companion/
   protocol/FeaturePayloads.kt   notification / media / file payloads
   protocol/Handshake.kt         code, fingerprint pinning, HMAC proof
   protocol/PairingPayload.kt    the QR pairing payload
+  protocol/VideoFrameHeader.kt  the 10-byte header in front of a frame
   net/CompanionClient.kt        outbound TLS, keepalive, reconnect
   net/PeerTrust.kt              certificate fingerprint pinning
   net/IncomingFile.kt           chunked file receiver
+  net/VideoClient.kt            the video socket, one waiting frame
+  mirror/MirrorConfig.kt        capture size arithmetic
+  mirror/FrameGate.kt           send / hold / drop, never queue
+  mirror/ScreenMirror.kt        MediaProjection + H.264 + teardown
   service/CompanionService.kt   foreground service, queues, routing
   service/PhoneNotificationListener.kt   notifications
   service/MediaSessionBridge.kt what is playing, and the controls
@@ -152,18 +190,23 @@ KEYBOARD FORK - keyboard/patch-heliboard.py
 DESKTOP - services/ and scripts/
   services/companion.js          TLS server, pairing, message routing
   services/companion-protocol.js the wire protocol, mirrored exactly
+  services/companion-handshake.js the HELLO proof, shared by both sockets
   services/companion-cert.js     self-signed certificate + fingerprint
+  services/mirror.js             the video listener and its watchdog
+  services/h264.js               the codec string, read from the SPS
   services/mpris.js              the MPRIS player
   services/clipboard.js          clipboard pipeline, one transport rule
   services/notifications.js      ADB + companion notifications, one history
   services/adb.js  scrcpy.js  file-transfer.js  clipboard-bridge.mjs
   scripts/protocol-check.js      cross-implementation conformance
+  scripts/check-mirror.js        the video socket over real TLS
+  scripts/check-handshake.js     the two pairing rules
   scripts/check-mpris.js         the MPRIS mapping
   scripts/check-companion-media.js       media routing and commands
   scripts/check-companion-notifications.js  notification routing
   scripts/ensure-deps.js         fails fast if npm install was skipped
 
-TESTS - 86 Android unit tests, plus six desktop node checks.
+TESTS - 108 Android unit tests, plus eight desktop node checks.
   The guard tests matter as much as the feature tests:
    NoAccessibilityServiceTest  no accessibility service, ever
    NoMainThreadSendTest        no socket write on the main thread
@@ -177,19 +220,15 @@ TESTS - 86 Android unit tests, plus six desktop node checks.
 ====================================================================
 UPCOMING - NOT YET BUILT
 ====================================================================
-Task 8   The phone lists its files, read-only, over the channel
-         (SAF tree picker, one level per request, folders first).
-         The phone's file browser needs no storage permission.
-Task 9   The desktop gets a phone file browser: a phone column in
-         Send File, clicking a file asks the phone to send it.
-Task 10  The phone captures and encodes the screen (MediaProjection,
-         H.264, 1080p, a keyframe every 2 s). The user approves the
-         projection once; the app asks BEFORE the service starts.
-Task 11  The desktop decodes and shows it (WebCodecs, a canvas, a
-         Screen tab). The phone can revoke the projection at any
-         moment and the capture must die then.
 Task 12  The checklist for running with Developer options OFF and the
          cable unplugged - the real proof of this whole design.
+
+The kill switch (asked for, not built yet): a master switch on both
+devices. Off means dormant - the PC stops listening, the phone stops
+dialling, nothing is forwarded, no mirroring - and the choice survives
+a restart. Turning the PC back on has to let the phone find it on its
+own, so the phone needs a slow retry for "the computer went dormant"
+that is distinct from the existing "the user hung up, do not redial".
 
 Also deliberately NOT planned:
   * Remote control through an accessibility service. It would break
@@ -198,8 +237,10 @@ Also deliberately NOT planned:
   * Screen mirroring over ADB stays as the fallback.
 
 STILL ON YOU: the final manual test - Developer options off, USB
-unplugged, copy something on the phone. Everything above was verified
-with the cable in, where a copy could still have taken the ADB path.
+unplugged, copy something on the phone and start a mirror. Everything
+above was verified with the cable in, where a copy could still have
+taken the ADB path and adb was used to install, read logs and tap the
+consent dialog.
 
 ====================================================================
 KNOWN GOTCHAS
@@ -217,12 +258,29 @@ KNOWN GOTCHAS
 * Electron on this machine can die with "GPU process isn't usable"
   after a hard kill; clearing ~/.config/a-plus-connect/{Cache,Code
   Cache,DawnGraphiteCache,DawnWebGPUCache} fixes it.
+* An untyped startForeground(id, notification) uses EVERY type declared
+  in the manifest, not just the ordinary one. Adding mediaProjection to
+  CompanionService made it die on launch with a SecurityException,
+  because Android will not start a mediaProjection service before the
+  user has granted a projection. Startup names the connectedDevice type
+  explicitly; the projection type is raised only after consent, and in
+  that order: createScreenCaptureIntent(), then startForeground with
+  the type, then getMediaProjection().
+* MediaProjection stops by itself when the screen locks, and Android 15
+  QPR1 and later show a status-bar chip the user can tap to stop it.
+  Both arrive through MediaProjection.Callback.onStop, and both end the
+  session through the same stopMirror(reason).
+* A mirror needs the screen awake. Locking the phone, or the phone
+  timing out, ends the session by design; there is no background
+  capture without a foreground service the user cannot see.
 
 ====================================================================
 HOW TO VERIFY IT RIGHT NOW
 ====================================================================
   npm start                                   # the desktop
   node scripts/protocol-check.js              # protocol conformance
+  node scripts/check-mirror.js                # the video socket, real TLS
+  node scripts/check-handshake.js             # pairing rules, both sockets
   node scripts/check-mpris.js                 # the MPRIS mapping
   node scripts/check-companion-media.js       # media routing
   node scripts/check-companion-notifications.js

@@ -196,12 +196,17 @@
           <div class="card cast-card">
             <div class="cast-copy">
               <h2 class="card-title">Cast phone screen</h2>
-              <p class="card-sub">Control your phone from this PC with low-latency mirroring and input.</p>
+              <p class="card-sub" id="cast-sub">Control your phone from this PC with low-latency mirroring and input.</p>
               <div class="cast-actions">
                 <button class="btn-primary" id="btn-cast">Start casting</button>
                 <button class="btn-ghost" id="btn-cast-stop" hidden>Stop</button>
                 <span class="cast-state" id="cast-state">Not casting</span>
               </div>
+
+              <!-- The phone's screen over the companion channel. It draws here
+                   rather than in a window of its own; scrcpy still opens its
+                   own window, so this stays hidden on the ADB transport. -->
+              <canvas class="cast-canvas" id="cast-canvas" hidden></canvas>
             </div>
             <svg class="cast-art" viewBox="0 0 180 220" aria-hidden="true">
               <rect x="40" y="10" width="100" height="200" rx="16" fill="var(--art-body)" stroke="var(--art-line)" stroke-width="2"/>

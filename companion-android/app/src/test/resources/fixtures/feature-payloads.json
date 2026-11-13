@@ -23,6 +23,28 @@
     "positionMs": 1000,
     "durationMs": 180000
   },
+  "mirrorStart": {
+    "type": "mirror-start",
+    "videoPort": 24444,
+    "maxLongSide": 1280,
+    "fps": 30,
+    "bitrate": 4000000,
+    "keyframeSeconds": 1
+  },
+  "mirrorStarted": {
+    "type": "mirror-started",
+    "width": 582,
+    "height": 1280,
+    "encoder": "c2.mtk.avc.encoder"
+  },
+  "mirrorStopped": {
+    "type": "mirror-stopped",
+    "reason": "requested"
+  },
+  "mirrorFailed": {
+    "type": "mirror-failed",
+    "reason": "no-encoder"
+  },
   "fileList": {
     "type": "file-list",
     "path": "root",

@@ -15,6 +15,9 @@ const state = {
   clipboard: [],
   clipboardStatus: { status: 'idle', enabled: true },
   casting: false,
+  // Screen mirroring over the companion channel: the live state, and the reason
+  // it last ended. Kept apart from `casting`, which is the scrcpy/ADB path.
+  mirror: { state: 'idle', reason: null, width: 0, height: 0, encoder: '', frames: 0 },
   // The phone connected over the companion channel (TLS), if any.
   companion: null,
   browse: {
@@ -518,10 +521,70 @@ function renderCast() {
   const start = $('btn-cast');
   const stop = $('btn-cast-stop');
   const label = $('cast-state');
+  const canvas = $('cast-canvas');
+  const companion = state.target === 'companion' && Boolean(state.companion);
 
-  start.hidden = state.casting;
-  stop.hidden = !state.casting;
+  const mirroring = state.mirror.state === 'starting' || state.mirror.state === 'streaming';
+  // The companion mirror draws in this window; scrcpy opens its own, so the
+  // canvas only appears for the former.
+  const showCanvas = companion && mirroring;
+  if (canvas) canvas.hidden = !showCanvas;
+
+  start.hidden = state.casting || (companion && mirroring);
+  stop.hidden = !(state.casting || (companion && mirroring));
+
+  if (companion && state.mirror.state !== 'idle') {
+    label.textContent = describeMirror(state.mirror);
+    return;
+  }
+  if (companion && state.mirror.reason) {
+    label.textContent = describeMirror(state.mirror);
+    return;
+  }
   label.textContent = state.casting ? 'Casting in a separate window' : 'Not casting';
+}
+
+/**
+ * The mirroring state in one line, for the card.
+ *
+ * Every ending has a reason and every reason is shown: "it stopped" with no
+ * explanation is the sort of thing a user cannot act on.
+ */
+function describeMirror(mirror) {
+  switch (mirror.state) {
+    case 'starting':
+      return 'Waiting for the phone to allow capture...';
+    case 'streaming':
+      return `${mirror.width}x${mirror.height} · ${mirror.encoder || 'encoder'} · ${mirror.frames} frames`;
+    default:
+      break;
+  }
+  switch (mirror.reason) {
+    case 'consent-refused':
+      return 'Stopped: capture was not allowed on the phone.';
+    case 'no-encoder':
+      return 'Stopped: the phone has no usable H.264 encoder.';
+    case 'video-connect-failed':
+      return 'Stopped: the desktop could not open the video port.';
+    case 'not-trusted':
+      return 'Stopped: the phone could not be verified.';
+    case 'projection-stopped':
+      return 'Stopped: screen sharing was ended on the phone.';
+    case 'screen-slept':
+      return 'Stopped: the phone screen went to sleep.';
+    case 'link-lost':
+      return 'Stopped: the connection was lost.';
+    case 'disconnected':
+      return 'Stopped: the phone was disconnected.';
+    case 'already-mirroring':
+      return 'Already mirroring.';
+    case 'no-control-link':
+      return 'The phone is not connected.';
+    case 'requested':
+      return 'Stopped.';
+    default:
+      return mirror.reason ? `Stopped: ${mirror.reason}` : 'Not casting';
+  }
 }
 
 /* ---------- Files ---------- */
@@ -1365,6 +1428,12 @@ function initDeviceActions() {
   });
 
   $('btn-cast').addEventListener('click', () => {
+    // Over the companion channel there is no ADB device to check, and no
+    // confirmation to show here: the phone asks the user itself.
+    if (state.target === 'companion' && state.companion) {
+      startCompanionCast();
+      return;
+    }
     if (!state.device) return;
     if (localStorage.getItem(CAST_CONFIRM_KEY) === 'off') {
       startCast();
@@ -1382,6 +1451,10 @@ function initDeviceActions() {
   });
 
   $('btn-cast-stop').addEventListener('click', async () => {
+    if (state.mirror.state === 'starting' || state.mirror.state === 'streaming') {
+      await stopCompanionCast();
+      return;
+    }
     await window.api.stopMirroring();
     state.casting = false;
     renderCast();
@@ -1400,6 +1473,153 @@ async function startCast() {
   }
   state.casting = true;
   renderCast();
+}
+
+/* ---------- Screen mirroring over the companion channel ---------- */
+
+/**
+ * The decoder and the canvas, and nothing else.
+ *
+ * WebCodecs needs a codec string before it will open, and the desktop learns
+ * that string from the first keyframe's SPS. So frames that arrive before it are
+ * counted and dropped rather than decoded: there is nothing to decode them
+ * against, and a delta frame alone is not a picture.
+ */
+const mirrorView = {
+  decoder: null,
+  configured: false,
+  waitingForCodec: 0,
+  drawn: 0,
+};
+
+/** Starts a companion mirroring session. */
+async function startCompanionCast() {
+  const result = await window.api.startCompanionMirror();
+  if (!result || !result.success) {
+    toast(describeMirror({ state: 'idle', reason: result && result.reason }), 'err');
+    renderCast();
+    return null;
+  }
+  return result;
+}
+
+/** Stops it. The phone is told, and it releases the projection immediately. */
+async function stopCompanionCast() {
+  await window.api.stopCompanionMirror();
+  resetMirrorView();
+}
+
+function resetMirrorView() {
+  if (mirrorView.decoder) {
+    try {
+      mirrorView.decoder.close();
+    } catch {
+      /* already closed */
+    }
+  }
+  mirrorView.decoder = null;
+  mirrorView.configured = false;
+  mirrorView.waitingForCodec = 0;
+  // Per session, not per page: an accumulating count would read as a session
+  // that started before the user pressed anything.
+  mirrorView.drawn = 0;
+  state.mirror = { state: 'idle', reason: state.mirror.reason, width: 0, height: 0, encoder: '', frames: 0 };
+
+  const canvas = $('cast-canvas');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  renderCast();
+}
+
+/**
+ * One frame from the phone.
+ *
+ * `data` arrives as a Uint8Array over IPC. The first keyframe also carries the
+ * codec string, which is when the decoder can finally be created.
+ */
+function onCompanionFrame(frame) {
+  if (typeof VideoDecoder === 'undefined') return;
+
+  if (frame.codec) {
+    if (mirrorView.decoder) {
+      try {
+        mirrorView.decoder.close();
+      } catch {
+        /* already closed */
+      }
+    }
+    mirrorView.configured = false;
+    mirrorView.decoder = new VideoDecoder({
+      output: drawFrame,
+      error: (err) => {
+        // A decoder that gives up must not wedge the session: the next
+        // keyframe reconfigures it, and the picture comes back.
+        console.warn('mirror decoder error:', err && err.message);
+        mirrorView.configured = false;
+        mirrorView.decoder = null;
+      },
+    });
+    try {
+      mirrorView.decoder.configure({
+        codec: frame.codec,
+        optimizeForLatency: true,
+      });
+      mirrorView.configured = true;
+    } catch (err) {
+      console.warn('mirror decoder would not open:', err && err.message);
+      mirrorView.decoder = null;
+      return;
+    }
+  }
+
+  if (!mirrorView.decoder || !mirrorView.configured) {
+    mirrorView.waitingForCodec += 1;
+    return;
+  }
+
+  try {
+    mirrorView.decoder.decode(
+      new EncodedVideoChunk({
+        type: frame.keyframe ? 'key' : 'delta',
+        timestamp: frame.ptsMicros,
+        data: frame.data,
+      })
+    );
+  } catch (err) {
+    console.warn('mirror frame rejected:', err && err.message);
+  }
+}
+
+/**
+ * Paints one decoded frame, and gives it straight back to the decoder.
+ *
+ * The frame counter in the card is updated here rather than per frame: a
+ * label re-render at video rate would be wasted work, and twice a second is
+ * indistinguishable to a reader.
+ */
+function drawFrame(frame) {
+  const canvas = $('cast-canvas');
+  try {
+    if (canvas && (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight)) {
+      canvas.width = frame.displayWidth;
+      canvas.height = frame.displayHeight;
+    }
+    const ctx = canvas && canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+      mirrorView.drawn += 1;
+
+      if (mirrorView.drawn % 30 === 0) {
+        state.mirror.frames = mirrorView.drawn;
+        const label = $('cast-state');
+        if (label) label.textContent = describeMirror(state.mirror);
+      }
+    }
+  } finally {
+    frame.close();
+  }
 }
 
 function initPairing() {
@@ -1860,6 +2080,19 @@ function initDeviceEvents() {
     state.device = { ...state.device, ...device };
     renderDevice();
   });
+
+  // The phone's screen: state changes and frames, from the mirror service.
+  window.api.onMirrorState((info) => {
+    state.mirror = {
+      ...state.mirror,
+      ...info,
+      frames: info.state === 'streaming' ? state.mirror.frames : 0,
+    };
+    if (info.state === 'idle') resetMirrorView();
+    else renderCast();
+  });
+
+  window.api.onMirrorFrame(onCompanionFrame);
 
   window.api.onMirrorStarted(() => {
     state.casting = true;
