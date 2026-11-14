@@ -98,6 +98,10 @@ contextBridge.exposeInMainWorld('api', {
   // not open, a phone that would not send). One channel, so a failure the user
   // cannot see in a transfer row still reaches them.
   onToast: (callback) => ipcRenderer.on('event:toast', (_, data) => callback(data)),
+
+  // The tray asks for a page by name ("files"). main.js already sends this;
+  // nothing listened, so "Open File Drop" opened the window and stayed put.
+  onNavigate: (callback) => ipcRenderer.on('route:navigate', (_, view) => callback(view)),
   onClipboardStatus: (callback) => ipcRenderer.on('event:clipboard-status', (_, data) => callback(data)),
   onClipboardSynced: (callback) => ipcRenderer.on('event:clipboard-synced', (_, data) => callback(data)),
   onClipboardHistory: (callback) => ipcRenderer.on('event:clipboard-history', (_, data) => callback(data)),

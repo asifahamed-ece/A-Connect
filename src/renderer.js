@@ -154,27 +154,180 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+const TOAST_MS = { ok: 4000, err: 7000 };
+const TOAST_MAX = 3;
+
 function toast(message, kind = 'ok') {
   const host = $('toasts');
+  const isError = kind === 'err';
   const el = document.createElement('div');
-  el.className = `toast ${kind === 'err' ? 'err' : ''}`;
-  el.innerHTML = `${icon(kind === 'err' ? 'info' : 'check')}<span>${escapeHtml(message)}</span>`;
+  el.className = `toast ${isError ? 'err' : ''}`;
+  // Errors interrupt; everything else waits its turn.
+  el.setAttribute('role', isError ? 'alert' : 'status');
+  el.innerHTML = `${icon(isError ? 'alert' : 'check')}<span>${escapeHtml(message)}</span>`;
   host.appendChild(el);
-  setTimeout(() => el.remove(), 3200);
+
+  // At most three on screen: the oldest leaves first.
+  while (host.children.length > TOAST_MAX) host.firstElementChild.remove();
+
+  let timer = null;
+  const leave = () => {
+    el.classList.add('is-leaving');
+    el.addEventListener('animationend', () => el.remove(), { once: true });
+    // Reduced motion ends the animation at once; this is the safety net.
+    setTimeout(() => el.remove(), 400);
+  };
+  const arm = () => { timer = setTimeout(leave, TOAST_MS[isError ? 'err' : 'ok']); };
+  // Hovering a toast keeps it, so it can be read.
+  el.addEventListener('mouseenter', () => clearTimeout(timer));
+  el.addEventListener('mouseleave', arm);
+  arm();
 }
 
 /* ---------- Theme ---------- */
 
 function initTheme() {
-  const saved = localStorage.getItem(THEME_KEY);
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  document.documentElement.dataset.theme = saved || (prefersDark ? 'dark' : 'light');
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
+
+  // `choice` is what the user picked: light, dark, or system (nothing saved).
+  const apply = () => {
+    const choice = localStorage.getItem(THEME_KEY) || 'system';
+    const resolved = choice === 'system' ? (media.matches ? 'dark' : 'light') : choice;
+    document.documentElement.dataset.theme = resolved;
+    document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+      const on = btn.dataset.themeChoice === choice;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-checked', String(on));
+    });
+  };
+  const choose = (choice) => {
+    if (choice === 'system') localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, choice);
+    apply();
+  };
+
+  apply();
+  media.addEventListener?.('change', apply);
 
   $('theme-toggle').addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem(THEME_KEY, next);
+    choose(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
   });
+  document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+    btn.addEventListener('click', () => choose(btn.dataset.themeChoice));
+  });
+}
+
+/* ---------- This computer ---------- */
+
+/** Two letters for the avatar, taken from the computer's name. */
+function pcInitials(name) {
+  const words = String(name || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+  if (words.length === 0) return 'PC';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+const AVATAR_KEY = 'aplus-avatar';
+const AVATAR_SIZE = 256;
+
+/** Shows the saved picture (or the initials) on every avatar. */
+function renderAvatars() {
+  const picture = localStorage.getItem(AVATAR_KEY);
+  const initials = pcInitials(state.pcName);
+  for (const id of ['pc-avatar', 'settings-avatar']) {
+    const el = $(id);
+    if (!el) continue;
+    const img = el.querySelector('.avatar-img');
+    const letters = el.querySelector('.avatar-initials');
+    if (letters) letters.textContent = picture ? '' : initials;
+    if (img) {
+      if (picture) img.src = picture;
+      else img.removeAttribute('src');
+      img.hidden = !picture;
+    }
+  }
+  const remove = $('btn-avatar-remove');
+  if (remove) remove.hidden = !picture;
+}
+
+/** Crops the picked image to a centred square and shrinks it for storage. */
+function imageFileToAvatar(file) {
+  // Read as a data: URL - the page's content policy allows data: images
+  // but not blob: ones.
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('unreadable'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        const canvas = document.createElement('canvas');
+        canvas.width = AVATAR_SIZE;
+        canvas.height = AVATAR_SIZE;
+        canvas.getContext('2d').drawImage(
+          img,
+          (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side,
+          0, 0, AVATAR_SIZE, AVATAR_SIZE,
+        );
+        resolve(canvas.toDataURL('image/jpeg', 0.88));
+      };
+      img.onerror = () => reject(new Error('unreadable'));
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function initAvatar() {
+  const input = $('avatar-input');
+  const pick = () => input && input.click();
+  $('pc-avatar')?.addEventListener('click', pick);
+  $('btn-avatar-upload')?.addEventListener('click', pick);
+
+  input?.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast('Choose an image file', 'err');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      toast('That image is too large (15 MB max)', 'err');
+      return;
+    }
+    try {
+      localStorage.setItem(AVATAR_KEY, await imageFileToAvatar(file));
+      renderAvatars();
+      toast('Profile picture updated');
+    } catch {
+      toast('Could not read that image', 'err');
+    }
+  });
+
+  $('btn-avatar-remove')?.addEventListener('click', () => {
+    localStorage.removeItem(AVATAR_KEY);
+    renderAvatars();
+    toast('Profile picture removed');
+  });
+
+  renderAvatars();
+}
+
+function applyPcName(name) {
+  if (!name) return;
+  state.pcName = name;
+  const nameEl = $('pc-name');
+  if (nameEl) {
+    nameEl.textContent = name;
+    nameEl.title = name;
+  }
+  renderAvatars();
+  const settingsName = $('settings-pc-name');
+  if (settingsName) settingsName.textContent = name;
 }
 
 /* ---------- Views ---------- */
@@ -580,7 +733,7 @@ function renderDevice() {
 
   const onCompanion = state.target === 'companion' && Boolean(companion);
   const shown = onCompanion ? companion : device;
-  sub.textContent = shown ? (shown.model || shown.deviceName || 'Connected') : 'Not connected';
+  sub.textContent = shown ? `Connected to ${shown.model || shown.deviceName || 'phone'}` : 'Not connected';
 
   $('device-title').textContent = onCompanion
     ? (companion.deviceName || 'Phone')
@@ -597,7 +750,7 @@ function renderDevice() {
   // Say plainly which features this transport can carry.
   const note = $('companion-capability-note');
   if (note) {
-    note.style.display = companion ? '' : 'none';
+    note.hidden = !companion;
     const text = $('companion-capability-text');
     if (text) {
       text.textContent = onCompanion
@@ -743,9 +896,16 @@ function describeMirror(mirror) {
 function transferRow(t) {
   const active = t.status === 'active';
   const verb = t.type === 'pull' ? 'Downloaded' : 'Sent';
+  // The companion path reports bytes as they arrive; ADB pushes do not, so
+  // those keep the indeterminate bar.
+  const total = Number(t.total || t.size) || 0;
+  const received = Number(t.received) || 0;
+  const pct = active && total > 0 && received > 0 ? Math.min(100, Math.round((received / total) * 100)) : null;
   const meta =
     t.status === 'active'
-      ? `${formatBytes(t.size)} · sending…`
+      ? pct !== null
+        ? `${formatBytes(received)} of ${formatBytes(total)} · ${pct}%`
+        : `${formatBytes(t.size)} · ${t.type === 'pull' ? 'receiving…' : 'sending…'}`
       : t.status === 'done'
         ? `${verb} · ${t.targetPath || ''}`
         : t.status === 'cancelled'
@@ -753,12 +913,16 @@ function transferRow(t) {
           : `Failed${t.error ? ` · ${escapeHtml(t.error)}` : ''}`;
 
   return `
-    <div class="transfer" data-id="${escapeHtml(t.id)}">
-      <div class="transfer-icon">${icon(t.status === 'done' ? 'check' : 'upload')}</div>
+    <div class="transfer ${escapeHtml(t.status || '')}" data-id="${escapeHtml(t.id)}">
+      <div class="transfer-icon">${icon(t.status === 'done' ? 'check' : t.status === 'failed' ? 'alert' : t.type === 'pull' ? 'download' : 'upload')}</div>
       <div class="transfer-body">
         <div class="transfer-name">${escapeHtml(t.filename)}</div>
         <div class="transfer-meta">${escapeHtml(meta)}</div>
-        ${active ? '<div class="bar"><span></span></div>' : ''}
+        ${active
+          ? pct !== null
+            ? `<div class="bar is-determinate" role="progressbar" aria-label="${escapeHtml(t.filename)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>`
+            : `<div class="bar" role="progressbar" aria-label="${escapeHtml(t.filename)}"><span></span></div>`
+          : ''}
       </div>
       ${active ? `<button class="link-btn" data-cancel="${escapeHtml(t.id)}">Cancel</button>` : ''}
     </div>`;
@@ -1415,19 +1579,16 @@ function applyClipboardStatus(payload) {
   pill.textContent = labels[status] || status;
   pill.className = `pill ${status}`;
 
-  const settingsPill = $('settings-clip-status');
-  settingsPill.textContent = labels[status] || status;
-  settingsPill.className = `pill ${status}`;
-
-  $('settings-clip-detail').textContent = state.clipboardStatus.enabled
-    ? 'Reading and writing the desktop clipboard through wl-paste/wl-copy'
-    : 'Turned off';
-
   const dot = $('clipboard-dot');
   dot.className = `status-dot ${status}`;
+  const dotLabel = `Clipboard sync: ${(labels[status] || status).toLowerCase()}`;
+  dot.setAttribute('aria-label', dotLabel);
+  dot.title = dotLabel;
 
-  const toggle = $('clip-toggle');
-  if (toggle) toggle.checked = state.clipboardStatus.enabled !== false;
+  for (const id of ['clip-toggle', 'settings-clip-toggle']) {
+    const toggle = $(id);
+    if (toggle) toggle.checked = state.clipboardStatus.enabled !== false;
+  }
 }
 
 async function refreshClipboardStatus() {
@@ -1498,9 +1659,11 @@ function applyCompanionInfo(info) {
   // The kill switch. The checkbox is the truth about the state, not a guess:
   // the desktop remembers it, and a restarted app must come back the way the
   // user left it.
-  const killSwitch = $('companion-switch');
-  if (killSwitch && document.activeElement !== killSwitch) {
-    killSwitch.checked = info.enabled !== false;
+  for (const id of ['companion-switch', 'settings-companion-switch']) {
+    const killSwitch = $(id);
+    if (killSwitch && document.activeElement !== killSwitch) {
+      killSwitch.checked = info.enabled !== false;
+    }
   }
 
   if (info.status === 'disabled') {
@@ -1508,13 +1671,13 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Off';
       pill.className = 'pill disconnected';
     }
-    if (qrCard) qrCard.style.display = 'none';
+    if (qrCard) qrCard.hidden = true;
     if (detail) {
       detail.textContent =
         'Off — this computer is not listening. The phone keeps looking and will ' +
         'reconnect on its own when you switch it back on.';
     }
-    if (badge) badge.innerHTML = '🔒 <strong>Not listening</strong>';
+    if (badge) badge.innerHTML = `${icon('lock')}<strong>Not listening</strong>`;
     return;
   }
 
@@ -1538,12 +1701,12 @@ function applyCompanionInfo(info) {
       }
     }
     // Nothing to pair while a phone is already connected.
-    if (qrCard) qrCard.style.display = 'none';
+    if (qrCard) qrCard.hidden = true;
     if (detail && client?.clipboardAccess !== false) {
       detail.textContent = `Connected to ${client?.deviceName || 'Phone'} (${client?.ip || info.address}) over TLS 1.3`;
     }
     if (badge) {
-      badge.innerHTML = `🔒 <strong>TLS Pinned</strong>`;
+      badge.innerHTML = `${icon('lock')}<strong>Encrypted</strong>`;
     }
   } else if (info.status === 'listening') {
     if (pill) {
@@ -1551,8 +1714,8 @@ function applyCompanionInfo(info) {
       pill.className = 'pill idle';
     }
     // Nothing is paired yet: show the pairing code straight away.
-    if (qrCard && qrCard.style.display === 'none') {
-      qrCard.style.display = '';
+    if (qrCard && qrCard.hidden) {
+      qrCard.hidden = false;
       refreshPairingQr();
     }
     if (detail) {
@@ -1566,7 +1729,7 @@ function applyCompanionInfo(info) {
       pill.textContent = 'Offline';
       pill.className = 'pill disconnected';
     }
-    if (qrCard) qrCard.style.display = 'none';
+    if (qrCard) qrCard.hidden = true;
     if (detail) {
       detail.textContent = 'Companion TLS server is not running.';
     }
@@ -1582,23 +1745,99 @@ async function loadClipboardHistory() {
   }
 }
 
+/**
+ * The pairing QR: shown in the "add a device" dialog and, when nothing is
+ * connected yet, right in the clipboard panel.
+ *
+ * Top level, not nested in initNavigation(): applyCompanionInfo() calls it
+ * when the desktop starts listening, and a nested function was out of its
+ * reach (a ReferenceError that stopped the rest of that update).
+ */
+async function refreshPairingQr() {
+  if (!window.api.getCompanionQr) return null;
+  try {
+    const result = await window.api.getCompanionQr();
+    if (!result || !result.success) return null;
+
+    for (const id of ['pair-qr-image', 'companion-qr']) {
+      const image = $(id);
+      if (image) image.src = result.dataUrl;
+    }
+    const code = $('pair-qr-code');
+    if (code) code.textContent = result.info?.code || '------';
+    applyPcName(result.info?.pcName);
+    const hint = $('pair-qr-hint');
+    if (hint) {
+      hint.textContent = `${result.info?.pcName || 'This PC'} at ${result.info?.host}:${result.info?.port}`;
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 /* ---------- Modals ---------- */
 
+// Where focus was before a dialog opened, so closing it puts the user back.
+let modalOpener = null;
+
+const FOCUSABLE =
+  'button:not([disabled]):not([hidden]), input:not([disabled]), [href], select, textarea, [tabindex]:not([tabindex="-1"])';
+
+function modalFocusables(root) {
+  return [...root.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+}
+
 function openModal(id) {
-  $(id).hidden = false;
-  const focusable = $(id).querySelector('input, button');
-  if (focusable) focusable.focus();
+  const root = $(id);
+  if (!root.hidden) return;
+  if (!document.querySelector('.modal-root:not([hidden])')) modalOpener = document.activeElement;
+  root.hidden = false;
+  // First field, else the first button that is not the close cross.
+  const items = modalFocusables(root);
+  const first =
+    items.find((el) => el.matches('input')) ||
+    items.find((el) => !el.matches('.modal-close')) ||
+    items[0];
+  if (first) first.focus();
+}
+
+function restoreModalFocus() {
+  if (document.querySelector('.modal-root:not([hidden])')) return;
+  const target = modalOpener;
+  modalOpener = null;
+  if (target && document.contains(target) && typeof target.focus === 'function') target.focus();
 }
 
 function closeModal(id) {
   $(id).hidden = true;
+  restoreModalFocus();
 }
 
 function closeAllModals() {
   document.querySelectorAll('.modal-root').forEach((el) => {
     el.hidden = true;
   });
+  restoreModalFocus();
 }
+
+// Tab stays inside the open dialog.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  const root = document.querySelector('.modal-root:not([hidden])');
+  if (!root) return;
+  const items = modalFocusables(root);
+  if (items.length === 0) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) {
+    e.preventDefault();
+    first.focus();
+  }
+});
 
 /* ---------- Init ---------- */
 
@@ -1612,28 +1851,6 @@ function initNavigation() {
   document.querySelectorAll('[data-view]').forEach((el) => {
     el.addEventListener('click', () => showView(el.dataset.view));
   });
-
-  // The pairing QR: shown in the "add a device" dialog and, when nothing is
-  // connected yet, right in the clipboard panel.
-  async function refreshPairingQr() {
-    if (!window.api.getCompanionQr) return null;
-    try {
-      const result = await window.api.getCompanionQr();
-      if (!result || !result.success) return null;
-
-      const image = $('pair-qr-image');
-      if (image) image.src = result.dataUrl;
-      const code = $('pair-qr-code');
-      if (code) code.textContent = result.info?.code || '------';
-      const hint = $('pair-qr-hint');
-      if (hint) {
-        hint.textContent = `${result.info?.pcName || 'This PC'} at ${result.info?.host}:${result.info?.port}`;
-      }
-      return result;
-    } catch {
-      return null;
-    }
-  }
 
   // Only one panel may show at a time - set that up before the first click.
   {
@@ -1656,6 +1873,7 @@ function initNavigation() {
 
   $('btn-settings').addEventListener('click', () => {
     refreshClipboardStatus();
+    refreshCompanionInfo();
     openModal('modal-settings');
   });
 
@@ -1666,6 +1884,9 @@ function initNavigation() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeAllModals();
   });
+
+  // The tray's "Open File Drop" asks for a page by name (`route:navigate`).
+  window.api.onNavigate?.((view) => showView(view));
 }
 
 function initDeviceActions() {
@@ -1884,14 +2105,36 @@ function drawFrame(frame) {
 }
 
 function initPairing() {
-  document.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
-      $('tab-qr').hidden = tab.dataset.tab !== 'qr';
-      $('tab-wireless').hidden = tab.dataset.tab !== 'wireless';
-      $('tab-usb').hidden = tab.dataset.tab !== 'usb';
+  const tabs = [...document.querySelectorAll('#modal-device .tab')];
+  const selectTab = (tab, focus = false) => {
+    tabs.forEach((t) => {
+      const on = t === tab;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      // Roving tabindex: one stop for the tab list, arrows move inside it.
+      t.tabIndex = on ? 0 : -1;
+    });
+    $('tab-qr').hidden = tab.dataset.tab !== 'qr';
+    $('tab-wireless').hidden = tab.dataset.tab !== 'wireless';
+    $('tab-usb').hidden = tab.dataset.tab !== 'usb';
+    if (focus) tab.focus();
+  };
+  tabs.forEach((tab, index) => {
+    tab.setAttribute('aria-controls', `tab-${tab.dataset.tab}`);
+    tab.addEventListener('click', () => selectTab(tab));
+    tab.addEventListener('keydown', (e) => {
+      let next = null;
+      if (e.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
+      if (e.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length];
+      if (e.key === 'Home') next = tabs[0];
+      if (e.key === 'End') next = tabs[tabs.length - 1];
+      if (next) {
+        e.preventDefault();
+        selectTab(next, true);
+      }
     });
   });
+  selectTab(tabs.find((t) => t.classList.contains('active')) || tabs[0]);
 
   const note = $('pair-status');
 
@@ -2101,7 +2344,12 @@ function initFiles() {
         // A transfer that is still running: keep its row alive. Only a row
         // that was announced by `started` is updated, so a stray progress
         // event cannot create a nameless row.
-        if (state.transfers.has(data.id)) upsertTransfer({ id: data.id, status: 'active' });
+        if (state.transfers.has(data.id)) {
+          const patch = { id: data.id, status: 'active' };
+          if (data.received != null) patch.received = data.received;
+          if (data.total != null) patch.total = data.total;
+          upsertTransfer(patch);
+        }
         break;
       case 'completed': {
         const name = data.filename || String(data.targetPath || data.localTarget || '').split('/').pop();
@@ -2177,10 +2425,12 @@ function initClipboard() {
     toast(`${label}: ${preview}`);
   });
 
-  $('clip-toggle').addEventListener('change', async (e) => {
-    const result = await window.api.setClipboardSync(e.target.checked);
-    applyClipboardStatus({ enabled: result.enabled });
-  });
+  for (const id of ['clip-toggle', 'settings-clip-toggle']) {
+    $(id).addEventListener('change', async (e) => {
+      const result = await window.api.setClipboardSync(e.target.checked);
+      applyClipboardStatus({ enabled: result.enabled });
+    });
+  }
 
   $('btn-clear-clip').addEventListener('click', async () => {
     await window.api.clearClipboardHistory();
@@ -2236,13 +2486,13 @@ function initClipboard() {
         return;
       }
       if (qrImage) qrImage.src = result.dataUrl;
-      if (qrCard) qrCard.style.display = '';
+      if (qrCard) qrCard.hidden = false;
     });
   }
 
   if (hideQrButton) {
     hideQrButton.addEventListener('click', () => {
-      if (qrCard) qrCard.style.display = 'none';
+      if (qrCard) qrCard.hidden = true;
     });
   }
 
@@ -2322,20 +2572,6 @@ function initClipboard() {
     });
   }
 
-  const sendButton = $('btn-send-to-phone');
-  if (sendButton) {
-    sendButton.addEventListener('click', async () => {
-      if (!window.api.pickAndSendFileToPhone) return;
-      const result = await window.api.pickAndSendFileToPhone();
-      if (result && result.canceled) return;
-      if (result && result.success) {
-        toast(`Sent ${result.name} to the phone`);
-      } else {
-        toast('Could not send the file', 'err');
-      }
-    });
-  }
-
   if (window.api.onCompanionStatus) {
     window.api.onCompanionStatus(() => refreshCompanionInfo());
   }
@@ -2346,8 +2582,8 @@ function initClipboard() {
   // The kill switch. Moving it is the user saying "this computer is off", so
   // the desktop stops listening and the phone is told why - it keeps looking
   // slowly instead of giving up until someone presses Reconnect.
-  const killSwitch = $('companion-switch');
-  if (killSwitch && window.api.setCompanionEnabled) {
+  const killSwitches = ['companion-switch', 'settings-companion-switch'].map($).filter(Boolean);
+  for (const killSwitch of window.api.setCompanionEnabled ? killSwitches : []) {
     killSwitch.addEventListener('change', async () => {
       const wanted = killSwitch.checked;
       try {
@@ -2426,6 +2662,7 @@ function initDeviceEvents() {
 
 function init() {
   initTheme();
+  initAvatar();
   initWindowControls();
   initNavigation();
   initDeviceActions();
@@ -2440,6 +2677,8 @@ function init() {
   renderNotifications();
   renderClipboard();
   refreshClipboardStatus();
+  // The pairing info carries this computer's name for the sidebar.
+  refreshPairingQr();
 
   // Nothing is connected yet: the empty state is the honest default.
   showView('empty');

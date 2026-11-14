@@ -43,6 +43,10 @@
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6"/><path d="M20 5v6h-6"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
     <symbol id="i-folder-open" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2a2 2 0 0 1 1.6.8l.9 1.2H18.5A2.5 2.5 0 0 1 21 9.5"/><path d="M3.4 10h18l-2.4 8.2a2 2 0 0 1-1.9 1.4H5.9a2 2 0 0 1-1.9-1.5z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 4.3 2.8 17.5A2 2 0 0 0 4.5 20.5h15a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="17" r=".7" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></symbol>
     <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2a2 2 0 0 1 1.6.8l.9 1.2H18.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 11v5M9.5 13.5h5"/></symbol>
   </svg>
 
@@ -50,7 +54,7 @@
     <header class="titlebar">
       <div class="titlebar-brand">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#2563EB"/><path d="M8.4 15.6L12 7.6l3.6 8h-1.9l-.7-1.7h-2.1l-.7 1.7z" fill="#fff"/></svg>
+          <svg viewBox="0 0 24 24"><circle class="brand-mark-disc" cx="12" cy="12" r="9"/><path class="brand-mark-glyph" d="M8.4 15.6L12 7.6l3.6 8h-1.9l-.7-1.7h-2.1l-.7 1.7z"/></svg>
         </span>
         <span class="brand-name">A+ Connect</span>
       </div>
@@ -70,9 +74,13 @@
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="profile">
-          <div class="avatar" aria-hidden="true">AP</div>
+          <button class="avatar" id="pc-avatar" type="button" aria-label="Change profile picture" title="Change profile picture">
+            <img class="avatar-img" alt="" hidden>
+            <span class="avatar-initials" aria-hidden="true"></span>
+          </button>
+          <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
           <div class="profile-text">
-            <div class="profile-name">This PC</div>
+            <div class="profile-name" id="pc-name">This computer</div>
             <div class="profile-sub" id="profile-sub">Not connected</div>
           </div>
         </div>
@@ -102,7 +110,7 @@
           </button>
           <button class="nav-item" data-view="clipboard">
             <svg class="icon"><use href="#i-clipboard"/></svg><span>Clipboard</span>
-            <span class="status-dot" id="clipboard-dot" title="Clipboard sync"></span>
+            <span class="status-dot" id="clipboard-dot" role="img" aria-label="Clipboard sync: idle" title="Clipboard sync: idle"></span>
           </button>
         </nav>
 
@@ -168,7 +176,7 @@
 
           <!-- Shown when the phone is connected over the companion channel
                only: some features still need the ADB transport. -->
-          <div class="card row-card" id="companion-capability-note" style="display: none; margin-bottom: 16px;">
+          <div class="card row-card" id="companion-capability-note" hidden>
             <div>
               <div class="row-title">Connected over the companion channel</div>
               <div class="row-sub" id="companion-capability-text"></div>
@@ -393,55 +401,34 @@
             </label>
           </div>
 
-          <div class="card row-card" id="companion-card" style="margin-top: 10px;">
+          <div class="card row-card" id="companion-card">
             <div>
-              <div class="row-title" style="display: flex; align-items: center; gap: 8px;">
+              <div class="row-title with-pill">
                 <span>Companion TLS Sync</span>
                 <span class="pill" id="companion-pill">Starting…</span>
               </div>
               <div class="row-sub" id="companion-detail">Pure TLS client: no open debugging ports, seamless LAN sync.</div>
             </div>
-            <div style="display: flex; align-items: center; gap: 12px;">
+            <div class="row-actions">
               <label class="switch" title="Turn the companion off completely">
                 <input type="checkbox" id="companion-switch" aria-label="Companion on or off" checked>
                 <span class="switch-track" aria-hidden="true"></span>
               </label>
-              <button class="btn btn-secondary" id="btn-show-qr" style="padding: 6px 12px; font-size: 12px;">Show QR</button>
-              <div id="companion-badge" style="font-family: monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.5px;">
+              <button class="btn btn-secondary btn-sm" id="btn-show-qr">Show QR</button>
+              <div id="companion-badge" class="code-badge">
                 Code: <strong id="companion-code">—</strong>
               </div>
             </div>
           </div>
 
-          <div class="card row-card" id="companion-qr-card" style="margin-top: 10px; display: none;">
+          <div class="card row-card" id="companion-qr-card" hidden>
             <div>
               <div class="row-title">Pair by scanning</div>
               <div class="row-sub">Point the phone's camera at this code - no address to type, and the certificate is confirmed at the same time.</div>
-              <img id="companion-qr" alt="Pairing QR code" style="margin-top: 10px; width: 220px; height: 220px; background: #fff; border-radius: 10px; padding: 8px; display: block;" />
+              <img id="companion-qr" class="qr-tile in-card" alt="Pairing QR code" />
             </div>
             <div>
-              <button class="btn btn-ghost" id="btn-hide-qr" style="padding: 6px 12px; font-size: 12px;">Hide</button>
-            </div>
-          </div>
-
-          <div class="card row-card" id="companion-send-card" style="margin-top: 10px;">
-            <div>
-              <div class="row-title">Send a file to the phone</div>
-              <div class="row-sub" id="companion-send-detail">Over the encrypted companion connection - no debugging port involved.</div>
-            </div>
-            <div>
-              <button class="btn btn-secondary" id="btn-send-to-phone" style="padding: 6px 12px; font-size: 12px;">Choose file…</button>
-            </div>
-          </div>
-
-          <div class="card row-card" id="destination-card" style="margin-top: 10px;">
-            <div>
-              <div class="row-title">Save received files to</div>
-              <div class="row-sub" id="companion-dest-path" style="font-family: monospace; font-size: 12px;">~/Downloads/A+Connect</div>
-            </div>
-            <div style="display: flex; gap: 8px;">
-              <button class="btn btn-ghost" id="btn-open-dest" style="padding: 6px 12px; font-size: 12px;">Open</button>
-              <button class="btn btn-secondary" id="btn-change-dest" style="padding: 6px 12px; font-size: 12px;">Change…</button>
+              <button class="btn btn-ghost btn-sm" id="btn-hide-qr">Hide</button>
             </div>
           </div>
 
@@ -457,18 +444,18 @@
   <div class="modal-root" id="modal-device" hidden>
     <div class="modal-scrim" data-close-modal></div>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-device-title">
-      <button class="modal-close" data-close-modal aria-label="Close">
+      <button class="modal-close icon-btn" data-close-modal aria-label="Close">
         <svg class="icon"><use href="#i-close"/></svg>
       </button>
       <h2 class="modal-title" id="modal-device-title">Add a device</h2>
 
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="How to connect">
         <button class="tab active" role="tab" data-tab="qr">Pair by QR</button>
         <button class="tab" role="tab" data-tab="wireless">Wireless debugging</button>
         <button class="tab" role="tab" data-tab="usb">Connect via USB</button>
       </div>
 
-      <div class="tab-panel" id="tab-qr">
+      <div class="tab-panel" id="tab-qr" role="tabpanel">
         <div class="steps">
           <div class="step">
             <span class="step-num">1</span>
@@ -487,13 +474,12 @@
             <span class="step-num">3</span>
             <div>
               <p>Point the camera at this code. The phone pairs itself.</p>
-              <div style="display: flex; align-items: center; gap: 18px; margin-top: 12px; flex-wrap: wrap;">
-                <img id="pair-qr-image" alt="Pairing QR code"
-                     style="width: 220px; height: 220px; background: #fff; border-radius: 10px; padding: 8px;" />
+              <div class="pair-qr">
+                <img id="pair-qr-image" class="qr-tile" alt="Pairing QR code" />
                 <div>
-                  <div class="muted" style="margin-bottom: 6px;">Or type the code on the phone:</div>
-                  <div style="font-family: monospace; font-size: 24px; letter-spacing: 3px;" id="pair-qr-code">------</div>
-                  <div class="muted" style="margin-top: 8px; font-size: 12px;" id="pair-qr-hint"></div>
+                  <div class="pair-code-label">Or type the code on the phone:</div>
+                  <div class="pair-code" id="pair-qr-code">------</div>
+                  <div class="pair-hint" id="pair-qr-hint"></div>
                 </div>
               </div>
             </div>
@@ -501,7 +487,7 @@
         </div>
       </div>
 
-      <div class="tab-panel" id="tab-wireless" hidden>
+      <div class="tab-panel" id="tab-wireless" role="tabpanel" hidden>
         <div class="steps">
           <div class="step">
             <span class="step-num">1</span>
@@ -515,9 +501,9 @@
             <div>
               <p>Tap <strong>Pair device with pairing code</strong> and enter what it shows.</p>
               <div class="form-row">
-                <input class="input" id="pair-ip" placeholder="IP address" autocomplete="off">
-                <input class="input narrow" id="pair-port" placeholder="Port" autocomplete="off">
-                <input class="input narrow" id="pair-code" placeholder="Code" maxlength="6" autocomplete="off">
+                <input class="input mono" id="pair-ip" placeholder="IP address" aria-label="Pairing IP address" autocomplete="off">
+                <input class="input narrow" id="pair-port" placeholder="Port" inputmode="numeric" aria-label="Pairing port" autocomplete="off">
+                <input class="input narrow" id="pair-code" placeholder="Code" maxlength="6" inputmode="numeric" aria-label="Pairing code" autocomplete="off">
               </div>
               <button class="btn-primary" id="btn-pair">Pair</button>
             </div>
@@ -527,8 +513,8 @@
             <div>
               <p>Then connect using the address shown on the same screen.</p>
               <div class="form-row">
-                <input class="input" id="connect-ip" placeholder="IP address" autocomplete="off">
-                <input class="input narrow" id="connect-port" placeholder="Port" value="5555" autocomplete="off">
+                <input class="input mono" id="connect-ip" placeholder="IP address" aria-label="Connect IP address" autocomplete="off">
+                <input class="input narrow" id="connect-port" placeholder="Port" value="5555" inputmode="numeric" aria-label="Connect port" autocomplete="off">
               </div>
               <button class="btn-primary" id="btn-connect-wifi">Connect</button>
             </div>
@@ -537,7 +523,7 @@
         <p class="modal-note" id="pair-status"></p>
       </div>
 
-      <div class="tab-panel" id="tab-usb" hidden>
+      <div class="tab-panel" id="tab-usb" role="tabpanel" hidden>
         <div class="steps">
           <div class="step">
             <span class="step-num">1</span>
@@ -567,7 +553,7 @@
   <div class="modal-root" id="modal-cast" hidden>
     <div class="modal-scrim" data-close-modal></div>
     <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="modal-cast-title">
-      <button class="modal-close" data-close-modal aria-label="Close">
+      <button class="modal-close icon-btn" data-close-modal aria-label="Close">
         <svg class="icon"><use href="#i-close"/></svg>
       </button>
       <h2 class="modal-title" id="modal-cast-title">Start casting?</h2>
@@ -591,8 +577,8 @@
     <div class="modal-scrim" data-close-modal></div>
     <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
       <h2 class="modal-title" id="prompt-title">New folder</h2>
-      <input class="input" id="prompt-input" placeholder="Name" autocomplete="off">
-      <div class="modal-actions" style="margin-top: 16px;">
+      <input class="input" id="prompt-input" placeholder="Name" aria-labelledby="prompt-title" autocomplete="off">
+      <div class="modal-actions spaced">
         <button class="btn-ghost" data-close-modal>Cancel</button>
         <button class="btn-primary" id="prompt-ok">Create</button>
       </div>
@@ -602,35 +588,84 @@
   <!-- Settings dialog -->
   <div class="modal-root" id="modal-settings" hidden>
     <div class="modal-scrim" data-close-modal></div>
-    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="modal-settings-title">
-      <button class="modal-close" data-close-modal aria-label="Close">
+    <div class="modal settings" role="dialog" aria-modal="true" aria-labelledby="modal-settings-title">
+      <button class="modal-close icon-btn" data-close-modal aria-label="Close">
         <svg class="icon"><use href="#i-close"/></svg>
       </button>
       <h2 class="modal-title" id="modal-settings-title">Settings</h2>
 
-      <div class="settings-row">
-        <div>
-          <div class="row-title">Clipboard sync</div>
-          <div class="row-sub" id="settings-clip-detail">—</div>
+      <section class="settings-group" aria-labelledby="set-h-profile">
+        <h3 class="settings-heading" id="set-h-profile">Profile</h3>
+        <div class="settings-row">
+          <div class="settings-profile">
+            <div class="avatar lg" id="settings-avatar" aria-hidden="true">
+              <img class="avatar-img" alt="" hidden>
+              <span class="avatar-initials"></span>
+            </div>
+            <div class="row-title">Profile picture</div>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-avatar-remove" hidden>Remove</button>
+            <button class="btn btn-secondary btn-sm" id="btn-avatar-upload">Upload…</button>
+          </div>
         </div>
-        <span class="pill" id="settings-clip-status">Idle</span>
-      </div>
-      <div class="settings-row">
-        <div>
-          <div class="row-title">Transfers land in</div>
-          <div class="row-sub">/sdcard/Download on the phone</div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-h-appearance">
+        <h3 class="settings-heading" id="set-h-appearance">Appearance</h3>
+        <div class="settings-row">
+          <div class="row-title">Theme</div>
+          <div class="segmented" role="radiogroup" aria-label="Theme" id="settings-theme">
+            <button class="segment" role="radio" data-theme-choice="light">Light</button>
+            <button class="segment" role="radio" data-theme-choice="dark">Dark</button>
+            <button class="segment" role="radio" data-theme-choice="system">System</button>
+          </div>
         </div>
-      </div>
-      <div class="settings-row">
-        <div>
-          <div class="row-title">About</div>
-          <div class="row-sub">A+ Connect 1.0.0 · Electron · scrcpy over ADB</div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-h-files">
+        <h3 class="settings-heading" id="set-h-files">Files</h3>
+        <div class="settings-row stack">
+          <div class="settings-text">
+            <div class="row-title">Save received files to</div>
+            <div class="row-sub mono" id="companion-dest-path">~/Downloads/A+Connect</div>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-open-dest">Open</button>
+            <button class="btn btn-secondary btn-sm" id="btn-change-dest">Change…</button>
+          </div>
         </div>
-      </div>
-      <p class="modal-note">
-        Account sign-in is not supported: OPPO accounts authenticate through the
-        proprietary O+ Connect protocol, not through ADB.
-      </p>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-h-conn">
+        <h3 class="settings-heading" id="set-h-conn">Connection</h3>
+        <div class="settings-row">
+          <label class="row-title" for="settings-companion-switch">Allow the phone to connect</label>
+          <label class="switch">
+            <input type="checkbox" id="settings-companion-switch" checked>
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <label class="row-title" for="settings-clip-toggle">Sync clipboard</label>
+          <label class="switch">
+            <input type="checkbox" id="settings-clip-toggle">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-h-about">
+        <h3 class="settings-heading" id="set-h-about">About</h3>
+        <div class="settings-row">
+          <div class="row-title">Computer name</div>
+          <div class="row-sub" id="settings-pc-name">—</div>
+        </div>
+        <div class="settings-row">
+          <div class="row-title">Version</div>
+          <div class="row-sub">A+ Connect 1.0.0</div>
+        </div>
+      </section>
     </div>
   </div>
 
