@@ -199,7 +199,12 @@ PHONE - companion-android/app/src/main/kotlin/com/aplusconnect/companion/
   clip/ClipboardReadActivity.kt          focus-grab fallback
   data/CompanionSettings.kt     settings, pairing, history
   qr/QrScannerView.kt           the pairing scanner
-  MainActivity.kt               Interconnect / Send File / Settings
+  MainActivity.kt               the activity, the tabs, the dialogs
+  ui/interconnect.kt            the Interconnect tab
+  ui/send.kt                    the Send File tab
+  ui/settings.kt                the Settings tab
+  ui/theme.kt                   the palette, the schemes, the theme colours
+  ui/Shared.kt                  the field styling both dialogs use
 
 KEYBOARD FORK - keyboard/patch-heliboard.py
   Patches HeliBoard v4.2: new application id, one hook in
