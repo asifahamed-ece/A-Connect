@@ -272,6 +272,25 @@ above was verified with the cable in, where a copy could still have
 taken the ADB path and adb was used to install, read logs and tap the
 consent dialog.
 
+12. MEDIA, AND THE NOTIFICATION NOISE IT CAUSED (added 2026-11-14)
+   A phone's music and video apps post a notification that follows the
+   song. Mirroring it put a new row on the computer for every track, so
+   the notification centre read like a playlist. Those are now dropped at
+   the phone (anything carrying `android.mediaSession`), and media is
+   shown by the player instead - which is what KDE Connect does for the
+   same reason. Persistent notifications are still mirrored, but the
+   desktop's list shows them in their own "Ongoing" section rather than
+   mixed in above the message the user came to read.
+   The cover no longer reloads on every track change. The desktop used to
+   wipe the artwork whenever the track text changed without new art - but
+   a player fills in the artist and album a moment AFTER the title, so
+   the art was thrown away seconds after arriving and the phone would not
+   resend it for a while. Now the phone says "this track has no cover"
+   explicitly, and the desktop clears artwork only when told to.
+   The player also carries the app's package now, which is the first step
+   of one MPRIS player per app (the design is in
+   docs/superpowers/specs/2026-11-14-per-app-media-design.md).
+
 ====================================================================
 PROVING IT WITHOUT ADB
 ====================================================================
