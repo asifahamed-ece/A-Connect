@@ -52,6 +52,8 @@
     -->
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.APlusConnectCompanion">
@@ -103,5 +105,18 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- History opens received files in other apps. A file:// address
+             cannot be handed to another app, so the app's own downloads folder
+             is shared through this provider, read-only and per open. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

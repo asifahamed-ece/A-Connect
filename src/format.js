@@ -98,7 +98,16 @@
       .map(({ item }) => item);
   }
 
+  /**
+   * The pairing QR button is one button with two states: it names what
+   * pressing it will do, so it reads "Hide QR" while the code is showing.
+   */
+  function qrToggleLabel(qrVisible) {
+    return qrVisible ? 'Hide QR' : 'Show QR';
+  }
+
   root.relativeTime = relativeTime;
+  root.qrToggleLabel = qrToggleLabel;
   root.fullTime = fullTime;
   root.newestFirst = newestFirst;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

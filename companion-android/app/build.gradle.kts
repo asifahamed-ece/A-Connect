@@ -48,6 +48,10 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended:1.7.5")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
 
+    // Backdrop blur for the glass bottom bar (DESIGN.md §13, approved).
+    // 1.1.1 is built against Compose UI 1.7.5, so Compose is not bumped.
+    implementation("dev.chrisbanes.haze:haze-android:1.1.1")
+
     // Scanning the computer's pairing QR code.
     implementation("androidx.camera:camera-core:1.3.4")
     implementation("androidx.camera:camera-camera2:1.3.4")

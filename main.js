@@ -1,4 +1,10 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, nativeImage, shell } = require('electron');
+
+// Linux desktops match a window to its launcher entry (and so its icon) by
+// this name. scripts/install-desktop-entry.sh installs the matching file.
+if (process.platform === 'linux' && !process.env.CHROME_DESKTOP) {
+  process.env.CHROME_DESKTOP = 'a-plus-connect.desktop';
+}
 const path = require('path');
 const fs = require('fs');
 
@@ -190,8 +196,18 @@ function correctMirrorReason(reason) {
   sendToRenderer('event:mirror-state', mirrorInfo);
 }
 
+// The app icon, pre-rendered per size (scripts/install-desktop-entry.sh puts
+// the same files into the icon theme so the launcher and task manager match).
+const ICON_DIR = path.join(__dirname, 'assets', 'icons');
+function iconFile(size) {
+  const sized = path.join(ICON_DIR, `${size}x${size}.png`);
+  if (fs.existsSync(sized)) return sized;
+  const fallback = path.join(__dirname, 'assets', 'icon.png');
+  return fs.existsSync(fallback) ? fallback : null;
+}
+
 function createWindow() {
-  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  const iconPath = iconFile(256);
 
   mainWindow = new BrowserWindow({
     width: 980,
@@ -199,10 +215,10 @@ function createWindow() {
     minWidth: 840,
     minHeight: 580,
     title: 'A+ Connect',
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
-    frame: false, // Custom sleek titlebar matching O+ Connect style
+    icon: iconPath || undefined,
+    frame: false, // The renderer draws its own glass titlebar
     titleBarStyle: 'hidden',
-    backgroundColor: '#0F1216',
+    backgroundColor: '#E9EFF9',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -222,13 +238,23 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, 'assets', 'icon.png');
-  const trayIcon = fs.existsSync(iconPath)
-    ? nativeImage.createFromPath(iconPath).resize({ width: 22, height: 22 })
-    : nativeImage.createEmpty();
+  // The tray gets the mark alone (no white tile), drawn for 22 px with a 2x
+  // version for HiDPI panels, instead of the 1024 px icon squeezed down.
+  const trayPath = path.join(ICON_DIR, 'tray-22.png');
+  const tray2x = path.join(ICON_DIR, 'tray-22@2x.png');
+  let trayIcon;
+  if (fs.existsSync(trayPath)) {
+    trayIcon = nativeImage.createFromPath(trayPath);
+    if (fs.existsSync(tray2x)) {
+      trayIcon.addRepresentation({ scaleFactor: 2, buffer: fs.readFileSync(tray2x) });
+    }
+  } else {
+    const fallback = iconFile(32);
+    trayIcon = fallback ? nativeImage.createFromPath(fallback).resize({ width: 22, height: 22 }) : nativeImage.createEmpty();
+  }
 
   tray = new Tray(trayIcon);
-  tray.setToolTip('A+ Connect - OPPO Device Companion');
+  tray.setToolTip('A+ Connect');
 
   updateTrayMenu();
 
@@ -252,15 +278,15 @@ function updateTrayMenu() {
   const isConnected = !!device || isCompanionConnected;
   const isMirroring = scrcpy.isRunning;
 
-  let deviceLabel = '📱 No Device Connected';
+  let deviceLabel = 'No phone connected';
   if (device) {
-    deviceLabel = `📱 ${device.model} (${device.battery?.level || 0}%)`;
+    deviceLabel = `${device.model} · ${device.battery?.level || 0}% · ${device.isWifi ? 'Wireless debugging' : 'USB'}`;
   } else if (isCompanionConnected) {
     const compDevice = companion.connectedClients[0];
-    deviceLabel = `📱 ${compDevice?.deviceName || 'Phone'} (Companion)`;
+    deviceLabel = `${compDevice?.deviceName || 'Phone'} · Connected`;
   } else if (!companion.isEnabled) {
-    // "No device connected" would read as a problem. This one is a decision.
-    deviceLabel = '📴 Companion off';
+    // "No phone connected" would read as a problem. This one is a decision.
+    deviceLabel = 'Phone connection off';
   }
 
   const contextMenu = Menu.buildFromTemplate([
@@ -270,7 +296,7 @@ function updateTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: isMirroring ? '⏹ Stop Screen Mirroring' : '🖥 Start Screen Mirroring',
+      label: isMirroring ? 'Stop mirroring' : 'Start mirroring',
       enabled: !!device,
       click: () => {
         if (isMirroring) {
@@ -281,8 +307,8 @@ function updateTrayMenu() {
       }
     },
     {
-      label: '📂 Open File Drop',
-      enabled: !!device,
+      label: 'Send files…',
+      enabled: isConnected,
       click: () => {
         if (mainWindow) {
           mainWindow.show();
@@ -291,7 +317,7 @@ function updateTrayMenu() {
       }
     },
     {
-      label: '📋 Clipboard Sync',
+      label: 'Sync clipboard',
       type: 'checkbox',
       checked: clipboardSync.enabled,
       enabled: true,
@@ -566,6 +592,21 @@ function setupServiceEvents() {
     try {
       execFile('notify-send', ['-a', 'A+ Connect', 'File Received', `${data.name} saved to Downloads`]);
     } catch {}
+  });
+
+  // A file this computer sent to the phone over the companion channel. The
+  // service writes it in one go, so there is no progress to report - only
+  // that it went, which is what the history needs.
+  companion.on('file-sent', (data) => {
+    sendToRenderer('event:transfer-progress', {
+      status: 'completed',
+      type: 'push',
+      id: data.id || `companion-${Date.now()}-${data.name}`,
+      filename: data.name,
+      size: data.size,
+      localFilePath: data.path,
+      targetPath: 'Phone · Downloads',
+    });
   });
 
   companion.on('file-transfer-error', (data) => {

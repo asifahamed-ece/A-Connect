@@ -1,5 +1,8 @@
 package com.aplusconnect.companion.service
 
+import com.aplusconnect.companion.data.Direction
+import com.aplusconnect.companion.data.FileHistory
+import com.aplusconnect.companion.data.SharedFileEntry
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -64,6 +67,10 @@ class CompanionService : Service() {
         @Volatile
         var lastReceivedFile: String? = null
 
+        /** Bumped whenever the file history changes, so the UI re-reads it. */
+        @Volatile
+        var fileHistoryVersion: Int = 0
+
         /** The last text the computer copied, for the keyboard to offer. */
         @Volatile
         var lastPcClipboard: String? = null
@@ -90,6 +97,7 @@ class CompanionService : Service() {
     private lateinit var settings: CompanionSettings
     private lateinit var incomingFile: IncomingFile
     private lateinit var destination: DownloadDestination
+    private lateinit var fileHistory: FileHistory
     private lateinit var fileBrowser: PhoneFileBrowser
     /** Built on first search; the file thread is the only thread that touches it. */
     private var searcher: StorageSearch? = null
@@ -235,6 +243,7 @@ class CompanionService : Service() {
         settings = CompanionSettings(this)
         incomingFile = IncomingFile(java.io.File(cacheDir, "incoming"))
         destination = DownloadDestination(this)
+        fileHistory = FileHistory(this)
         fileBrowser = PhoneFileBrowser(this)
         instance = this
         watchMediaDatabase()
@@ -382,6 +391,7 @@ class CompanionService : Service() {
             onFileDone = { id ->
                 val received = incomingFile.finish(id)
                 if (received != null) {
+                    val receivedBytes = received.file.length()
                     val saved = destination.save(
                         received.file,
                         received.name,
@@ -390,6 +400,17 @@ class CompanionService : Service() {
                     received.file.delete()
                     if (saved != null) {
                         Status.lastReceivedFile = received.name
+                        fileHistory.add(
+                            SharedFileEntry(
+                                id = "received-$id",
+                                name = received.name,
+                                direction = Direction.Received,
+                                sizeBytes = receivedBytes,
+                                timestamp = System.currentTimeMillis(),
+                                uri = saved.toString(),
+                            )
+                        )
+                        Status.fileHistoryVersion++
                         Log.i(TAG, "saved ${received.name}")
                         // The search index was built before this file existed,
                         // so without this the file is invisible to search until

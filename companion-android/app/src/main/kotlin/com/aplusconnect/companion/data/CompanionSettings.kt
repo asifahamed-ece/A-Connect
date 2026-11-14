@@ -158,6 +158,34 @@ class CompanionSettings(context: Context) {
         prefs.edit().remove(KEY_HISTORY).apply()
     }
 
+    /** Appearance: "system", "light" or "dark". Local to the phone; no protocol change. */
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME, "system") ?: "system"
+        set(value) = prefs.edit().putString(KEY_THEME, value).apply()
+
+    /** Swaps glass for solid surfaces (DESIGN.md §5.3). */
+    var reduceTransparency: Boolean
+        get() = prefs.getBoolean(KEY_REDUCE_TRANSPARENCY, false)
+        set(value) = prefs.edit().putBoolean(KEY_REDUCE_TRANSPARENCY, value).apply()
+
+    /** Settings > Bar transparency, 0 (solid) to 100 (clearest). Local to the phone. */
+    var barClarity: Int
+        get() = prefs.getInt(KEY_BAR_CLARITY, 60).coerceIn(0, 100)
+        set(value) = prefs.edit().putInt(KEY_BAR_CLARITY, value.coerceIn(0, 100)).apply()
+
+    /** In-app reduce motion, on top of the system animator scale (DESIGN.md §6.3). */
+    var reduceMotion: Boolean
+        get() = prefs.getBoolean(KEY_REDUCE_MOTION, false)
+        set(value) = prefs.edit().putBoolean(KEY_REDUCE_MOTION, value).apply()
+
+    /**
+     * The Clipboard sync switch, remembered. Before step 4 the switch lived
+     * only in memory and reset on every launch.
+     */
+    var clipboardSync: Boolean
+        get() = prefs.getBoolean(KEY_CLIPBOARD_SYNC, true)
+        set(value) = prefs.edit().putBoolean(KEY_CLIPBOARD_SYNC, value).apply()
+
     companion object {
         private const val KEY_HOST = "host"
         private const val KEY_ENABLED = "enabled"
@@ -170,5 +198,10 @@ class CompanionSettings(context: Context) {
         private const val KEY_PC_ID = "pc_id"
         private const val KEY_FINGERPRINT = "fingerprint"
         private const val KEY_HISTORY = "clip_history"
+        private const val KEY_THEME = "theme_mode"
+        private const val KEY_REDUCE_TRANSPARENCY = "reduce_transparency"
+        private const val KEY_REDUCE_MOTION = "reduce_motion"
+        private const val KEY_BAR_CLARITY = "bar_clarity"
+        private const val KEY_CLIPBOARD_SYNC = "clipboard_sync"
     }
 }

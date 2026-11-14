@@ -1001,7 +1001,7 @@ class CompanionService extends EventEmitter {
         );
       }
       console.log(`[companion] sent ${name} (${stat.size} bytes) to ${targets.length} device(s)`);
-      this.emit('file-sent', { name, size: stat.size, count: targets.length });
+      this.emit('file-sent', { id: transferId, name, path: filePath, size: stat.size, count: targets.length });
       return true;
     } catch (e) {
       console.error(`[companion] could not send ${name}: ${e.message}`);

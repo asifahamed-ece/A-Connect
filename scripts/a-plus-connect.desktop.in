@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=A+ Connect
+GenericName=Phone companion
+Comment=Mirror your phone, move files and share the clipboard
+Exec=@EXEC@
+Path=@APP_DIR@
+Icon=a-plus-connect
+Terminal=false
+Categories=Utility;Network;FileTransfer;
+Keywords=phone;android;mirror;scrcpy;clipboard;files;
+StartupNotify=true
+StartupWMClass=a-plus-connect
+SingleMainWindow=true

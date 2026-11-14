@@ -18,3 +18,6 @@ temp/
 #   git clone --depth 1 --branch v4.2 https://github.com/HeliBorg/HeliBoard.git keyboard/heliboard
 #   python3 keyboard/patch-heliboard.py
 keyboard/heliboard/
+
+# Kotlin build cache, written by Gradle on every Android build.
+.kotlin/

@@ -8,8 +8,13 @@ const state = {
   // over the debugging connection) or 'companion' (the same phone over the
   // encrypted channel). Both can be live at once, so the user picks.
   target: 'adb',
-  view: 'empty',
+  view: 'connect',
   transfers: new Map(),
+  // Every file shared either way, newest first, kept across restarts. The
+  // Files page shows only what is moving; finished files live here.
+  history: { list: [], tab: 'sent' },
+  // Whether the pairing QR is on screen. The one QR button follows it.
+  qrVisible: false,
   notifications: [],
   unreadNotifications: 0,
   clipboard: [],
@@ -57,6 +62,13 @@ const state = {
 
 const THEME_KEY = 'aplus-theme';
 const CAST_CONFIRM_KEY = 'aplus-cast-confirm';
+const HISTORY_KEY = 'aplus-file-history';
+// Appearance, local to this computer (no IPC). DESIGN.md §5.3 names the
+// transparency key; clarity is the glass slider, 0-100.
+const TRANSPARENCY_KEY = 'aplus-transparency';
+const MOTION_KEY = 'aplus-motion';
+const CLARITY_KEY = 'aplus-clarity';
+const CLARITY_DEFAULT = 55;
 const RECENT_DAYS = 30;
 
 const $ = (id) => document.getElementById(id);
@@ -217,6 +229,66 @@ function initTheme() {
   });
 }
 
+/* ---------- Appearance: glass, transparency, motion ---------- */
+
+function applyClarity(value) {
+  const clarity = Math.max(0, Math.min(100, Number(value)));
+  const safe = Number.isFinite(clarity) ? clarity : CLARITY_DEFAULT;
+  document.documentElement.style.setProperty('--clarity', String(safe / 100));
+  const range = $('settings-clarity');
+  if (range) {
+    range.value = String(safe);
+    range.style.setProperty('--fill', `${safe}%`);
+  }
+  const label = $('settings-clarity-value');
+  if (label) label.textContent = `${safe}%`;
+}
+
+function initAppearance() {
+  const root = document.documentElement;
+  const saved = localStorage.getItem(CLARITY_KEY);
+  applyClarity(saved === null ? CLARITY_DEFAULT : saved);
+
+  const range = $('settings-clarity');
+  range?.addEventListener('input', () => applyClarity(range.value));
+  range?.addEventListener('change', () => localStorage.setItem(CLARITY_KEY, range.value));
+
+  const transparency = $('settings-reduce-transparency');
+  const applyTransparency = (reduce) => {
+    if (reduce) root.dataset.transparency = 'reduce';
+    else delete root.dataset.transparency;
+    if (transparency) transparency.checked = reduce;
+  };
+  applyTransparency(localStorage.getItem(TRANSPARENCY_KEY) === 'reduce');
+  transparency?.addEventListener('change', () => {
+    if (transparency.checked) localStorage.setItem(TRANSPARENCY_KEY, 'reduce');
+    else localStorage.removeItem(TRANSPARENCY_KEY);
+    applyTransparency(transparency.checked);
+  });
+
+  const motion = $('settings-reduce-motion');
+  const applyMotion = (reduce) => {
+    if (reduce) root.dataset.motion = 'reduce';
+    else delete root.dataset.motion;
+    if (motion) motion.checked = reduce;
+  };
+  applyMotion(localStorage.getItem(MOTION_KEY) === 'reduce');
+  motion?.addEventListener('change', () => {
+    if (motion.checked) localStorage.setItem(MOTION_KEY, 'reduce');
+    else localStorage.removeItem(MOTION_KEY);
+    applyMotion(motion.checked);
+  });
+
+  const castConfirm = $('settings-cast-confirm');
+  if (castConfirm) {
+    castConfirm.checked = localStorage.getItem(CAST_CONFIRM_KEY) !== 'off';
+    castConfirm.addEventListener('change', () => {
+      if (castConfirm.checked) localStorage.removeItem(CAST_CONFIRM_KEY);
+      else localStorage.setItem(CAST_CONFIRM_KEY, 'off');
+    });
+  }
+}
+
 /* ---------- This computer ---------- */
 
 /** Two letters for the avatar, taken from the computer's name. */
@@ -326,22 +398,29 @@ function applyPcName(name) {
     nameEl.title = name;
   }
   renderAvatars();
-  const settingsName = $('settings-pc-name');
-  if (settingsName) settingsName.textContent = name;
+  for (const id of ['settings-pc-name', 'settings-pc-name-2']) {
+    const el = $(id);
+    if (el) el.textContent = name;
+  }
 }
 
 /* ---------- Views ---------- */
 
-const VIEWS = ['empty', 'device', 'files', 'notifications', 'clipboard'];
+const VIEWS = ['connect', 'files', 'history', 'clipboard', 'notifications', 'settings'];
+// Older names still arrive from the tray (`route:navigate`) and old links.
+const VIEW_ALIASES = { empty: 'connect', device: 'connect' };
 
-function showView(name) {
+/** True when either connection to the phone is live. */
+function hasPhone() {
+  return Boolean(state.device) || Boolean(state.companionConnected);
+}
+
+function showView(requested) {
+  const name = VIEW_ALIASES[requested] || requested;
   if (!VIEWS.includes(name)) return;
 
-  // Without a device or companion, only the empty screen is available (clipboard is allowed if companion is active)
-  if (!state.device && !state.companionConnected && name !== 'empty') {
-    name = 'empty';
-  }
-
+  // No forced redirect any more (DESIGN.md §9): every page is reachable and
+  // shows its own offline state with a "Connect a phone" action.
   state.view = name;
 
   for (const view of VIEWS) {
@@ -349,9 +428,17 @@ function showView(name) {
     if (el) el.hidden = view !== name;
   }
 
+  // History is a sub-page of Files, so Files stays lit while it is open.
+  const navFor = name === 'history' ? 'files' : name;
   document.querySelectorAll('.nav-item[data-view]').forEach((el) => {
-    el.classList.toggle('active', el.dataset.view === name);
+    const on = el.dataset.view === navFor;
+    el.classList.toggle('active', on);
+    if (on) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
   });
+
+  const main = $('main');
+  if (main) main.scrollTop = 0;
 
   if (name === 'notifications') {
     state.unreadNotifications = 0;
@@ -363,12 +450,19 @@ function showView(name) {
     loadClipboardHistory();
     refreshClipboardStatus();
   }
-  if (name === 'device') {
+  if (name === 'connect') {
     renderDevice();
   }
   if (name === 'files') {
     updateFilesTransport();
-    if (state.device) refreshBrowser();
+    if (state.device && state.target === 'adb') refreshBrowser();
+  }
+  if (name === 'history') {
+    renderHistory();
+  }
+  if (name === 'settings') {
+    refreshClipboardStatus();
+    refreshCompanionInfo();
   }
 }
 
@@ -383,19 +477,30 @@ function showView(name) {
 function updateFilesTransport() {
   const companionOnly = state.target === 'companion' && Boolean(state.companion);
   const overAdb = state.target === 'adb' && Boolean(state.device);
+  const offline = !companionOnly && !overAdb;
+
+  const offlineCard = $('files-offline');
+  if (offlineCard) offlineCard.hidden = !offline;
+  const sendButton = $('btn-send-file');
+  if (sendButton) sendButton.disabled = offline;
+
+  const phoneLabel = $('files-phone-label');
+  if (phoneLabel) {
+    phoneLabel.textContent = offline
+      ? 'no phone yet'
+      : (companionOnly ? state.companion.deviceName : state.device.model) || 'your phone';
+  }
+  const destLabel = $('files-dest-label');
+  if (destLabel) destLabel.textContent = companionOnly ? 'Downloads' : '/sdcard/Download';
 
   const dropzone = $('dropzone');
   if (dropzone) {
-    dropzone.hidden = !overAdb && !companionOnly;
-    const title = dropzone.querySelector('.dropzone-title');
-    const sub = dropzone.querySelector('.dropzone-sub');
-    if (title) title.textContent = companionOnly ? 'Drop files to send to phone' : 'Drop files here';
-    if (sub) sub.textContent = companionOnly ? 'or click to choose files from your computer' : 'or click to browse your computer';
-    dropzone.setAttribute('aria-label', companionOnly ? 'Choose or drop files to send to phone' : 'Choose files to send');
+    dropzone.hidden = offline;
+    const name = phoneLabel ? phoneLabel.textContent : 'the phone';
+    dropzone.setAttribute('aria-label', `Choose or drop files to send to ${name}`);
   }
-  document.querySelectorAll('#view-files .browser').forEach((el) => {
-    el.hidden = !overAdb;
-  });
+  const adbBrowser = $('adb-browser');
+  if (adbBrowser) adbBrowser.hidden = !overAdb;
 
   const phoneBrowser = $('phone-browser');
   if (phoneBrowser) phoneBrowser.hidden = !companionOnly;
@@ -409,6 +514,26 @@ function updateFilesTransport() {
   if (companionOnly && !state.phone.loaded && !state.phone.loading) {
     loadPhoneDirectory('');
   }
+}
+
+/** Loading is never a sentence on a blank panel: skeleton rows (§8.10). */
+function skeletonRows(count = 4) {
+  return Array.from({ length: count }, (_, i) => `
+    <div class="skeleton-row" aria-hidden="true">
+      <span class="skeleton icon-tile"></span>
+      <span class="skeleton line${i % 2 ? ' short' : ''}"></span>
+    </div>`).join('') + '<span class="sr-only" role="status">Loading…</span>';
+}
+
+/** The empty / error block used inside lists. */
+function emptyBlock(iconName, title, sub, action) {
+  return `
+    <div class="empty-block">
+      <div class="empty-block-icon">${icon(iconName)}</div>
+      <div class="empty-block-title">${escapeHtml(title)}</div>
+      ${sub ? `<div class="empty-block-sub">${escapeHtml(sub)}</div>` : ''}
+      ${action ? `<button class="btn-primary" data-view="${escapeHtml(action.view)}">${escapeHtml(action.label)}</button>` : ''}
+    </div>`;
 }
 
 /** Lists one folder of the phone's storage. `path` is relative to its root. */
@@ -536,7 +661,7 @@ function renderPhoneBrowser() {
   if (clear) clear.hidden = !query;
 
   if (loading || searching) {
-    list.innerHTML = '<div class="list-empty">Reading the phone...</div>';
+    list.innerHTML = skeletonRows();
     return;
   }
   if (error) {
@@ -577,8 +702,13 @@ function renderPhoneBrowser() {
   }
 
   if (!entries.length) {
-    list.innerHTML =
-      '<div class="list-empty">Nothing here. In the A+ Connect app on the phone, allow “Files the PC can browse”.</div>';
+    list.innerHTML = path
+      ? '<div class="list-empty">This folder is empty</div>'
+      : emptyBlock(
+          'folder',
+          'Nothing to browse yet',
+          'On the phone, open A+ Connect → Files and turn on “Let the computer browse this phone”.',
+        );
     return;
   }
 
@@ -687,7 +817,6 @@ function clearPhoneSearch() {
 function renderDevice() {
   const device = state.device;
   const companion = state.companion;
-  const list = $('device-list');
   const sub = $('profile-sub');
 
   // Both transports can be live at once: the phone over the debugging
@@ -697,55 +826,71 @@ function renderDevice() {
   if (!device && companion) state.target = 'companion';
   if (!companion && device) state.target = 'adb';
 
-  const rows = [];
-  if (device) {
-    rows.push(`
-      <button class="device-row ${state.target === 'adb' ? 'active' : ''}" type="button" data-target="adb">
-        ${icon('phone')}
-        <span class="device-row-text">
-          <span class="device-row-name">${escapeHtml(device.model || 'Phone')}</span>
-          <span class="device-row-meta">${device.isWifi ? 'Wi-Fi' : 'USB'} · connected</span>
-        </span>
-      </button>`);
-  }
-  if (companion) {
-    rows.push(`
-      <button class="device-row ${state.target === 'companion' ? 'active' : ''}" type="button" data-target="companion">
-        ${icon('phone')}
-        <span class="device-row-text">
-          <span class="device-row-name">${escapeHtml(companion.deviceName || 'Phone')}</span>
-          <span class="device-row-meta">Companion · TLS 1.3 · connected</span>
-        </span>
-      </button>`);
+  const connected = Boolean(device || companion);
+  const onCompanion = state.target === 'companion' && Boolean(companion);
+  const shown = onCompanion ? companion : device;
+
+  // The connection picker only appears when there is a choice to make.
+  const picker = $('transport-picker');
+  if (picker) {
+    picker.hidden = !(device && companion);
+    picker.querySelectorAll('[data-target]').forEach((btn) => {
+      const on = btn.dataset.target === state.target;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-checked', String(on));
+    });
   }
 
-  if (rows.length === 0) {
-    list.innerHTML = '<div class="device-empty">No device connected</div>';
-    sub.textContent = 'Not connected';
-    showView('empty');
+  for (const id of ['telemetry', 'mirror-card']) {
+    const el = $(id);
+    if (el) el.hidden = !connected;
+  }
+  const hero = $('connect-empty');
+  if (hero) hero.hidden = connected;
+  const disconnect = $('btn-disconnect');
+  if (disconnect) disconnect.hidden = !connected;
+
+  const pill = $('connect-pill');
+  const dot = $('connect-dot');
+  const setStatus = (label, kind) => {
+    if (pill) {
+      pill.textContent = label;
+      pill.className = `pill ${kind}`;
+    }
+    if (dot) {
+      dot.className = `status-dot ${kind === 'success' ? 'connected' : kind === 'warn' ? 'listening' : ''}`;
+      dot.setAttribute('aria-label', label);
+      dot.title = label;
+    }
+  };
+
+  if (!connected) {
+    if (sub) sub.textContent = 'Not connected';
+    $('device-title').textContent = 'No phone connected';
+    $('device-sub').textContent = 'Pair a phone to mirror it, move files and share the clipboard.';
+    const listening = state.companionInfo && state.companionInfo.status === 'listening';
+    setStatus(listening ? 'Waiting for phone' : 'Not connected', listening ? 'warn' : 'disconnected');
+    renderCast();
+    const note = $('companion-capability-note');
+    if (note) note.hidden = true;
     return;
   }
 
-  list.innerHTML = rows.join('');
-  list.querySelectorAll('.device-row').forEach((row) => {
-    row.addEventListener('click', () => selectTarget(row.dataset.target));
-  });
-
-  const onCompanion = state.target === 'companion' && Boolean(companion);
-  const shown = onCompanion ? companion : device;
-  sub.textContent = shown ? `Connected to ${shown.model || shown.deviceName || 'phone'}` : 'Not connected';
+  if (sub) sub.textContent = `Connected to ${shown.model || shown.deviceName || 'phone'}`;
+  setStatus('Connected', 'success');
 
   $('device-title').textContent = onCompanion
     ? (companion.deviceName || 'Phone')
-    : (device ? (device.model || 'Phone') : 'Phone');
-  $('device-sub').textContent = onCompanion
-    ? `Connected over the companion channel · ${companion.ip || ''}`
-    : `${device.brand || 'OPPO'} · ${device.colorOsVersion || 'ColorOS'} · ${device.isWifi ? 'Wireless' : 'USB'}`;
-
-  const transport = $('device-transport');
-  transport.innerHTML = onCompanion
-    ? `${icon('plug')}<span>Companion</span>`
-    : `${icon(device.isWifi ? 'wifi' : 'usb')}<span>${device.isWifi ? 'Wi-Fi' : 'USB'}</span>`;
+    : (device.model || 'Phone');
+  const subLine = $('device-sub');
+  if (onCompanion) {
+    const where = companion.ip ? `${companion.ip}${state.companionInfo?.port ? `:${state.companionInfo.port}` : ''}` : '';
+    subLine.innerHTML = `Phone connection · Encrypted${where ? ` · <span class="mono">${escapeHtml(where)}</span>` : ''}`;
+  } else {
+    subLine.innerHTML = `${device.isWifi ? 'Wireless debugging' : 'USB debugging'}${
+      device.id ? ` · <span class="mono">${escapeHtml(device.id)}</span>` : ''
+    }`;
+  }
 
   // Say plainly which features this transport can carry.
   const note = $('companion-capability-note');
@@ -754,9 +899,9 @@ function renderDevice() {
     const text = $('companion-capability-text');
     if (text) {
       text.textContent = onCompanion
-        ? 'The clipboard and file transfers work over this connection. ' +
-          'Screen mirroring and the phone file browser still need the debugging connection.'
-        : 'The companion connection is live too - click it above to work with the phone over the encrypted channel.';
+        ? 'Clipboard, files, notifications and view-only mirroring work over this connection. ' +
+          'Touch control and write access to the phone need wireless debugging.'
+        : 'The companion connection is live too - pick it above to work with the phone over the encrypted channel.';
     }
   }
 
@@ -779,7 +924,7 @@ function renderDevice() {
     ? (cinfo.colorOsVersion || '—')
     : (device.colorOsVersion || '—');
 
-  $('files-dest-label').textContent = '/sdcard/Download';
+  renderCast();
 }
 
 /**
@@ -814,11 +959,13 @@ function setDevice(device) {
     state.casting = false;
     renderCast();
     renderDevice();
+    updateFilesTransport();
     return;
   }
 
   renderDevice();
-  if (!isSame || state.view === 'empty') showView('device');
+  updateFilesTransport();
+  if (!isSame && state.view === 'files' && state.target === 'adb') refreshBrowser();
 }
 
 function renderCast() {
@@ -845,7 +992,7 @@ function renderCast() {
     label.textContent = describeMirror(state.mirror);
     return;
   }
-  label.textContent = state.casting ? 'Casting in a separate window' : 'Not casting';
+  label.textContent = state.casting ? 'Mirroring in its own window' : 'Not mirroring';
 }
 
 /**
@@ -887,7 +1034,7 @@ function describeMirror(mirror) {
     case 'requested':
       return 'Stopped.';
     default:
-      return mirror.reason ? `Stopped: ${mirror.reason}` : 'Not casting';
+      return mirror.reason ? `Stopped: ${mirror.reason}` : 'Not mirroring';
   }
 }
 
@@ -895,28 +1042,25 @@ function describeMirror(mirror) {
 
 function transferRow(t) {
   const active = t.status === 'active';
-  const verb = t.type === 'pull' ? 'Downloaded' : 'Sent';
   // The companion path reports bytes as they arrive; ADB pushes do not, so
   // those keep the indeterminate bar.
   const total = Number(t.total || t.size) || 0;
   const received = Number(t.received) || 0;
   const pct = active && total > 0 && received > 0 ? Math.min(100, Math.round((received / total) * 100)) : null;
+  const toPhone = t.type !== 'pull';
   const meta =
     t.status === 'active'
       ? pct !== null
         ? `${formatBytes(received)} of ${formatBytes(total)} · ${pct}%`
-        : `${formatBytes(t.size)} · ${t.type === 'pull' ? 'receiving…' : 'sending…'}`
-      : t.status === 'done'
-        ? `${verb} · ${t.targetPath || ''}`
-        : t.status === 'cancelled'
-          ? 'Cancelled'
-          : `Failed${t.error ? ` · ${escapeHtml(t.error)}` : ''}`;
+        : `${formatBytes(t.size)} · ${toPhone ? 'sending…' : 'receiving…'}`
+      : `Didn't ${toPhone ? 'send' : 'arrive'}${t.error ? ` · ${t.error}` : ''}`;
+  const canRetry = t.status === 'failed' && toPhone && Boolean(t.localFilePath);
 
   return `
     <div class="transfer ${escapeHtml(t.status || '')}" data-id="${escapeHtml(t.id)}">
-      <div class="transfer-icon">${icon(t.status === 'done' ? 'check' : t.status === 'failed' ? 'alert' : t.type === 'pull' ? 'download' : 'upload')}</div>
+      <div class="transfer-icon">${icon(t.status === 'failed' ? 'alert' : toPhone ? 'upload' : 'download')}</div>
       <div class="transfer-body">
-        <div class="transfer-name">${escapeHtml(t.filename)}</div>
+        <div class="transfer-name">${escapeHtml(t.filename || 'File')}</div>
         <div class="transfer-meta">${escapeHtml(meta)}</div>
         ${active
           ? pct !== null
@@ -925,19 +1069,20 @@ function transferRow(t) {
           : ''}
       </div>
       ${active ? `<button class="link-btn" data-cancel="${escapeHtml(t.id)}">Cancel</button>` : ''}
+      ${canRetry ? `<button class="link-btn" data-retry="${escapeHtml(t.id)}">Retry</button>` : ''}
+      ${t.status === 'failed' ? `<button class="icon-btn sm" data-dismiss="${escapeHtml(t.id)}" aria-label="Dismiss" title="Dismiss">${icon('close')}</button>` : ''}
     </div>`;
 }
 
+/** The Files page lists only live transfers; finished ones are in History. */
 function renderTransfers() {
   const list = $('transfer-list');
-  const items = [...state.transfers.values()].reverse();
+  const items = [...state.transfers.values()].filter(isLiveTransfer).reverse();
   const activeCount = items.filter((t) => t.status === 'active').length;
 
-  if (items.length === 0) {
-    list.innerHTML = '<div class="list-empty">No transfers yet</div>';
-  } else {
-    list.innerHTML = items.map(transferRow).join('');
-  }
+  const section = $('transfers-section');
+  if (section) section.hidden = items.length === 0;
+  if (list) list.innerHTML = items.map(transferRow).join('');
 
   $('btn-cancel-all').hidden = activeCount === 0;
 
@@ -948,8 +1093,142 @@ function renderTransfers() {
 
 function upsertTransfer(patch) {
   const existing = state.transfers.get(patch.id) || { id: patch.id };
-  state.transfers.set(patch.id, { ...existing, ...patch });
+  const next = { ...existing, ...patch };
+  state.transfers.set(patch.id, next);
+
+  // A finished transfer moves to the history, and off the Files page.
+  if (next.status === 'done' || next.status === 'cancelled') {
+    if (next.status === 'done') recordHistory(next);
+    state.transfers.delete(patch.id);
+  }
   renderTransfers();
+}
+
+/* ---------- History ---------- */
+
+function loadHistory() {
+  state.history.list = parseHistory(localStorage.getItem(HISTORY_KEY));
+}
+
+function saveHistory() {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history.list));
+  } catch {
+    /* storage full: the list still works for this session */
+  }
+}
+
+function recordHistory(transfer) {
+  const entry = historyEntryFromTransfer(transfer, Date.now());
+  if (!entry) return;
+  state.history.list = addHistoryEntry(state.history.list, entry);
+  saveHistory();
+  if (state.view === 'history') renderHistory();
+}
+
+function historyRow(e) {
+  const sent = e.direction === 'sent';
+  const bits = [];
+  if (e.size) bits.push(formatBytes(e.size));
+  bits.push(relativeTime(e.at, Date.now()));
+  if (e.where) bits.push(sent ? `to ${e.where}` : e.where);
+  const canOpen = Boolean(e.localPath);
+  return `
+    <div class="hist ${sent ? 'sent' : 'received'}" data-hist="${escapeHtml(e.id)}" ${canOpen ? 'role="button" tabindex="0"' : ''} title="${escapeHtml(e.localPath || e.name)}">
+      <div class="hist-icon">${icon(sent ? 'upload' : 'download')}</div>
+      <div class="hist-body">
+        <div class="hist-name">${escapeHtml(e.name)}</div>
+        <div class="hist-meta">${escapeHtml(bits.join(' · '))}</div>
+      </div>
+      <div class="hist-actions">
+        ${canOpen ? `<button class="icon-btn sm" data-hist-open="${escapeHtml(e.id)}" aria-label="Open ${escapeHtml(e.name)}" title="Open">${icon('eye')}</button>` : ''}
+        <button class="icon-btn sm" data-hist-remove="${escapeHtml(e.id)}" aria-label="Remove ${escapeHtml(e.name)} from history" title="Remove from history">${icon('close')}</button>
+      </div>
+    </div>`;
+}
+
+function renderHistory() {
+  const counts = historyCounts(state.history.list);
+  $('history-count-sent').textContent = String(counts.sent);
+  $('history-count-received').textContent = String(counts.received);
+  document.querySelectorAll('#history-tabs [data-history]').forEach((btn) => {
+    const on = btn.dataset.history === state.history.tab;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-selected', String(on));
+  });
+  $('btn-history-clear').hidden = state.history.list.length === 0;
+
+  const rows = historyFor(state.history.list, state.history.tab);
+  const list = $('history-list');
+  if (!rows.length) {
+    list.innerHTML = state.history.tab === 'sent'
+      ? emptyBlock('upload', 'Nothing sent yet', 'Files this computer sends to the phone show up here.')
+      : emptyBlock('download', 'Nothing received yet', 'Files the phone sends to this computer show up here.');
+    return;
+  }
+  list.innerHTML = rows.map(historyRow).join('');
+}
+
+async function openHistoryEntry(id) {
+  const entry = state.history.list.find((e) => e.id === id);
+  if (!entry || !entry.localPath) return;
+  try {
+    const result = await window.api.openLocalFile(entry.localPath);
+    if (result && result.success === false) {
+      toast(`Could not open ${entry.name}: ${result.message || result.error || 'it may have been moved or deleted'}`, 'err');
+    }
+  } catch (err) {
+    toast(`Could not open ${entry.name}: ${err.message}`, 'err');
+  }
+}
+
+function initHistory() {
+  loadHistory();
+
+  document.querySelectorAll('#history-tabs [data-history]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.history.tab = btn.dataset.history;
+      renderHistory();
+    });
+  });
+
+  $('btn-history-folder').addEventListener('click', async () => {
+    const result = await window.api.openCompanionDestinationDir?.();
+    if (result && result.success === false) toast(result.error || 'Could not open the folder', 'err');
+  });
+
+  $('btn-history-clear').addEventListener('click', async () => {
+    const confirmed = await window.api.confirmAction({
+      message: 'Clear the file history?',
+      detail: 'Only the list is cleared. The files stay where they are on both devices.',
+      confirmLabel: 'Clear',
+    });
+    if (!confirmed) return;
+    state.history.list = [];
+    saveHistory();
+    renderHistory();
+    toast('History cleared');
+  });
+
+  const list = $('history-list');
+  list.addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-hist-remove]');
+    if (remove) {
+      state.history.list = state.history.list.filter((x) => x.id !== remove.dataset.histRemove);
+      saveHistory();
+      renderHistory();
+      return;
+    }
+    const row = e.target.closest('[data-hist]');
+    if (row && !hasSelectedText()) openHistoryEntry(row.dataset.hist);
+  });
+  list.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('[data-hist]');
+    if (!row || e.target !== row) return;
+    e.preventDefault();
+    openHistoryEntry(row.dataset.hist);
+  });
 }
 
 async function sendFiles(paths, destDir = '/sdcard/Download/') {
@@ -1143,7 +1422,7 @@ function renderDirectory() {
     return;
   }
   if (loading) {
-    list.innerHTML = '<div class="list-empty">Loading…</div>';
+    list.innerHTML = skeletonRows();
     return;
   }
   if (!entries.length) {
@@ -1198,7 +1477,7 @@ function renderSearch() {
   }
 
   if (results === null) {
-    parts.push('<div class="list-empty">Searching the phone…</div>');
+    parts.push(skeletonRows(3));
   } else if (deep.length) {
     parts.push(`<div class="list-group-title">Everywhere on the phone · ${deep.length}</div>`);
     parts.push(
@@ -1222,7 +1501,7 @@ function renderRecent() {
     return;
   }
   if (recentLoading) {
-    list.innerHTML = '<div class="list-empty">Reading recent files…</div>';
+    list.innerHTML = skeletonRows();
     return;
   }
   if (!recent || recent.length === 0) {
@@ -1393,30 +1672,38 @@ async function deleteEntry(remotePath) {
   }
 }
 
-/* Simple text prompt (Electron has no window.prompt). */
-function askText(title, placeholder) {
+/* Simple text prompt (Electron has no window.prompt). `multiline` swaps the
+   single-line field for a text area, where Enter adds a line and Ctrl+Enter
+   submits. */
+function askText(title, placeholder, { okLabel = 'Create', multiline = false } = {}) {
   return new Promise((resolve) => {
-    const input = $('prompt-input');
+    const field = $(multiline ? 'prompt-textarea' : 'prompt-input');
+    $('prompt-input').hidden = multiline;
+    $('prompt-textarea').hidden = !multiline;
     $('prompt-title').textContent = title;
-    input.value = '';
-    input.placeholder = placeholder || '';
+    $('prompt-ok').textContent = okLabel;
+    field.value = '';
+    field.placeholder = placeholder || '';
     openModal('modal-prompt');
-    input.focus();
+    field.focus();
 
     const finish = (value) => {
       $('prompt-ok').removeEventListener('click', onOk);
-      input.removeEventListener('keydown', onKey);
+      field.removeEventListener('keydown', onKey);
       closeModal('modal-prompt');
       resolve(value);
     };
-    const onOk = () => finish(input.value.trim() || null);
+    const onOk = () => finish(multiline ? field.value || null : field.value.trim() || null);
     const onKey = (e) => {
-      if (e.key === 'Enter') onOk();
+      if (e.key === 'Enter' && (!multiline || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        onOk();
+      }
       if (e.key === 'Escape') finish(null);
     };
 
     $('prompt-ok').addEventListener('click', onOk);
-    input.addEventListener('keydown', onKey);
+    field.addEventListener('keydown', onKey);
   });
 }
 
@@ -1453,7 +1740,9 @@ async function uploadHere() {
 function renderNotifications() {
   const list = $('notifications-list');
   if (state.notifications.length === 0) {
-    list.innerHTML = '<div class="list-empty">No notifications yet</div>';
+    list.innerHTML = hasPhone()
+      ? emptyBlock('bell', 'No notifications yet', "If this stays empty, turn on notification access on the phone app's Connect page.")
+      : emptyBlock('bell', 'No phone connected', "Connect a phone to see its notifications here.", { view: 'connect', label: 'Connect a phone' });
     return;
   }
 
@@ -1556,11 +1845,29 @@ function clipRow(entry) {
 
 function renderClipboard() {
   const list = $('clipboard-list');
+  renderLastClip();
+  $('btn-clear-clip').hidden = state.clipboard.length === 0;
   if (state.clipboard.length === 0) {
-    list.innerHTML = '<div class="list-empty">Nothing synced yet</div>';
+    list.innerHTML = hasPhone()
+      ? emptyBlock('clipboard', 'Nothing synced yet', 'Copy something on either device to see it here.')
+      : emptyBlock('clipboard', 'No phone connected', 'Connect a phone to share the clipboard.', { view: 'connect', label: 'Connect a phone' });
     return;
   }
   list.innerHTML = state.clipboard.map(clipRow).join('');
+}
+
+/** The newest clip, with which way it went (§10.3 "Last synced"). */
+function renderLastClip() {
+  const box = $('clip-last');
+  if (!box) return;
+  const last = state.clipboard[0];
+  box.hidden = !last;
+  if (!last) return;
+  const fromPhone = last.direction === 'phone-to-desktop';
+  $('clip-last-meta').innerHTML =
+    `${icon(fromPhone ? 'download' : 'upload', 'icon icon-sm')}<span>Last synced · ${fromPhone ? 'From phone' : 'To phone'}</span>` +
+    (last.time ? `<span>·</span><span>${escapeHtml(last.time)}</span>` : '');
+  $('clip-last-text').textContent = last.preview || last.text || '';
 }
 
 function applyClipboardStatus(payload) {
@@ -1578,6 +1885,22 @@ function applyClipboardStatus(payload) {
   const pill = $('clip-status');
   pill.textContent = labels[status] || status;
   pill.className = `pill ${status}`;
+
+  const reasons = {
+    syncing: 'Copies cross over in both directions.',
+    connecting: 'Reaching the phone…',
+    idle: hasPhone() ? 'Turned on, waiting for the next copy.' : 'Starts syncing when a phone connects.',
+    error: state.clipboardStatus.error
+      ? `Sync stopped: ${state.clipboardStatus.error}`
+      : 'Sync stopped. Check that wl-paste/wl-copy (Wayland) or xclip (X11) is installed.',
+    disconnected: 'Starts syncing when a phone connects.',
+  };
+  const reason = $('clip-reason');
+  if (reason) {
+    reason.textContent = state.clipboardStatus.enabled === false
+      ? 'Off - nothing is shared between the devices.'
+      : reasons[status] || '';
+  }
 
   const dot = $('clipboard-dot');
   dot.className = `status-dot ${status}`;
@@ -1618,13 +1941,6 @@ function applyCompanionInfo(info) {
   // phone republishes every minute.
   state.companionInfo = info;
 
-  // A phone that has just arrived must not leave the window saying "No
-  // devices found". The empty screen is for when there is nothing, and there
-  // is something now - the same rule setDevice() uses for the ADB path.
-  if (state.companionConnected && state.view === 'empty') {
-    showView('device');
-  }
-
   // A phone that went away takes its folder with it: forget what was listed,
   // so the next connection starts at the root instead of showing a stale
   // folder the phone no longer answers for.
@@ -1646,14 +1962,22 @@ function applyCompanionInfo(info) {
 
   renderDevice();
   updateFilesTransport();
+  if (state.view === 'notifications') renderNotifications();
+  if (state.view === 'clipboard') renderClipboard();
+
   const pill = $('companion-pill');
   const detail = $('companion-detail');
   const badge = $('companion-badge');
-  const codeEl = $('companion-code');
   const destEl = $('companion-dest-path');
-  const qrCard = $('companion-qr-card');
+  const pairBlock = $('pair-block');
+  const keyboardPill = $('keyboard-pill');
+  const keyboardBanner = $('keyboard-banner');
+  const setPill = (label, kind) => {
+    if (!pill) return;
+    pill.textContent = label;
+    pill.className = `pill ${kind}`;
+  };
 
-  if (codeEl) codeEl.textContent = info.code || '—';
   if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
 
   // The kill switch. The checkbox is the truth about the state, not a guess:
@@ -1666,74 +1990,87 @@ function applyCompanionInfo(info) {
     }
   }
 
+  const client = info.connected ? info.clients?.[0] : null;
+  const noKeyboard = Boolean(client && client.clipboardAccess === false);
+  if (keyboardPill) keyboardPill.hidden = !noKeyboard;
+  if (keyboardBanner) keyboardBanner.hidden = !noKeyboard;
+
   if (info.status === 'disabled') {
-    if (pill) {
-      pill.textContent = 'Off';
-      pill.className = 'pill disconnected';
-    }
-    if (qrCard) qrCard.hidden = true;
+    setPill('Off', 'disconnected');
+    setQrVisible(false);
+    if (pairBlock) pairBlock.hidden = true;
     if (detail) {
       detail.textContent =
         'Off — this computer is not listening. The phone keeps looking and will ' +
         'reconnect on its own when you switch it back on.';
     }
-    if (badge) badge.innerHTML = `${icon('lock')}<strong>Not listening</strong>`;
     return;
   }
 
   if (info.connected) {
-    const client = info.clients?.[0];
-    if (pill) {
-      pill.textContent = 'Connected';
-      pill.className = 'pill syncing';
-    }
-    // The clipboard only syncs while the phone's keyboard is the default one.
-    if (client && client.clipboardAccess === false) {
-      if (pill) {
-        pill.textContent = 'Connected';
-        pill.className = 'pill idle';
-      }
-      if (detail) {
-        detail.textContent =
-          'Connected over TLS - but the phone is not set to the A+ Connect keyboard, ' +
-          'so the clipboard will not sync. Set it in the phone: Settings, System, ' +
-          'Languages & input, Default keyboard.';
-      }
-    }
+    setPill('Connected', 'success');
     // Nothing to pair while a phone is already connected.
-    if (qrCard) qrCard.hidden = true;
-    if (detail && client?.clipboardAccess !== false) {
-      detail.textContent = `Connected to ${client?.deviceName || 'Phone'} (${client?.ip || info.address}) over TLS 1.3`;
+    setQrVisible(false);
+    if (pairBlock) pairBlock.hidden = true;
+    if (detail) {
+      detail.textContent = `On — ${client?.deviceName || 'the phone'} is connected over an encrypted link (TLS 1.3).`;
     }
-    if (badge) {
-      badge.innerHTML = `${icon('lock')}<strong>Encrypted</strong>`;
-    }
-  } else if (info.status === 'listening') {
-    if (pill) {
-      pill.textContent = 'Listening';
-      pill.className = 'pill idle';
-    }
-    // Nothing is paired yet: show the pairing code straight away.
-    if (qrCard && qrCard.hidden) {
-      qrCard.hidden = false;
-      refreshPairingQr();
+    return;
+  }
+
+  if (pairBlock) pairBlock.hidden = false;
+  if (info.status === 'listening') {
+    setPill('Waiting for phone', 'connecting');
+    // Nothing is paired yet: show the pairing code straight away, once. After
+    // that the button is the user's: "Hide QR" keeps it hidden.
+    if (!state.qrAutoShown) {
+      state.qrAutoShown = true;
+      setQrVisible(true);
     }
     if (detail) {
-      detail.textContent = `Ready on ${info.address}:${info.port}. Enter pairing code on phone.`;
+      detail.textContent = `On — the phone can reach this computer at ${info.address}:${info.port}.`;
     }
     if (badge) {
-      badge.innerHTML = `Code: <strong id="companion-code">${info.code || '—'}</strong>`;
+      badge.innerHTML = `Code: <strong id="companion-code">${escapeHtml(info.code || '—')}</strong>`;
     }
   } else {
-    if (pill) {
-      pill.textContent = 'Offline';
-      pill.className = 'pill disconnected';
-    }
-    if (qrCard) qrCard.hidden = true;
+    setPill('Offline', 'disconnected');
+    setQrVisible(false);
     if (detail) {
-      detail.textContent = 'Companion TLS server is not running.';
+      detail.textContent = 'The phone connection is not running on this computer.';
     }
   }
+}
+
+/**
+ * Shows or hides the pairing QR. There is one button for both: it reads
+ * "Hide QR" while the code is showing and "Show QR" while it is not.
+ */
+function setQrVisible(visible) {
+  state.qrVisible = Boolean(visible);
+  const card = $('companion-qr-card');
+  if (card) card.hidden = !state.qrVisible;
+  const button = $('btn-qr-toggle');
+  if (button) {
+    const label = button.querySelector('.btn-label');
+    if (label) label.textContent = qrToggleLabel(state.qrVisible);
+    button.setAttribute('aria-expanded', String(state.qrVisible));
+  }
+  if (state.qrVisible) refreshPairingQr();
+}
+
+async function toggleQr() {
+  if (state.qrVisible) {
+    setQrVisible(false);
+    return;
+  }
+  if (!window.api.getCompanionQr) return;
+  const result = await refreshPairingQr();
+  if (!result) {
+    toast('Could not create the pairing code', 'err');
+    return;
+  }
+  setQrVisible(true);
 }
 
 async function loadClipboardHistory() {
@@ -1766,9 +2103,9 @@ async function refreshPairingQr() {
     const code = $('pair-qr-code');
     if (code) code.textContent = result.info?.code || '------';
     applyPcName(result.info?.pcName);
-    const hint = $('pair-qr-hint');
-    if (hint) {
-      hint.textContent = `${result.info?.pcName || 'This PC'} at ${result.info?.host}:${result.info?.port}`;
+    for (const id of ['pair-qr-hint', 'companion-qr-hint']) {
+      const hint = $(id);
+      if (hint) hint.textContent = `${result.info?.pcName || 'This PC'} at ${result.info?.host}:${result.info?.port}`;
     }
     return result;
   } catch {
@@ -1848,8 +2185,12 @@ function initWindowControls() {
 }
 
 function initNavigation() {
-  document.querySelectorAll('[data-view]').forEach((el) => {
-    el.addEventListener('click', () => showView(el.dataset.view));
+  // Delegated, so buttons rendered later ("Connect a phone" in an empty
+  // state) navigate too.
+  document.addEventListener('click', (e) => {
+    const target = e.target.closest('[data-view]');
+    if (!target || target.closest('.modal-root')) return;
+    showView(target.dataset.view);
   });
 
   // Only one panel may show at a time - set that up before the first click.
@@ -1861,7 +2202,7 @@ function initNavigation() {
     $('tab-usb').hidden = activeTab !== 'usb';
   }
 
-  for (const id of ['btn-add-device', 'btn-add-device-2', 'btn-add-device-3']) {
+  for (const id of ['btn-add-device', 'btn-add-device-2']) {
     const el = $(id);
     if (el) {
       el.addEventListener('click', () => {
@@ -1871,21 +2212,37 @@ function initNavigation() {
     }
   }
 
-  $('btn-settings').addEventListener('click', () => {
-    refreshClipboardStatus();
-    refreshCompanionInfo();
-    openModal('modal-settings');
-  });
-
   document.querySelectorAll('[data-close-modal]').forEach((el) => {
     el.addEventListener('click', closeAllModals);
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeAllModals();
+    if (e.key === 'Escape') {
+      closeAllModals();
+      return;
+    }
+    // Page shortcuts (DESIGN.md §8.13): Ctrl+1…4 in sidebar order, Ctrl+, Settings.
+    const typing = e.target.closest?.('input, textarea, [contenteditable="true"]');
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || typing) return;
+    if (document.querySelector('.modal-root:not([hidden])')) return;
+    const pages = { 1: 'connect', 2: 'files', 3: 'clipboard', 4: 'notifications', ',': 'settings' };
+    const page = pages[e.key];
+    if (page) {
+      e.preventDefault();
+      showView(page);
+    } else if (e.key.toLowerCase() === 'o' && state.view === 'files') {
+      e.preventDefault();
+      browseFilesForTarget();
+    }
   });
 
-  // The tray's "Open File Drop" asks for a page by name (`route:navigate`).
+  // The connection picker on Connect, when both transports are live.
+  $('transport-picker')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-target]');
+    if (btn) selectTarget(btn.dataset.target);
+  });
+
+  // The tray's "Open Files" asks for a page by name (`route:navigate`).
   window.api.onNavigate?.((view) => showView(view));
 }
 
@@ -1909,6 +2266,8 @@ function initDeviceActions() {
     toast('Disconnected');
   });
 
+  $('btn-qr-toggle')?.addEventListener('click', toggleQr);
+
   $('btn-cast').addEventListener('click', () => {
     // Over the companion channel there is no ADB device to check, and no
     // confirmation to show here: the phone asks the user itself.
@@ -1927,6 +2286,8 @@ function initDeviceActions() {
   $('btn-cast-confirm').addEventListener('click', () => {
     if ($('cast-confirm-skip').checked) {
       localStorage.setItem(CAST_CONFIRM_KEY, 'off');
+      const setting = $('settings-cast-confirm');
+      if (setting) setting.checked = false;
     }
     closeModal('modal-cast');
     startCast();
@@ -1950,7 +2311,7 @@ async function startCast() {
 
   const result = await window.api.startMirroring(state.device.id);
   if (result && result.success === false) {
-    toast(result.message || 'Could not start casting', 'err');
+    toast(result.message || 'Could not start mirroring', 'err');
     return;
   }
   state.casting = true;
@@ -2224,9 +2585,27 @@ function initFiles() {
     return sendDroppedFiles(paths);
   });
 
+  $('btn-send-file').addEventListener('click', chooseFilesForTarget);
+
   $('transfer-list').addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-cancel]');
-    if (btn) window.api.cancelTransfer(btn.dataset.cancel);
+    const cancel = e.target.closest('[data-cancel]');
+    if (cancel) {
+      window.api.cancelTransfer(cancel.dataset.cancel);
+      return;
+    }
+    const retry = e.target.closest('[data-retry]');
+    if (retry) {
+      const t = state.transfers.get(retry.dataset.retry);
+      state.transfers.delete(retry.dataset.retry);
+      renderTransfers();
+      if (t && t.localFilePath) sendDroppedFiles([t.localFilePath]);
+      return;
+    }
+    const dismiss = e.target.closest('[data-dismiss]');
+    if (dismiss) {
+      state.transfers.delete(dismiss.dataset.dismiss);
+      renderTransfers();
+    }
   });
 
   $('btn-cancel-all').addEventListener('click', () => window.api.cancelAllTransfers());
@@ -2338,7 +2717,14 @@ function initFiles() {
   window.api.onTransferProgress((data) => {
     switch (data.status) {
       case 'started':
-        upsertTransfer({ id: data.id, filename: data.filename, size: data.size, status: 'active' });
+        upsertTransfer({
+          id: data.id,
+          filename: data.filename,
+          size: data.size,
+          type: data.type,
+          localFilePath: data.localFilePath,
+          status: 'active',
+        });
         break;
       case 'progress':
         // A transfer that is still running: keep its row alive. Only a row
@@ -2353,18 +2739,33 @@ function initFiles() {
         break;
       case 'completed': {
         const name = data.filename || String(data.targetPath || data.localTarget || '').split('/').pop();
+        // A file fetched only to be looked at is not kept, so it is not
+        // history either: its row just goes away.
+        if (data.type === 'view') {
+          state.transfers.delete(data.id);
+          renderTransfers();
+          break;
+        }
         upsertTransfer({
           id: data.id,
           filename: name,
           targetPath: data.targetPath || data.localTarget,
+          localFilePath: data.localFilePath || state.transfers.get(data.id)?.localFilePath,
+          size: data.size || state.transfers.get(data.id)?.size,
           type: data.type,
           status: 'done',
         });
-        toast(data.type === 'pull' ? `Downloaded ${name}` : `Sent ${name}`);
+        toast(data.type === 'pull' ? `Received ${name}` : `Sent ${name}`);
         break;
       }
       case 'failed':
-        upsertTransfer({ id: data.id, status: 'failed', error: data.error });
+        upsertTransfer({
+          id: data.id,
+          status: 'failed',
+          error: data.error,
+          ...(data.filename ? { filename: data.filename } : {}),
+          ...(data.type ? { type: data.type } : {}),
+        });
         break;
       case 'cancelled':
         upsertTransfer({ id: data.id, status: 'cancelled' });
@@ -2472,29 +2873,27 @@ function initClipboard() {
     });
   }
 
-  const showQrButton = $('btn-show-qr');
-  const hideQrButton = $('btn-hide-qr');
-  const qrCard = $('companion-qr-card');
-  const qrImage = $('companion-qr');
-
-  if (showQrButton) {
-    showQrButton.addEventListener('click', async () => {
-      if (!window.api.getCompanionQr) return;
-      const result = await window.api.getCompanionQr();
-      if (!result || !result.success) {
-        toast('Could not create the pairing code', 'err');
+  $('btn-send-text')?.addEventListener('click', async () => {
+    if (!hasPhone()) {
+      toast('Connect a phone first', 'err');
+      return;
+    }
+    const text = await askText('Send text to the phone', 'Type or paste text. It lands on the phone\'s clipboard.', {
+      okLabel: 'Send',
+      multiline: true,
+    });
+    if (!text) return;
+    try {
+      const result = await window.api.sendToPhoneClipboard(text);
+      if (result && result.success === false) {
+        toast(result.error || 'The phone did not take the text', 'err');
         return;
       }
-      if (qrImage) qrImage.src = result.dataUrl;
-      if (qrCard) qrCard.hidden = false;
-    });
-  }
-
-  if (hideQrButton) {
-    hideQrButton.addEventListener('click', () => {
-      if (qrCard) qrCard.hidden = true;
-    });
-  }
+      toast("Sent to the phone's clipboard");
+    } catch (err) {
+      toast(`Could not send: ${err.message}`, 'err');
+    }
+  });
 
   const phoneUpButton = $('phone-up');
   if (phoneUpButton) phoneUpButton.addEventListener('click', phoneUp);
@@ -2662,6 +3061,7 @@ function initDeviceEvents() {
 
 function init() {
   initTheme();
+  initAppearance();
   initAvatar();
   initWindowControls();
   initNavigation();
@@ -2670,6 +3070,7 @@ function init() {
   initFiles();
   initNotifications();
   initClipboard();
+  initHistory();
   initDeviceEvents();
 
   renderBadges();
@@ -2680,8 +3081,8 @@ function init() {
   // The pairing info carries this computer's name for the sidebar.
   refreshPairingQr();
 
-  // Nothing is connected yet: the empty state is the honest default.
-  showView('empty');
+  // Connect is the home page; with nothing connected it shows pairing.
+  showView('connect');
 
   // A reload loses the device event, so pick the connection back up.
   window.api.getConnectedDevice?.().then((device) => {
