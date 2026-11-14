@@ -74,9 +74,21 @@ internal data class AplusColors(
     val dangerSubtle: Color,
     val focusRing: Color,
     val scrim: Color,
-    /** The two soft glows of the ambient canvas (§1.3). */
-    val glowA: Color,
-    val glowB: Color,
+    /**
+     * The ambient canvas (§1.3): the same four colour fields and three orbs as
+     * the desktop's `.ambient`, so both clients sit on one background.
+     */
+    val canvasA: Color,
+    val canvasB: Color,
+    val canvasC: Color,
+    val canvasD: Color,
+    val orbA1: Color,
+    val orbA2: Color,
+    val orbB1: Color,
+    val orbB2: Color,
+    val orbC1: Color,
+    val orbC2: Color,
+    val orbOpacity: Float,
     /** The glass toggle and slider knob: a lit bead, highlight to shade. */
     val knob: Color = P.Neutral0,
     val knobShade: Color = P.Neutral100,
@@ -109,8 +121,17 @@ internal val LightAplusColors = AplusColors(
     dangerSubtle = P.Red050,
     focusRing = P.Blue600,
     scrim = P.Ink.copy(alpha = 0.28f),
-    glowA = P.Blue600.copy(alpha = 0.18f),
-    glowB = P.Blue300.copy(alpha = 0.16f),
+    canvasA = Color(0x6B2457E0),
+    canvasB = Color(0x6614D2FF),
+    canvasC = Color(0x737CC4FF),
+    canvasD = Color(0x8CFFD9C2),
+    orbA1 = Color(0xFF6FE8FF),
+    orbA2 = Color(0xFF2F6BFF),
+    orbB1 = Color(0xFF8FD3FF),
+    orbB2 = Color(0xFF14D2FF),
+    orbC1 = Color(0xFFFFD2B8),
+    orbC2 = Color(0xFFFFB48F),
+    orbOpacity = 0.55f,
 )
 
 internal val DarkAplusColors = AplusColors(
@@ -140,8 +161,17 @@ internal val DarkAplusColors = AplusColors(
     dangerSubtle = P.Red950,
     focusRing = P.Blue400,
     scrim = P.Black.copy(alpha = 0.52f),
-    glowA = P.Blue400.copy(alpha = 0.14f),
-    glowB = P.Blue600.copy(alpha = 0.12f),
+    canvasA = Color(0x612457E0),
+    canvasB = Color(0x3314D2FF),
+    canvasC = Color(0x4D3C5CF0),
+    canvasD = Color(0x380596C2),
+    orbA1 = Color(0xFF3F7BFF),
+    orbA2 = Color(0xFF1B2F8A),
+    orbB1 = Color(0xFF0AA5D6),
+    orbB2 = Color(0xFF0B3F7A),
+    orbC1 = Color(0xFF2A4FD6),
+    orbC2 = Color(0xFF13205C),
+    orbOpacity = 0.42f,
     knobShade = P.Neutral800,
 )
 
