@@ -152,6 +152,27 @@ DONE - WORKING TODAY
             mirror/FrameGate.kt, net/VideoClient.kt,
             protocol/VideoFrameHeader.kt
 
+11. THE KILL SWITCH (added 2026-11-14)
+   One switch on the desktop, one on the phone. Off means dormant: the
+   desktop closes its listener (there is no port to find), the phone stops
+   dialling and stops forwarding, and nothing is copied, notified,
+   transferred or mirrored. The choice is remembered on both sides, so a
+   phone left off stays off - it does not even start its service.
+   Turning it off is not a re-pairing: the paired devices and their secret
+   are untouched, and the phone comes back on its own.
+   The phone has to tell two things apart that look the same from its side:
+   a computer that hung up on purpose (stop until the user presses
+   Reconnect) and a computer that is switched off (keep looking, slowly).
+   So `bye` grew a machine reason, `dormant`. The slow pace is 30 s; the
+   ordinary one is 5 s. A phone that never heard the computer go off only
+   sees a refused connection, so after three refusals in a row it assumes
+   the same and slows down too.
+   Desktop: services/companion.js setEnabled(), IPC companion:setEnabled,
+            the switch in the "Companion TLS Sync" card
+   Phone:   data/CompanionSettings.enabled, service/CompanionService
+            setEnabled(), net/ReconnectPolicy.kt, the switch at the top of
+            the Interconnect screen
+
 ====================================================================
 THE COMPONENTS (where the code lives)
 ====================================================================
@@ -166,6 +187,7 @@ PHONE - companion-android/app/src/main/kotlin/com/aplusconnect/companion/
   net/CompanionClient.kt        outbound TLS, keepalive, reconnect
   net/PeerTrust.kt              certificate fingerprint pinning
   net/IncomingFile.kt           chunked file receiver
+  net/ReconnectPolicy.kt        fast for a drop, slow for a dormant computer
   net/VideoClient.kt            the video socket, one waiting frame
   mirror/MirrorConfig.kt        capture size arithmetic
   mirror/FrameGate.kt           send / hold / drop, never queue
@@ -201,12 +223,13 @@ DESKTOP - services/ and scripts/
   scripts/protocol-check.js      cross-implementation conformance
   scripts/check-mirror.js        the video socket over real TLS
   scripts/check-handshake.js     the two pairing rules
+  scripts/check-kill-switch.js   the switch, the port, and the reason
   scripts/check-mpris.js         the MPRIS mapping
   scripts/check-companion-media.js       media routing and commands
   scripts/check-companion-notifications.js  notification routing
   scripts/ensure-deps.js         fails fast if npm install was skipped
 
-TESTS - 108 Android unit tests, plus eight desktop node checks.
+TESTS - 114 Android unit tests, plus nine desktop node checks.
   The guard tests matter as much as the feature tests:
    NoAccessibilityServiceTest  no accessibility service, ever
    NoMainThreadSendTest        no socket write on the main thread
@@ -270,6 +293,10 @@ KNOWN GOTCHAS
   QPR1 and later show a status-bar chip the user can tap to stop it.
   Both arrive through MediaProjection.Callback.onStop, and both end the
   session through the same stopMirror(reason).
+* Closing a socket on the main thread throws NetworkOnMainThreadException
+  and leaves the connection half open - the desktop sees the phone linger
+  until the garbage collector gets to it. Every socket close in the service
+  happens on a background thread.
 * A mirror needs the screen awake. Locking the phone, or the phone
   timing out, ends the session by design; there is no background
   capture without a foreground service the user cannot see.
@@ -281,6 +308,7 @@ HOW TO VERIFY IT RIGHT NOW
   node scripts/protocol-check.js              # protocol conformance
   node scripts/check-mirror.js                # the video socket, real TLS
   node scripts/check-handshake.js             # pairing rules, both sockets
+  node scripts/check-kill-switch.js           # the kill switch
   node scripts/check-mpris.js                 # the MPRIS mapping
   node scripts/check-companion-media.js       # media routing
   node scripts/check-companion-notifications.js

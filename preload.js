@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld('api', {
   setCompanionCode: (code) => ipcRenderer.invoke('companion:setCode', code),
   startCompanion: (port) => ipcRenderer.invoke('companion:start', port),
   stopCompanion: () => ipcRenderer.invoke('companion:stop'),
+
+  // The kill switch. Off means this computer stops listening entirely; the
+  // phone is told why, so it keeps looking for it instead of giving up.
+  getCompanionEnabled: () => ipcRenderer.invoke('companion:getEnabled'),
+  setCompanionEnabled: (enabled) => ipcRenderer.invoke('companion:setEnabled', enabled === true),
   getCompanionQr: () => ipcRenderer.invoke('companion:qr'),
   sendFileToPhone: (filePath) => ipcRenderer.invoke('companion:sendFile', filePath),
   pickAndSendFileToPhone: () => ipcRenderer.invoke('companion:pickAndSendFile'),
@@ -91,6 +96,7 @@ contextBridge.exposeInMainWorld('api', {
   onClipboardSynced: (callback) => ipcRenderer.on('event:clipboard-synced', (_, data) => callback(data)),
   onClipboardHistory: (callback) => ipcRenderer.on('event:clipboard-history', (_, data) => callback(data)),
   onCompanionStatus: (callback) => ipcRenderer.on('event:companion-status', (_, data) => callback(data)),
+  onCompanionEnabled: (callback) => ipcRenderer.on('event:companion-enabled', (_, data) => callback(data)),
   onCompanionPaired: (callback) => ipcRenderer.on('event:companion-paired', (_, data) => callback(data)),
   onCompanionDisconnected: (callback) => ipcRenderer.on('event:companion-disconnected', (_, data) => callback(data))
 });

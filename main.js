@@ -258,6 +258,9 @@ function updateTrayMenu() {
   } else if (isCompanionConnected) {
     const compDevice = companion.connectedClients[0];
     deviceLabel = `📱 ${compDevice?.deviceName || 'Phone'} (Companion)`;
+  } else if (!companion.isEnabled) {
+    // "No device connected" would read as a problem. This one is a decision.
+    deviceLabel = '📴 Companion off';
   }
 
   const contextMenu = Menu.buildFromTemplate([
@@ -410,6 +413,11 @@ function setupServiceEvents() {
   companion.on('status', (data) => {
     updateTrayMenu();
     sendToRenderer('event:companion-status', data);
+  });
+
+  companion.on('enabled-changed', (data) => {
+    updateTrayMenu();
+    sendToRenderer('event:companion-enabled', data);
   });
 
   companion.on('client-paired', (data) => {
@@ -649,6 +657,16 @@ function setupIpcHandlers() {
   ipcMain.handle('companion:start', async (_, port) => {
     companion.start(port);
     return companion.getInfo();
+  });
+
+  // The kill switch. Turning it off closes the listener and tells the phone
+  // why, so it keeps looking instead of giving up; turning it on reopens the
+  // listener and the phone finds it on its own.
+  ipcMain.handle('companion:getEnabled', async () => ({ enabled: companion.isEnabled }));
+  ipcMain.handle('companion:setEnabled', async (_, enabled) => {
+    const result = companion.setEnabled(enabled === true);
+    sendToRenderer('event:companion-enabled', result);
+    return result;
   });
   ipcMain.handle('companion:qr', async () => {
     try {

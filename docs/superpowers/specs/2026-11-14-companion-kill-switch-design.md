@@ -1,7 +1,7 @@
 # The kill switch — design
 
 Date: 2026-11-14
-Status: proposed, awaiting the go-ahead — no code written yet
+Status: implemented and verified live
 Scope: one master switch on each device. Nothing else changes about pairing,
 trust or the wire protocol beyond one new `bye` reason.
 

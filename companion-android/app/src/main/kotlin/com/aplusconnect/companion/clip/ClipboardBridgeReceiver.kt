@@ -23,6 +23,13 @@ class ClipboardBridgeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_CLIPBOARD) return
 
+        // A dormant phone stays dormant: the kill switch has to mean it, not
+        // "until something wakes the service up".
+        if (!CompanionService.isEnabled(context)) {
+            android.util.Log.i("AplusConnect", "ignoring the clipboard: the switch is off")
+            return
+        }
+
         val text = intent.getStringExtra(EXTRA_TEXT)
         android.util.Log.i("AplusConnect", "the keyboard handed us ${text?.length ?: 0} characters")
         if (text.isNullOrEmpty()) return

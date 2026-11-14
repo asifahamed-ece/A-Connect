@@ -383,11 +383,18 @@ class CompanionClient(
                 }
 
                 if (message.type == Protocol.TYPE_BYE) {
-                    // Not a network drop: the computer hung up on purpose.
-                    // The service reports it differently and stops retrying,
-                    // so the user's Disconnect on the PC actually sticks.
-                    Log.i(TAG, "the computer closed the session")
-                    reason = REASON_BYE
+                    // Not a network drop: the computer closed the session on
+                    // purpose. Why it closed it matters: a hang-up means the
+                    // phone stops until the user acts, while dormancy means it
+                    // keeps looking, slowly, for a computer that is switched
+                    // off rather than gone.
+                    val byeReason = message.payload.optString("reason")
+                    reason = if (byeReason == Protocol.REASON_DORMANT) {
+                        REASON_DORMANT
+                    } else {
+                        REASON_BYE
+                    }
+                    Log.i(TAG, "the computer closed the session: $reason")
                     break
                 }
                 if (message.type == Protocol.TYPE_CLIPBOARD_SET) {
@@ -486,6 +493,14 @@ class CompanionClient(
          * a drop is retried, a deliberate hang-up is not.
          */
         const val REASON_BYE = "the computer disconnected this phone"
+
+        /**
+         * The computer is switched off, not gone.
+         *
+         * The service keeps looking for it, slowly, instead of waiting for
+         * the user to press Reconnect.
+         */
+        const val REASON_DORMANT = "the computer is switched off"
 
         private const val WATCHDOG_INTERVAL_MS = 10_000L
         private const val PEER_TIMEOUT_MS = 75_000L

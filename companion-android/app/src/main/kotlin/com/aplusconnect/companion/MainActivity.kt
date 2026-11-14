@@ -301,6 +301,14 @@ fun MainScreen(settings: CompanionSettings) {
     var batteryOptimized by remember { mutableStateOf(isBatteryOptimized(context)) }
     var clipboardSyncEnabled by remember { mutableStateOf(true) }
 
+    /**
+     * The kill switch.
+     *
+     * Off means this phone is dormant: nothing is sent, the computer is told
+     * why, and it will find the phone again when it is switched back on.
+     */
+    var companionEnabled by remember { mutableStateOf(settings.enabled) }
+
     // File transfer state
     var isUploadingFile by remember { mutableStateOf(false) }
     var uploadingFileName by remember { mutableStateOf("") }
@@ -496,6 +504,11 @@ fun MainScreen(settings: CompanionSettings) {
                     onViewHistoryClick = { showHistoryDialog = true },
                     clipboardSyncEnabled = clipboardSyncEnabled,
                     onClipboardToggle = { clipboardSyncEnabled = it },
+                    companionEnabled = companionEnabled,
+                    onCompanionToggle = { wanted ->
+                        companionEnabled = wanted
+                        CompanionService.setEnabled(context, wanted)
+                    },
                     accessibilityGranted = accessibilityGranted,
                     batteryOptimized = batteryOptimized,
                     onOpenAccessibility = { openKeyboardPicker(context) },
@@ -926,6 +939,8 @@ fun InterconnectTab(
     onViewHistoryClick: () -> Unit,
     clipboardSyncEnabled: Boolean,
     onClipboardToggle: (Boolean) -> Unit,
+    companionEnabled: Boolean,
+    onCompanionToggle: (Boolean) -> Unit,
     accessibilityGranted: Boolean,
     batteryOptimized: Boolean,
     onOpenAccessibility: () -> Unit,
@@ -961,6 +976,53 @@ fun InterconnectTab(
             textPrimary = textPrimary,
             textSecondary = textSecondary
         )
+
+        // The kill switch.
+        //
+        // The first card, because it governs everything below it: off, and
+        // this phone sends nothing at all until the user says otherwise.
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, borderColor, RoundedCornerShape(20.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Text("Companion", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = textPrimary)
+                    Text(
+                        if (companionEnabled) {
+                            "On — the computer can reach this phone."
+                        } else {
+                            "Off — nothing is sent. The computer is told why, so it comes back on its own."
+                        },
+                        fontSize = 12.sp,
+                        color = textSecondary
+                    )
+                }
+
+                Switch(
+                    checked = companionEnabled,
+                    onCheckedChange = onCompanionToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = ColorOSGreen,
+                        uncheckedThumbColor = textMuted,
+                        uncheckedTrackColor = elevatedColor
+                    )
+                )
+            }
+        }
 
         // Shared Clipboard Card
         Card(

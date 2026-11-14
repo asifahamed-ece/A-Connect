@@ -46,6 +46,24 @@ const PAIRED_DEVICES_FILE = path.join(
   'paired-devices.json'
 );
 
+/**
+ * Where the kill switch is remembered.
+ *
+ * A separate small file rather than a key beside the paired devices: it is
+ * read and written on every toggle, and rewriting the secret store each time
+ * the switch moves would be a chance to lose it.
+ */
+const SETTINGS_FILE = path.join(
+  process.env.HOME || process.env.USERPROFILE || '.',
+  '.config',
+  'aplus-connect',
+  'companion',
+  'settings.json'
+);
+
+/** What the user is told while the companion is switched off. */
+const OFF_DETAIL = 'Off — the computer is not listening';
+
 /** A log line with the time, so a drop can be placed in a timeline. */
 function log(message) {
   console.log(`[companion ${new Date().toISOString().slice(11, 19)}] ${message}`);
@@ -114,12 +132,22 @@ class CompanionService extends EventEmitter {
     this.pairingCodeExpiresAt = 0;
     this.destinationDir = options.destinationDir || path.join(os.homedir(), 'Downloads');
 
+    /**
+     * The kill switch: false means this desktop is dormant - no listener, no
+     * pairing, nothing forwarded. See setEnabled.
+     */
+    this.enabled = true;
+
+    /** Where the switch is remembered. Overridable so a check can use a temp. */
+    this.settingsFile = options.settingsFile || SETTINGS_FILE;
+
     // Folder listings the user is waiting for, by the path they asked for.
     // A Map rather than a single slot: two folders can be asked for in quick
     // succession, and the answers carry the path back, so they cannot be
     // confused with each other.
     this.pendingFileLists = new Map();
 
+    this.loadSettings();
     this.loadPairedDevices();
     this.generatePairingCode();
   }
@@ -160,6 +188,74 @@ class CompanionService extends EventEmitter {
     }
   }
 
+  /**
+   * Reads the kill switch. Absent means on: an install from before the switch
+   * existed was working, and it should keep working until someone turns it off.
+   */
+  loadSettings() {
+    try {
+      if (fs.existsSync(this.settingsFile)) {
+        const saved = JSON.parse(fs.readFileSync(this.settingsFile, 'utf8'));
+        this.enabled = saved.enabled !== false;
+        return;
+      }
+    } catch (e) {
+      console.warn('[companion] could not read the companion settings:', e.message);
+    }
+    this.enabled = true;
+  }
+
+  saveSettings() {
+    try {
+      fs.mkdirSync(path.dirname(this.settingsFile), { recursive: true });
+      fs.writeFileSync(
+        this.settingsFile,
+        JSON.stringify({ enabled: this.enabled }, null, 2),
+        'utf8'
+      );
+    } catch (e) {
+      console.warn('[companion] could not save the companion settings:', e.message);
+    }
+  }
+
+  get isEnabled() {
+    return this.enabled;
+  }
+
+  /**
+   * The kill switch.
+   *
+   * Turning it off says `bye` with the dormant reason first, so a connected
+   * phone knows this is a planned silence and keeps looking slowly, then
+   * closes the listener: a dormant desktop has no port for anything to find.
+   * Turning it on opens the listener again, and the phone's own retry finds it.
+   *
+   * Only the state is persisted - the paired devices and their secrets are
+   * untouched, so moving the switch is never a re-pairing.
+   */
+  setEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (next === this.enabled) return { enabled: this.enabled };
+
+    this.enabled = next;
+    this.saveSettings();
+
+    if (this.enabled) {
+      this.start();
+      log('companion switched on');
+    } else {
+      // Say why before going quiet: without it the phone sees a bare drop and
+      // redials every five seconds at a port that is no longer open.
+      this.disconnectClients(protocol.REASONS.DORMANT, 'let go of');
+      this.stop();
+      log('companion switched off');
+    }
+
+    this.emit('enabled-changed', { enabled: this.enabled });
+    this.updateStatus();
+    return { enabled: this.enabled };
+  }
+
   unpairDevice(deviceId) {
     if (this.pairedDevices[deviceId]) {
       delete this.pairedDevices[deviceId];
@@ -194,6 +290,14 @@ class CompanionService extends EventEmitter {
 
   start(port = this.port) {
     if (this.server) return;
+    // A dormant desktop does not open a socket at all: "off" has to mean there
+    // is nothing to find, not a listener that refuses politely.
+    if (!this.enabled) {
+      this.status = 'disabled';
+      log('not listening: the companion switch is off');
+      this.emit('status', { status: 'disabled', detail: OFF_DETAIL });
+      return;
+    }
     this.port = port;
 
     let certData;
@@ -229,6 +333,10 @@ class CompanionService extends EventEmitter {
     if (this.pingTimer.unref) this.pingTimer.unref();
 
     this.server.listen(this.port, '0.0.0.0', () => {
+      // The port may have been 0, meaning "any free port": read back what was
+      // actually bound, so a caller that asked for 0 learns the real number.
+      const address = this.server.address();
+      if (address && typeof address === 'object') this.port = address.port;
       this.status = 'listening';
       log(`TLS server listening on ${this.localAddress()}:${this.port}`);
       this.emit('listening', {
@@ -252,7 +360,7 @@ class CompanionService extends EventEmitter {
    *
    * Returns how many links were hung up on.
    */
-  disconnectClients(reason = 'the computer disconnected') {
+  disconnectClients(reason = 'the computer disconnected', what = 'hung up on') {
     let hungUp = 0;
     for (const socket of this.clients) {
       if (!socket.handshakeDone || socket.destroyed) continue;
@@ -280,7 +388,7 @@ class CompanionService extends EventEmitter {
       }, 2000);
       if (typeof timer.unref === 'function') timer.unref();
     }
-    if (hungUp > 0) log(`hung up on ${hungUp} phone${hungUp === 1 ? '' : 's'}`);
+    if (hungUp > 0) log(`${what} ${hungUp} phone${hungUp === 1 ? '' : 's'}`);
     return hungUp;
   }
 
@@ -300,8 +408,11 @@ class CompanionService extends EventEmitter {
       this.server.close();
       this.server = null;
     }
-    this.status = 'stopped';
-    this.emit('status', { status: 'stopped', detail: null });
+    this.status = this.enabled ? 'stopped' : 'disabled';
+    this.emit('status', {
+      status: this.status,
+      detail: this.enabled ? null : OFF_DETAIL,
+    });
   }
 
   handleConnection(socket) {
@@ -826,6 +937,13 @@ class CompanionService extends EventEmitter {
 
   updateStatus() {
     const connected = this.connectedClients;
+    if (!this.enabled) {
+      // Off wins over everything: even a socket lingering from the moment
+      // before the switch moved must not read as "connected".
+      this.status = 'disabled';
+      this.emit('status', { status: 'disabled', detail: OFF_DETAIL });
+      return;
+    }
     if (connected.length > 0) {
       const device = connected[0];
       this.status = 'connected';
@@ -893,6 +1011,8 @@ class CompanionService extends EventEmitter {
       clients: this.connectedClients,
       pairedDevices: Object.values(this.pairedDevices),
       destinationDir: this.destinationDir,
+      // The kill switch, so the UI can show the switch where it left it.
+      enabled: this.enabled,
     };
   }
 }

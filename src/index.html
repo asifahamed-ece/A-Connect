@@ -400,7 +400,11 @@
               </div>
               <div class="row-sub" id="companion-detail">Pure TLS client: no open debugging ports, seamless LAN sync.</div>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <label class="switch" title="Turn the companion off completely">
+                <input type="checkbox" id="companion-switch" aria-label="Companion on or off" checked>
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
               <button class="btn btn-secondary" id="btn-show-qr" style="padding: 6px 12px; font-size: 12px;">Show QR</button>
               <div id="companion-badge" style="font-family: monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.5px;">
                 Code: <strong id="companion-code">—</strong>

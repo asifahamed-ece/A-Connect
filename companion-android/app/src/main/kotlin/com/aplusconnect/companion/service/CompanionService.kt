@@ -29,6 +29,7 @@ import com.aplusconnect.companion.mirror.ScreenMirror
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
 import com.aplusconnect.companion.net.IncomingFile
+import com.aplusconnect.companion.net.ReconnectPolicy
 import com.aplusconnect.companion.net.VideoClient
 import com.aplusconnect.companion.protocol.ClipboardPayload
 import com.aplusconnect.companion.protocol.ClipboardPayloads
@@ -104,6 +105,12 @@ class CompanionService : Service() {
      * the user taps Reconnect on the phone.
      */
     private var hungUpByComputer = false
+
+    /**
+     * How the phone dials: fast for a dropped link, slow for a computer that
+     * is switched off. See ReconnectPolicy.
+     */
+    private val reconnectPolicy = ReconnectPolicy()
 
     /**
      * Screen mirroring state.
@@ -304,7 +311,16 @@ class CompanionService : Service() {
         mediaBridge = null
         val activeClient = client
         client = null
-        activeClient?.close()
+        // Off the main thread, like every other socket close in this service:
+        // closing one on the main thread throws NetworkOnMainThreadException
+        // and leaves the connection half open.
+        sendThread.execute {
+            try {
+                activeClient?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "closing the connection failed: ${e.message}")
+            }
+        }
         super.onDestroy()
     }
 
@@ -386,6 +402,9 @@ class CompanionService : Service() {
             onReady = {
                 if (client === thisClient) {
                     Log.i(TAG, "connected to the computer")
+                    // The computer is there: whatever the phone assumed while
+                    // it was away is wrong now.
+                    reconnectPolicy.onConnected()
                     Status.isConnected = true
                     Status.state = "Connected to ${settings.host}"
                     updateNotification("Connected to ${settings.host}")
@@ -419,7 +438,19 @@ class CompanionService : Service() {
                         hungUpByComputer = true
                         Status.state = "Disconnected by the computer"
                         updateNotification("Disconnected by the computer")
+                    } else if (reason == CompanionClient.REASON_DORMANT) {
+                        // The computer is switched off, not gone: keep looking
+                        // for it, slowly, so it comes back on its own when the
+                        // user switches it on.
+                        reconnectPolicy.onDormant()
+                        Status.state = "The computer is off · waiting"
+                        updateNotification("The computer is off · waiting")
+                        scheduleReconnect()
                     } else {
+                        // A dropped link. If the computer keeps refusing, the
+                        // policy slows the pace on its own - it is probably
+                        // switched off and the phone never heard it say so.
+                        reconnectPolicy.onFailure()
                         Status.state = "Disconnected · retrying"
                         updateNotification("Disconnected · retrying")
                         scheduleReconnect()
@@ -507,14 +538,16 @@ class CompanionService : Service() {
         if (reconnectRunnable != null) return
         val now = System.currentTimeMillis()
         if (now < reconnectAt) return
-        reconnectAt = now + RECONNECT_DELAY_MS
+        // Fast for a dropped link, slow for a computer that is switched off.
+        val delay = reconnectPolicy.delayMs()
+        reconnectAt = now + delay
 
         val runnable = Runnable {
             reconnectRunnable = null
             connect()
         }
         reconnectRunnable = runnable
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(runnable, RECONNECT_DELAY_MS)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(runnable, delay)
     }
 
     /** Sends the clipboard to the computer, or queues it if not connected yet. */
@@ -1022,6 +1055,43 @@ class CompanionService : Service() {
         settings.deviceName.ifEmpty { android.os.Build.MODEL }
 
     /**
+     * Stops everything, because the user switched this phone off.
+     *
+     * The mirror goes with it: a dormant phone must not be capturing anyone's
+     * screen, and a projection nobody is watching is a privacy problem, not
+     * a background service.
+     */
+    private fun goDormant() {
+        stopMirror("requested", tellComputer = false)
+
+        Status.isConnected = false
+        Status.mirroring = false
+        Status.state = "Off"
+
+        // The socket is closed off the main thread. Closing one there throws
+        // NetworkOnMainThreadException, which would leave the connection half
+        // open - the desktop would see the phone linger until the garbage
+        // collector got round to it.
+        val activeClient = client
+        client = null
+        sendThread.execute {
+            try {
+                activeClient?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "closing the connection failed: ${e.message}")
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        stopSelf()
+    }
+
+    /**
      * Sends one file the computer asked for.
      *
      * The streaming is the existing phone-to-computer transfer, so both
@@ -1243,7 +1313,39 @@ class CompanionService : Service() {
         }
 
         /** Starts the service, so it connects to the computer. */
+    /**
+     * The kill switch, on the phone.
+     *
+     * Off means dormant: the service stops, the connection is closed, and
+     * nothing is forwarded. The choice is remembered, so the phone stays off
+     * until the user turns it back on - across a restart too.
+     */
+    fun setEnabled(context: Context, enabled: Boolean) {
+        val settings = CompanionSettings(context)
+        settings.enabled = enabled
+        if (enabled) {
+            Log.i(TAG, "switched on")
+            start(context)
+        } else {
+            Log.i(TAG, "switched off")
+            instance?.goDormant()
+        }
+    }
+
+    /** Whether this phone is allowed to talk to the computer at all. */
+    fun isEnabled(context: Context): Boolean = CompanionSettings(context).enabled
+
+        /**
+         * Starts the service, unless the kill switch says this phone is off.
+         *
+         * A dormant phone does not run the service at all: no connection, no
+         * foreground notification, nothing a user could mistake for "working".
+         */
         fun start(context: Context) {
+            if (!CompanionSettings(context).enabled) {
+                Log.i(TAG, "not starting: the companion switch is off")
+                return
+            }
             val intent = Intent(context, CompanionService::class.java).apply {
                 action = ACTION_CONNECT
             }

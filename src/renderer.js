@@ -1257,6 +1257,29 @@ function applyCompanionInfo(info) {
   if (codeEl) codeEl.textContent = info.code || '—';
   if (destEl && info.destinationDir) destEl.textContent = info.destinationDir;
 
+  // The kill switch. The checkbox is the truth about the state, not a guess:
+  // the desktop remembers it, and a restarted app must come back the way the
+  // user left it.
+  const killSwitch = $('companion-switch');
+  if (killSwitch && document.activeElement !== killSwitch) {
+    killSwitch.checked = info.enabled !== false;
+  }
+
+  if (info.status === 'disabled') {
+    if (pill) {
+      pill.textContent = 'Off';
+      pill.className = 'pill disconnected';
+    }
+    if (qrCard) qrCard.style.display = 'none';
+    if (detail) {
+      detail.textContent =
+        'Off — this computer is not listening. The phone keeps looking and will ' +
+        'reconnect on its own when you switch it back on.';
+    }
+    if (badge) badge.innerHTML = '🔒 <strong>Not listening</strong>';
+    return;
+  }
+
   if (info.connected) {
     const client = info.clients?.[0];
     if (pill) {
@@ -2051,6 +2074,29 @@ function initClipboard() {
 
   if (window.api.onCompanionStatus) {
     window.api.onCompanionStatus(() => refreshCompanionInfo());
+  }
+  if (window.api.onCompanionEnabled) {
+    window.api.onCompanionEnabled(() => refreshCompanionInfo());
+  }
+
+  // The kill switch. Moving it is the user saying "this computer is off", so
+  // the desktop stops listening and the phone is told why - it keeps looking
+  // slowly instead of giving up until someone presses Reconnect.
+  const killSwitch = $('companion-switch');
+  if (killSwitch && window.api.setCompanionEnabled) {
+    killSwitch.addEventListener('change', async () => {
+      const wanted = killSwitch.checked;
+      try {
+        const result = await window.api.setCompanionEnabled(wanted);
+        if (result && result.enabled !== wanted) {
+          // The desktop disagreed - put the switch back where the truth is.
+          killSwitch.checked = Boolean(result.enabled);
+        }
+      } catch {
+        killSwitch.checked = !wanted;
+      }
+      refreshCompanionInfo();
+    });
   }
   if (window.api.onCompanionPaired) {
     window.api.onCompanionPaired((d) => {

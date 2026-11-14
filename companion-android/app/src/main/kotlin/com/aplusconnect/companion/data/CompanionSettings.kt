@@ -59,6 +59,18 @@ class CompanionSettings(context: Context) {
         set(value) = prefs.edit().putString(KEY_DEVICE_ID, value).apply()
 
     /** Optional custom device name chosen by the user. */
+    /**
+     * The kill switch.
+     *
+     * Off means this phone is dormant: it does not dial the computer, nothing
+     * is forwarded, and the keyboard's clipboard broadcasts are ignored.
+     * Remembered, so a phone left off stays off across a restart - a switch
+     * that reset itself would be worse than no switch at all.
+     */
+    var enabled: Boolean
+        get() = prefs.getBoolean(KEY_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_ENABLED, value).apply()
+
     var deviceName: String
         get() = prefs.getString(KEY_DEVICE_NAME, "") ?: ""
         set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
@@ -148,6 +160,7 @@ class CompanionSettings(context: Context) {
 
     companion object {
         private const val KEY_HOST = "host"
+        private const val KEY_ENABLED = "enabled"
         private const val KEY_PORT = "port"
         private const val KEY_CODE = "code"
         private const val KEY_DEVICE_ID = "device_id"

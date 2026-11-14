@@ -102,6 +102,14 @@ const REASONS = {
   NONCE_MISMATCH: 'nonce-mismatch',
   PROTOCOL_VERSION: 'protocol-version',
   AUTH_FAILED: 'auth-failed',
+  /**
+   * Why the desktop closed a session when it is going dormant.
+   *
+   * A `bye` carrying this tells the phone the computer is switched off, not
+   * that the user hung up: the phone should keep looking, slowly, rather than
+   * give up until someone taps Reconnect.
+   */
+  DORMANT: 'dormant',
 };
 
 /** Only the current major version is understood. */

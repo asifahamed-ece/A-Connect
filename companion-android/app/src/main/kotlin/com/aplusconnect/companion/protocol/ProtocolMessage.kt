@@ -48,6 +48,16 @@ object Protocol {
     const val TYPE_MIRROR_FAILED = "mirror-failed"
 
     /**
+     * Why the desktop closed a session when it is going dormant.
+     *
+     * A `bye` carrying this means "the computer is switched off", not "the user
+     * hung up": the phone keeps looking, slowly, rather than giving up until
+     * someone presses Reconnect. The value is the same string the desktop
+     * uses, so the two ends cannot drift apart.
+     */
+    const val REASON_DORMANT = "dormant"
+
+    /**
      * The clipboard cap is a byte budget, not a character budget: 256 KiB of
      * UTF-8. A character cap would let a 256 KiB payload of control characters
      * escape to six bytes each and blow past the frame limit.
