@@ -183,7 +183,7 @@ private fun Hero(ui: ConnectUi, actions: ConnectActions) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(ui.deviceName, style = AplusType.display, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(ui.deviceName, style = AplusType.titleLg, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     transportLine(ui),
                     style = AplusType.bodySm,
