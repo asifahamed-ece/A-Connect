@@ -16,6 +16,9 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { EventEmitter } = require('events');
 
 const protocol = require('../services/companion-protocol');
@@ -34,6 +37,9 @@ function connectedService() {
     },
   ];
   service.pendingFileLists = new Map();
+  // The service remembers which file request is a preview and which is a
+  // download; a fake without it cannot answer requestFileSend at all.
+  service.fileRequests = new Map();
   service.written = written;
   return service;
 }
@@ -277,6 +283,73 @@ async function checkSendRequest() {
   const request = protocol.decode(service.written[0]);
   assert.strictEqual(request.type, protocol.TYPES.FILE_SEND_REQUEST, 'the frame type changed');
   assert.strictEqual(request.payload.path, 'doc:9', 'the file id did not survive');
+  assert.ok(request.payload.id, 'the request went out without an id to match the answer to');
+  assert.strictEqual(request.payload.open, undefined, 'a plain download asked to be opened');
+}
+
+/**
+ * Keeping a file and looking at one are two different intentions.
+ *
+ * A download goes to the folder the user chose; a preview goes to a cache and
+ * is opened there, because dropping every file the user glances at into
+ * Downloads turns "open" into "download" behind their back.
+ */
+async function checkPreviewGoesToTheCacheNotTheDownloads() {
+  const service = connectedService();
+  service.destinationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aplus-dl-'));
+  const socket = service.clients[0];
+  socket.activeTransfers = new Map();
+
+  const download = CompanionService.prototype.requestFileSend.call(service, 'doc:1');
+  const downloadFrame = protocol.decode(service.written.at(-1));
+  CompanionService.prototype.handleFileStart.call(service, socket, {
+    id: downloadFrame.payload.id,
+    name: 'keep.txt',
+    size: 3,
+  });
+  const kept = socket.activeTransfers.get(downloadFrame.payload.id);
+  assert.ok(
+    kept.targetPath.startsWith(service.destinationDir),
+    'a download did not land in the destination folder'
+  );
+  assert.strictEqual(kept.forViewing, false, 'a download was marked as a preview');
+
+  const view = CompanionService.prototype.requestFileSend.call(service, 'doc:2', { open: true });
+  assert.strictEqual(view.open, true, 'the preview request did not report itself as a preview');
+  const viewFrame = protocol.decode(service.written.at(-1));
+  assert.strictEqual(viewFrame.payload.open, true, 'a preview did not say it was for viewing');
+  CompanionService.prototype.handleFileStart.call(service, socket, {
+    id: viewFrame.payload.id,
+    name: 'look.txt',
+    size: 3,
+  });
+  const viewed = socket.activeTransfers.get(viewFrame.payload.id);
+  assert.ok(
+    !viewed.targetPath.startsWith(service.destinationDir),
+    'a preview was saved into the user\'s downloads folder'
+  );
+  assert.strictEqual(viewed.forViewing, true, 'a preview was not marked as one');
+}
+
+/** A phone that cannot send the file says so, instead of going quiet. */
+async function checkSendFailureIsReported() {
+  const service = connectedService();
+  const socket = service.clients[0];
+  socket.activeTransfers = new Map();
+  const failures = [];
+  service.on('file-transfer-error', (e) => failures.push(e));
+
+  CompanionService.prototype.handleFileStart.call(service, socket, {
+    id: 'view-1234',
+    name: 'gone.jpg',
+    size: 0,
+    error: 'that file is not on the phone any more',
+  });
+
+  assert.strictEqual(failures.length, 1, 'the phone\'s reason never reached the desktop');
+  assert.strictEqual(failures[0].error, 'that file is not on the phone any more', 'the reason changed');
+  assert.strictEqual(failures[0].name, 'gone.jpg', 'the name was lost');
+  assert.strictEqual(socket.activeTransfers.size, 0, 'a failed transfer left a file open');
 }
 
 async function run() {
@@ -285,6 +358,8 @@ async function run() {
   await checkNoPhone();
   await checkBadAnswer();
   await checkSendRequest();
+  await checkPreviewGoesToTheCacheNotTheDownloads();
+  await checkSendFailureIsReported();
   await checkSearch();
   await checkSearchWithNoPhone();
   await checkRefreshIsFresh();

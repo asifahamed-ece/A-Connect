@@ -48,6 +48,17 @@ class PhoneNotificationListener : NotificationListenerService() {
             return
         }
 
+        // A media notification follows the song: mirroring it would put a new
+        // row on the computer for every track, and the notification centre
+        // becomes a playlist. The media is shown by the player instead - a
+        // persistent card the user can also control - so the notification is
+        // deliberately left behind. `android.mediaSession` is what Android
+        // itself puts on a media notification.
+        if (notification?.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true) {
+            Log.i(TAG, "not forwarding a media notification; the player shows it instead")
+            return
+        }
+
         live[id] = sbn
 
         val extras = sbn.notification?.extras ?: return

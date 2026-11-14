@@ -47,7 +47,7 @@ class CompanionClient(
     private val onNotificationAction: (id: String, action: String) -> Unit = { _, _ -> },
     private val onMediaCommand: (command: String, positionMs: Long?) -> Unit = { _, _ -> },
     private val onFileListRequest: (path: String) -> Unit = { },
-    private val onFileSendRequest: (path: String) -> Unit = { },
+    private val onFileSendRequest: (path: String, requestId: String) -> Unit = { _, _ -> },
     private val onFileSearchRequest: (query: String, fresh: Boolean) -> Unit = { _, _ -> },
     private val onMirrorStart: (request: JSONObject) -> Unit = { },
     private val onMirrorStop: () -> Unit = { },
@@ -176,6 +176,36 @@ class CompanionClient(
         } catch (e: Exception) {
             Log.w(TAG, "sending failed: ${e.javaClass.simpleName}: ${e.message}")
             close()
+            false
+        }
+    }
+
+    /**
+     * Tells the desktop why a file is not coming.
+     *
+     * A file-start carrying an error, rather than nothing at all: a request
+     * that is silently dropped looks exactly like a button that does not work,
+     * and the user has no way to tell the two apart.
+     */
+    fun sendFileError(id: String, name: String, error: String): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
+        val payload = org.json.JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("size", 0)
+            .put("error", error)
+        val message = ProtocolMessage(
+            type = Protocol.TYPE_FILE_START,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload
+        )
+        return try {
+            writeFrame(FrameCodec.encode(message))
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to report the file error: ${e.message}")
             false
         }
     }
@@ -431,7 +461,16 @@ class CompanionClient(
 
                 if (message.type == Protocol.TYPE_FILE_SEND_REQUEST) {
                     try {
-                        onFileSendRequest(message.payload.optString("path"))
+                        // The id ties the transfer that comes back to this
+                        // request. Without it the desktop cannot tell a file
+                        // the user asked to look at from one they asked to
+                        // keep. `open` is informational here: the phone sends
+                        // the same bytes either way, and the desktop decides
+                        // where they land.
+                        onFileSendRequest(
+                            message.payload.optString("path"),
+                            message.payload.optString("id"),
+                        )
                     } catch (e: Exception) {
                         Log.w(TAG, "the file send request failed: ${e.message}")
                     }

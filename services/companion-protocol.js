@@ -460,11 +460,18 @@ function sortFileEntries(entries) {
  * of the folder the user shared), and it is the same key the phone's answer
  * echoes back, so the desktop never has to invent a second identifier.
  */
-function buildFileRequest(type, path) {
+function buildFileRequest(type, path, extra = {}) {
   if (type !== TYPES.FILE_LIST_REQUEST && type !== TYPES.FILE_SEND_REQUEST) {
     throw new Error(`not a file request: ${type}`);
   }
-  return { type, path: typeof path === 'string' ? path : '' };
+  const payload = { type, path: typeof path === 'string' ? path : '' };
+  // A send request may carry two things a listing request never does:
+  //  - `id`, so the transfer that comes back can be tied to this request
+  //    instead of guessed at from arrival order;
+  //  - `open`, meaning "this is for viewing, not for keeping".
+  if (extra.id) payload.id = String(extra.id);
+  if (extra.open) payload.open = true;
+  return payload;
 }
 
 /**

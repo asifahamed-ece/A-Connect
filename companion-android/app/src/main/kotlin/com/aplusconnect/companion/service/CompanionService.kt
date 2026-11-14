@@ -469,8 +469,8 @@ class CompanionService : Service() {
             onFileListRequest = { path ->
                 fileThread.execute { answerFileList(path) }
             },
-            onFileSendRequest = { path ->
-                fileThread.execute { answerFileSend(path) }
+            onFileSendRequest = { path, requestId ->
+                fileThread.execute { answerFileSend(path, requestId) }
             },
             onFileSearchRequest = { query, fresh ->
                 searchThread.execute { answerFileSearch(query, fresh) }
@@ -1098,22 +1098,35 @@ class CompanionService : Service() {
      * directions keep using the same file-start/chunk/done messages and the
      * computer needs no new file code.
      */
-    private fun answerFileSend(path: String) {
+    private fun answerFileSend(path: String, requestId: String) {
+        // The transfer carries the request's own id, so the desktop can tie
+        // the file that arrives to the click that asked for it.
+        val transferId = requestId.ifEmpty { "" }
+
         val file = fileBrowser.resolve(path)
         if (file == null || !file.isFile) {
-            Log.w(TAG, "the computer asked for a file outside the phone's storage")
+            Log.w(TAG, "the computer asked for a file we cannot read: $path")
+            val name = path.substringAfterLast('/').ifEmpty { "the file" }
+            sendThread.execute {
+                client?.sendFileError(transferId, name, "that file is not on the phone any more")
+            }
             return
         }
+
         sendFile(
             this,
             file,
             PhoneFileBrowser.mimeOf(file.name),
+            transferId = transferId,
             onProgress = {},
             onComplete = { ok, error ->
                 if (ok) {
                     Log.i(TAG, "sent the requested file to the computer")
                 } else {
                     Log.w(TAG, "could not send the requested file: $error")
+                    sendThread.execute {
+                        client?.sendFileError(transferId, file.name, error ?: "the phone could not send it")
+                    }
                 }
             }
         )
@@ -1452,6 +1465,7 @@ class CompanionService : Service() {
             context: Context,
             file: java.io.File,
             mime: String,
+            transferId: String = "",
             onProgress: (Float) -> Unit,
             onComplete: (Boolean, String?) -> Unit
         ) {
@@ -1463,6 +1477,7 @@ class CompanionService : Service() {
                 { java.io.FileInputStream(file) },
                 onProgress,
                 onComplete,
+                transferId,
             )
         }
 
@@ -1475,6 +1490,7 @@ class CompanionService : Service() {
             open: () -> java.io.InputStream?,
             onProgress: (Float) -> Unit,
             onComplete: (Boolean, String?) -> Unit,
+            transferIdOverride: String = "",
         ) {
             val active = instance?.client
             if (active == null || !active.isReady) {
@@ -1485,7 +1501,9 @@ class CompanionService : Service() {
             Thread {
                 try {
                     val inputStream = open() ?: throw Exception("Could not open file")
-                    val transferId = "${idPrefix}_${UUID.randomUUID().toString().take(8)}"
+                    val transferId = transferIdOverride.ifEmpty {
+                        "${idPrefix}_${UUID.randomUUID().toString().take(8)}"
+                    }
 
                     if (!active.sendFileStart(transferId, fileName, fileSize, mimeType)) {
                         inputStream.close()

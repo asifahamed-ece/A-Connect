@@ -55,7 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   pickAndSendFileToPhone: () => ipcRenderer.invoke('companion:pickAndSendFile'),
   setCompanionDestinationDir: (dir) => ipcRenderer.invoke('companion:setDestinationDir', dir),
   selectCompanionDestinationDir: () => ipcRenderer.invoke('companion:selectDestinationDir'),
-  openCompanionDestinationDir: () => ipcRenderer.invoke('companion:openCompanionDestinationDir'),
+  openCompanionDestinationDir: () => ipcRenderer.invoke('companion:openDestinationDir'),
 
   // The phone's own storage, over the companion channel. `path` is a folder
   // relative to the phone's storage root, as the phone handed it out; '' is
@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('api', {
   listPhoneFiles: (path) => ipcRenderer.invoke('companion:listFiles', path),
   searchPhoneFiles: (query, fresh) => ipcRenderer.invoke('companion:searchFiles', query, fresh === true),
   downloadPhoneFile: (path) => ipcRenderer.invoke('companion:downloadFile', path),
+  openPhoneFile: (path) => ipcRenderer.invoke('companion:openFile', path),
 
   // Hangs up on the phone over the companion channel. The phone is told this
   // was deliberate, so it stops retrying until the user reconnects it.
@@ -92,6 +93,11 @@ contextBridge.exposeInMainWorld('api', {
   onMirrorStopped: (callback) => ipcRenderer.on('event:mirror-stopped', (_, data) => callback(data)),
   onNotificationReceived: (callback) => ipcRenderer.on('event:notification-received', (_, data) => callback(data)),
   onTransferProgress: (callback) => ipcRenderer.on('event:transfer-progress', (_, data) => callback(data)),
+
+  // Errors the main process needs to surface in the window (a file that would
+  // not open, a phone that would not send). One channel, so a failure the user
+  // cannot see in a transfer row still reaches them.
+  onToast: (callback) => ipcRenderer.on('event:toast', (_, data) => callback(data)),
   onClipboardStatus: (callback) => ipcRenderer.on('event:clipboard-status', (_, data) => callback(data)),
   onClipboardSynced: (callback) => ipcRenderer.on('event:clipboard-synced', (_, data) => callback(data)),
   onClipboardHistory: (callback) => ipcRenderer.on('event:clipboard-history', (_, data) => callback(data)),

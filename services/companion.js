@@ -130,7 +130,11 @@ class CompanionService extends EventEmitter {
     this.pairedDevices = {};
     this.pairingCode = null;
     this.pairingCodeExpiresAt = 0;
-    this.destinationDir = options.destinationDir || path.join(os.homedir(), 'Downloads');
+    // The same folder the ADB transport pulls into. Two transports saving the
+    // same feature into two different places is how a user ends up unable to
+    // find a file they just downloaded.
+    this.destinationDir =
+      options.destinationDir || path.join(os.homedir(), 'Downloads', 'A+Connect');
 
     /**
      * The kill switch: false means this desktop is dormant - no listener, no
@@ -146,6 +150,9 @@ class CompanionService extends EventEmitter {
     // succession, and the answers carry the path back, so they cannot be
     // confused with each other.
     this.pendingFileLists = new Map();
+
+    /** File requests that have not come back yet, by the id we gave them. */
+    this.fileRequests = new Map();
 
     this.loadSettings();
     this.loadPairedDevices();
@@ -602,7 +609,27 @@ class CompanionService extends EventEmitter {
 
   handleFileStart(socket, payload) {
     const { id, name, size } = payload;
-    const destDir = this.destinationDir || path.join(os.homedir(), 'Downloads');
+
+    // A file the phone could not send. It arrives as a file-start with the
+    // reason instead of as silence, so the desktop can say what happened
+    // rather than leave a click looking like it did nothing.
+    if (payload.error) {
+      this.fileRequests.delete(id);
+      console.warn(`[companion] the phone could not send ${name || id}: ${payload.error}`);
+      this.emit('file-transfer-error', { id, name: name || 'the file', error: payload.error });
+      return;
+    }
+
+    const request = this.fileRequests.get(id);
+    this.fileRequests.delete(id);
+    const forViewing = Boolean(request?.open);
+
+    // A preview is cached, not saved: the user asked to look at the file, not
+    // to keep it, and dropping every preview into Downloads would turn
+    // "open" into "download" behind their back.
+    const destDir = forViewing
+      ? path.join(os.homedir(), '.cache', 'a-plus-connect', 'preview')
+      : this.destinationDir || path.join(os.homedir(), 'Downloads', 'A+Connect');
     if (!fs.existsSync(destDir)) {
       try { fs.mkdirSync(destDir, { recursive: true }); } catch {}
     }
@@ -626,6 +653,7 @@ class CompanionService extends EventEmitter {
       size,
       received: 0,
       stream,
+      forViewing,
       startedAt: Date.now(),
     });
 
@@ -634,6 +662,7 @@ class CompanionService extends EventEmitter {
       id,
       name: safeName,
       size,
+      forViewing,
       deviceName: socket.deviceName
     });
   }
@@ -671,6 +700,7 @@ class CompanionService extends EventEmitter {
         name: transfer.name,
         path: transfer.targetPath,
         size: transfer.received,
+        forViewing: transfer.forViewing,
         deviceName: socket.deviceName,
       });
     });
@@ -736,21 +766,37 @@ class CompanionService extends EventEmitter {
    * progress the user sees is the same progress a file sent from the phone
    * shows.
    */
-  requestFileSend(path = '') {
-    const payload = protocol.buildFileRequest(protocol.TYPES.FILE_SEND_REQUEST, path);
+  requestFileSend(path = '', options = {}) {
+    const open = options.open === true;
+    // The request carries its own id so the transfer that comes back can be
+    // matched to it. Without that, "which of these two files was the one the
+    // user asked to preview" has no answer.
+    const requestId = `${open ? 'view' : 'file'}-${crypto.randomUUID().slice(0, 8)}`;
+    const payload = protocol.buildFileRequest(protocol.TYPES.FILE_SEND_REQUEST, path, {
+      id: requestId,
+      open,
+    });
+
+    this.fileRequests.set(requestId, { open, requestedAt: Date.now() });
+    // Requests that never come back must not pile up for ever.
+    setTimeout(() => this.fileRequests.delete(requestId), 5 * 60 * 1000).unref?.();
+
     const sent = sendToPhones(
       this,
       protocol.encode({
         version: protocol.PROTOCOL_VERSION,
         type: protocol.TYPES.FILE_SEND_REQUEST,
-        id: crypto.randomUUID(),
+        id: requestId,
         ts: Date.now(),
         payload,
       }),
       'a file send request'
     );
-    if (sent === 0) return { success: false, error: 'The phone is not connected' };
-    return { success: true };
+    if (sent === 0) {
+      this.fileRequests.delete(requestId);
+      return { success: false, error: 'The phone is not connected' };
+    }
+    return { success: true, id: requestId, open };
   }
 
   /** Answers a listing the user asked for, and orders it the way the UI draws it. */
@@ -1043,6 +1089,10 @@ function routeNotification(service, message) {
       // renderer formats it, and the tooltip shows the exact moment.
       timestamp: Number(notif.ts) || Date.now(),
       actions: notif.actions,
+      // Whether the phone keeps it up. A media card or a running download is
+      // a different kind of thing from a message that arrived and can be
+      // swiped away, and the desktop shows the two apart.
+      ongoing: notif.ongoing === true,
       fromCompanion: true,
     });
     return true;

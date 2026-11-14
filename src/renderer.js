@@ -332,7 +332,10 @@ function renderPhoneBrowser() {
         ${
           entry.isDir
             ? ''
-            : `<button class="icon-btn sm" data-pull="${escapeHtml(entry.id)}" title="Download">
+            : `<button class="icon-btn sm" data-open="${escapeHtml(entry.id)}" title="Open on this PC">
+                 <svg class="icon"><use href="#i-eye"/></svg>
+               </button>
+               <button class="icon-btn sm" data-pull="${escapeHtml(entry.id)}" title="Download">
                  <svg class="icon"><use href="#i-download"/></svg>
                </button>`
         }
@@ -358,13 +361,70 @@ function renderPhoneBrowser() {
         ${
           entry.isDir
             ? ''
-            : `<button class="icon-btn sm" data-pull="${escapeHtml(entry.id)}" title="Download">
+            : `<button class="icon-btn sm" data-open="${escapeHtml(entry.id)}" title="Open on this PC">
+                 <svg class="icon"><use href="#i-eye"/></svg>
+               </button>
+               <button class="icon-btn sm" data-pull="${escapeHtml(entry.id)}" title="Download">
                  <svg class="icon"><use href="#i-download"/></svg>
                </button>`
         }
       </div>`,
     )
     .join('');
+}
+
+/**
+ * Downloads one file from the phone, over the companion channel.
+ *
+ * The phone sends it as the ordinary file-start/chunk/done transfer, so the
+ * progress row in the transfer list is the same one a file sent from the
+ * desktop shows. The request itself only says whether the phone was
+ * reachable - the file itself arrives afterwards.
+ *
+ * `path` is the id the phone handed out with the listing: its path relative
+ * to the phone's storage root.
+ */
+async function pullPhoneFile(path, name) {
+  if (!path) return;
+  if (!window.api.downloadPhoneFile) {
+    toast('Downloading from the phone is not available on this transport', 'err');
+    return;
+  }
+  try {
+    const result = await window.api.downloadPhoneFile(path);
+    if (!result || result.success === false) {
+      toast(`Could not ask the phone for ${name || 'the file'}: ${result?.error || 'no answer'}`, 'err');
+      return;
+    }
+    toast(`The phone is sending ${name || 'the file'}`);
+  } catch (err) {
+    toast(`Download failed: ${err.message}`, 'err');
+  }
+}
+
+/**
+ * Opens one file from the phone on this PC, without keeping it.
+ *
+ * The file is fetched over the same transfer a download uses, but into a cache
+ * folder, and the desktop opens it with whatever handles that kind of file.
+ * Nothing lands in Downloads: looking at a file is not asking to keep it.
+ */
+async function previewPhoneFile(path, name) {
+  if (!path) return;
+  if (!window.api.openPhoneFile) {
+    toast('Opening from the phone is not available on this transport', 'err');
+    return;
+  }
+  try {
+    const result = await window.api.openPhoneFile(path);
+    if (!result || result.success === false) {
+      toast(`Could not ask the phone for ${name || 'the file'}: ${result?.error || 'no answer'}`, 'err');
+      return;
+    }
+    toast(`Opening ${name || 'the file'}`);
+  } catch (err) {
+    toast(`Could not open ${name || 'the file'}: ${err.message}`, 'err');
+  }
 }
 
 /** Opens a folder of the phone. `id` is its path relative to the phone's root. */
@@ -1082,12 +1142,28 @@ function renderNotifications() {
 
   const rows = newestFirst(state.notifications);
 
-  list.innerHTML = rows
-    .map((n) => {
-      const when = notifWhen(n);
-      const exact = fullTime(n.timestamp);
-      return `
-      <div class="notif">
+  // Persistent notifications are a different kind of thing from a message.
+  // The phone keeps them up on purpose - a media card, a running download, a
+  // timer - and a row that cannot be dismissed, mixed in above the message
+  // the user came to read, makes the list harder to scan. So they get their
+  // own section, and the newest first still applies inside each one.
+  const ongoing = rows.filter((n) => n.ongoing);
+  const recent = rows.filter((n) => !n.ongoing);
+
+  const section = (title, items) =>
+    items.length
+      ? `<div class="list-section-title">${escapeHtml(title)}</div>${items.map(notificationRow).join('')}`
+      : '';
+
+  list.innerHTML = section('Ongoing', ongoing) + section('Recent', recent);
+}
+
+/** One notification row. Shared by both sections, so they cannot drift. */
+function notificationRow(n) {
+  const when = notifWhen(n);
+  const exact = fullTime(n.timestamp);
+  return `
+      <div class="notif${n.ongoing ? ' ongoing' : ''}">
         <div class="notif-icon">${icon('bell')}</div>
         <div class="notif-body">
           <div class="notif-title">${escapeHtml(n.title || n.app)}</div>
@@ -1100,8 +1176,6 @@ function renderNotifications() {
           <svg class="icon"><use href="#i-close"/></svg>
         </button>
       </div>`;
-    })
-    .join('');
 }
 
 /**
@@ -1225,6 +1299,13 @@ function applyCompanionInfo(info) {
   if (!info) return;
   state.companionConnected = Boolean(info.connected);
   state.companion = state.companionConnected ? (info.clients && info.clients[0]) || null : null;
+
+  // A phone that has just arrived must not leave the window saying "No
+  // devices found". The empty screen is for when there is nothing, and there
+  // is something now - the same rule setDevice() uses for the ADB path.
+  if (state.companionConnected && state.view === 'empty') {
+    showView('device');
+  }
 
   // A phone that went away takes its folder with it: forget what was listed,
   // so the next connection starts at the root instead of showing a stale
@@ -1831,6 +1912,12 @@ function initFiles() {
     }
   });
 
+  // The one way a failure with no row of its own reaches the window: a phone
+  // that would not send a file, or a file the desktop would not open.
+  window.api.onToast?.((data) => {
+    if (data && data.message) toast(data.message, data.kind || 'err');
+  });
+
   window.api.onTransferProgress((data) => {
     switch (data.status) {
       case 'started':
@@ -1942,8 +2029,11 @@ function initClipboard() {
 
   const btnOpenDest = $('btn-open-dest');
   if (btnOpenDest) {
-    btnOpenDest.addEventListener('click', () => {
-      window.api.openCompanionDestinationDir?.();
+    btnOpenDest.addEventListener('click', async () => {
+      const result = await window.api.openCompanionDestinationDir?.();
+      if (result && result.success === false) {
+        toast(result.error || 'Could not open the folder', 'err');
+      }
     });
   }
   const btnChangeDest = $('btn-change-dest');
@@ -2042,6 +2132,13 @@ function initClipboard() {
   const phoneList = $('phone-browser-list');
   if (phoneList) {
     phoneList.addEventListener('click', (event) => {
+      const open = event.target.closest('[data-open]');
+      if (open) {
+        const row = open.closest('.browse-row');
+        const name = row?.querySelector('.browse-name')?.textContent || 'the file';
+        previewPhoneFile(open.dataset.open, name);
+        return;
+      }
       const pull = event.target.closest('[data-pull]');
       if (pull) {
         const row = pull.closest('.browse-row');

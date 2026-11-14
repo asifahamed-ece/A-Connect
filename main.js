@@ -531,6 +531,21 @@ function setupServiceEvents() {
   });
 
   companion.on('file-transfer-done', (data) => {
+    // A preview is opened, not announced: the user asked to look at the file,
+    // and a "saved to Downloads" notification about a file they did not ask
+    // to keep would be wrong.
+    if (data.forViewing) {
+      sendToRenderer('event:transfer-progress', {
+        status: 'completed',
+        type: 'view',
+        id: data.id,
+        filename: data.name,
+        targetPath: data.path,
+      });
+      openLocalFile(data.path, data.name);
+      return;
+    }
+
     sendToRenderer('event:transfer-progress', {
       status: 'completed',
       type: 'pull',
@@ -542,6 +557,42 @@ function setupServiceEvents() {
       execFile('notify-send', ['-a', 'A+ Connect', 'File Received', `${data.name} saved to Downloads`]);
     } catch {}
   });
+
+  companion.on('file-transfer-error', (data) => {
+    // The phone said why it could not send the file. Passing that on is the
+    // difference between "nothing happened" and a message the user can act on.
+    sendToRenderer('event:transfer-progress', {
+      status: 'failed',
+      type: 'pull',
+      id: data.id,
+      filename: data.name,
+      error: data.error,
+    });
+    sendToRenderer('event:toast', { message: `The phone could not send ${data.name}: ${data.error}`, kind: 'err' });
+  });
+}
+
+/**
+ * Opens a file with whatever the desktop uses for that kind of file.
+ *
+ * `openPath` resolves with the reason when it fails, so the promise is
+ * awaited: a folder that will not open has to say so rather than look like a
+ * button that does nothing.
+ */
+async function openLocalFile(filePath, name = '') {
+  const { shell } = require('electron');
+  try {
+    const failure = await shell.openPath(filePath);
+    if (failure) {
+      sendToRenderer('event:toast', {
+        message: `Could not open ${name || path.basename(filePath)}: ${failure}`,
+        kind: 'err',
+      });
+    }
+    return { success: !failure, error: failure || null };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 }
 
 // IPC Handlers
@@ -696,6 +747,14 @@ function setupIpcHandlers() {
     companion.requestFileSearch(query, { fresh: fresh === true })
   );
   ipcMain.handle('companion:downloadFile', async (_, path) => companion.requestFileSend(path));
+
+  // The eye button: fetch the file and open it with whatever the desktop uses
+  // for that kind of file. Nothing is kept - it is cached, opened, and left
+  // for the cache to age out.
+  ipcMain.handle('companion:openFile', async (_, path) => companion.requestFileSend(path, { open: true }));
+
+  // Opening a local file the renderer already has (after an ADB pull).
+  ipcMain.handle('local:openFile', async (_, filePath) => openLocalFile(filePath));
   // Screen mirroring. The picture travels on its own socket; these two calls
   // are the whole of what the renderer can ask for.
   ipcMain.handle('mirror:start', async () => startMirror());
@@ -735,11 +794,21 @@ function setupIpcHandlers() {
   });
   ipcMain.handle('companion:openDestinationDir', async () => {
     const { shell } = require('electron');
-    if (fs.existsSync(companion.destinationDir)) {
-      shell.openPath(companion.destinationDir);
-      return true;
+    const dir = companion.destinationDir;
+    try {
+      // Created if it is not there yet: a fresh install has no
+      // Downloads/A+Connect, and a button that quietly does nothing because
+      // the folder does not exist looks exactly like a broken button.
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      return { success: false, error: `Could not create ${dir}: ${e.message}` };
     }
-    return false;
+    // openPath resolves with an empty string when it worked and with the
+    // reason when it did not, so the promise has to be awaited - otherwise a
+    // failure is indistinguishable from a success.
+    const failure = await shell.openPath(dir);
+    if (failure) return { success: false, error: failure };
+    return { success: true };
   });
 
   ipcMain.handle('ui:confirm', async (_, options = {}) => {

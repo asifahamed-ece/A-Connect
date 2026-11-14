@@ -458,6 +458,18 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 }
 .notif-message { font-size: 13px; color: var(--text-2); margin-top: 2px; overflow-wrap: anywhere; }
 
+/* The two sections of the notification list. Ongoing ones are the phone's
+   persistent cards; Recent is everything that arrived and can be swiped away. */
+.list-section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--text-3); font-weight: 650;
+  padding: var(--s-3) var(--s-1) var(--s-1);
+}
+.list-section-title:first-child { padding-top: 0; }
+/* Inset, not a border: a border would shift the row's contents by two pixels
+   and every ongoing notification would sit slightly out of line. */
+.notif.ongoing { box-shadow: inset 2px 0 0 var(--brand); }
+
 .bar {
   height: 4px; border-radius: 2px;
   background: var(--border);
