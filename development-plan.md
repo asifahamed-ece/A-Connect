@@ -1,5 +1,10 @@
 # A+ Connect - Linux O+ Connect Alternative Development Plan
 
+> **Historical — not implemented.** This document describes an early,
+> aspirational design (a Rust transport, a Qt6/Kirigami UI, a D-Bus service, and
+> the reverse-engineered "Panta" protocol). None of it was built. The shipped app
+> is Electron — see [`README.md`](README.md). Kept for reference only.
+
 ## Project Overview
 
 **Goal:** Create a Linux alternative to O+ Connect (OPPO PantaConnect) with native KDE/Plasma integration for file transfer, screen mirroring, notification sync, and clipboard sharing with OPPO Reno 14 5G.

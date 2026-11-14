@@ -1,5 +1,10 @@
 # A+ Connect - Panta Protocol Specifications
 
+> **Historical — not implemented.** This document describes an early,
+> aspirational design (a Rust transport, a Qt6/Kirigami UI, a D-Bus service, and
+> the reverse-engineered "Panta" protocol). None of it was built. The shipped app
+> is Electron — see [`README.md`](README.md). Kept for reference only.
+
 ## Protocol Overview
 
 The Panta protocol (also known as O+ Connect, Multi-Screen Connect, or OPPO PantaConnect) is a custom binary framing protocol developed by OPPO for cross-device connectivity. This document details the protocol structure based on reverse engineering of OPPO binaries.

@@ -1,5 +1,10 @@
 # A+ Connect - Implementation Roadmap
 
+> **Historical — not implemented.** This document describes an early,
+> aspirational design (a Rust transport, a Qt6/Kirigami UI, a D-Bus service, and
+> the reverse-engineered "Panta" protocol). None of it was built. The shipped app
+> is Electron — see [`README.md`](README.md). Kept for reference only.
+
 ## Overview
 
 This document outlines the detailed implementation plan for A+ Connect, a Linux alternative to OPPO's O+ Connect. The roadmap is organized by phases, with specific milestones, deliverables, and estimated timelines.

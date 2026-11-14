@@ -1,5 +1,10 @@
 # A+ Connect - Linux O+ Connect Alternative
 
+> **Historical — not implemented.** This document describes an early,
+> aspirational design (a Rust transport, a Qt6/Kirigami UI, a D-Bus service, and
+> the reverse-engineered "Panta" protocol). None of it was built. The shipped app
+> is Electron — see [`README.md`](README.md). Kept for reference only.
+
 ## Project Documentation
 
 This document serves as the comprehensive reference guide for the A+ Connect project, providing detailed information about architecture, development, deployment, and maintenance.

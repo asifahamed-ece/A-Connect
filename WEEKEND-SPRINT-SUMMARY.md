@@ -1,5 +1,9 @@
 # A+ Connect - Weekend Sprint Summary (Day 1 Complete)
 
+> **Historical snapshot (2026-11-10).** This records one day's debugging notes,
+> not the current state. See [`README.md`](README.md) for what the app does
+> today.
+
 ## Issues Identified & Fixed
 
 ### 1. ✅ File Transfer "Silent Success" Bug
