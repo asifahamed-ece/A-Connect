@@ -289,14 +289,22 @@ object FeaturePayloads {
 
     // ---- File hash: preview cache deduplication ----
 
-    fun fileHash(path: String, sha256: String, size: Long): JSONObject = JSONObject()
-        .put("type", Protocol.TYPE_FILE_HASH)
-        .put("path", path)
-        .put("sha256", sha256)
-        .put("size", size)
+    fun fileHash(path: String, sha256: String, size: Long, id: String = ""): JSONObject {
+        val payload = JSONObject()
+            .put("type", Protocol.TYPE_FILE_HASH)
+            .put("path", path)
+            .put("sha256", sha256)
+            .put("size", size)
+        if (id.isNotEmpty()) payload.put("id", id)
+        return payload
+    }
 
-    fun fileHashError(path: String, error: String): JSONObject = JSONObject()
-        .put("type", Protocol.TYPE_FILE_HASH)
-        .put("path", path)
-        .put("error", error)
+    fun fileHashError(path: String, error: String, id: String = ""): JSONObject {
+        val payload = JSONObject()
+            .put("type", Protocol.TYPE_FILE_HASH)
+            .put("path", path)
+            .put("error", error)
+        if (id.isNotEmpty()) payload.put("id", id)
+        return payload
+    }
 }

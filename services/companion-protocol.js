@@ -632,18 +632,21 @@ function parseDeviceInfo(payload) {
  * Asks the phone for a file's SHA256, so the desktop can check its cache
  * before downloading.
  */
-function buildFileHashRequest(path) {
-  return { type: TYPES.FILE_HASH_REQUEST, path };
+function buildFileHashRequest(path, id) {
+  const payload = { type: TYPES.FILE_HASH_REQUEST, path };
+  if (id) payload.id = id;
+  return payload;
 }
 
 function parseFileHashRequest(payload) {
   if (!payload || payload.type !== TYPES.FILE_HASH_REQUEST) return null;
-  return { path: payload.path || '' };
+  return { path: payload.path || '', id: payload.id || '' };
 }
 
 /** The phone's answer: the hash, or an error. */
-function buildFileHash(path, sha256, size, error) {
+function buildFileHash(path, sha256, size, error, id) {
   const payload = { type: TYPES.FILE_HASH, path };
+  if (id) payload.id = id;
   if (error) payload.error = error;
   else {
     payload.sha256 = sha256;
@@ -654,7 +657,7 @@ function buildFileHash(path, sha256, size, error) {
 
 function parseFileHash(payload) {
   if (!payload || payload.type !== TYPES.FILE_HASH) return null;
-  const result = { path: payload.path || '' };
+  const result = { path: payload.path || '', id: payload.id || '' };
   if (payload.error) result.error = payload.error;
   else {
     result.sha256 = payload.sha256 || '';

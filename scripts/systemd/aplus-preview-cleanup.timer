@@ -1,0 +1,10 @@
+[Unit]
+Description=Check A+ Connect previews for expiry every day
+
+[Timer]
+# Start after boot, then check daily so files are swept soon after day 30.
+OnBootSec=1h
+OnUnitActiveSec=1d
+
+[Install]
+WantedBy=timers.target

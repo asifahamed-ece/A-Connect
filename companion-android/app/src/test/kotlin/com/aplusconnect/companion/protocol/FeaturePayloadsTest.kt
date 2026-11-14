@@ -157,4 +157,21 @@ class FeaturePayloadsTest {
         assertEquals("128 GB", parsed.storageTotal)
         assertEquals("CPH2737", parsed.model)
     }
+
+    @Test
+    fun `a file hash answer carries the hash and echoes the request id`() {
+        val answer = FeaturePayloads.fileHash("doc:trace", "ab12", 4096, "hash-7")
+        assertEquals(Protocol.TYPE_FILE_HASH, answer.getString("type"))
+        assertEquals("doc:trace", answer.getString("path"))
+        assertEquals("ab12", answer.getString("sha256"))
+        assertEquals(4096L, answer.getLong("size"))
+        // The id is what lets the desktop match the answer to the click that
+        // asked for it; without it two previews of the same file collide.
+        assertEquals("hash-7", answer.getString("id"))
+
+        val failure = FeaturePayloads.fileHashError("doc:gone", "not readable", "hash-8")
+        assertEquals("not readable", failure.getString("error"))
+        assertEquals("hash-8", failure.getString("id"))
+        assertEquals(false, failure.has("sha256"))
+    }
 }

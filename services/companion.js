@@ -10,9 +10,18 @@ const crypto = require('crypto');
 const protocol = require('./companion-protocol');
 const handshake = require('./companion-handshake');
 const { ensureCertificate } = require('./companion-cert');
+const { PreviewCache, isSha256 } = require('./preview-cache');
 
 const DEFAULT_PORT = 24443;
 const PAIRING_CODE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * How long to wait for the phone's hash before giving up and just downloading.
+ *
+ * A phone that is busy hashing a large file, or an older build that does not
+ * answer at all, must not leave the user staring at nothing.
+ */
+const HASH_TIMEOUT_MS = 8 * 1000;
 
 // A link that carries no traffic is dropped by the network (Wi-Fi sleep,
 // NAT timeouts). The protocol has PING and PONG for exactly this: the
@@ -159,6 +168,16 @@ class CompanionService extends EventEmitter {
      * Null until the first `device-info` arrives.
      */
     this.deviceInfo = null;
+
+    /**
+     * The preview cache: files the user has glanced at, keyed by their SHA256.
+     * A second look at the same bytes opens the cached copy instead of pulling
+     * it across the network again.
+     */
+    this.previewCache = options.previewCache || new PreviewCache();
+
+    /** Preview requests waiting on the phone's hash, by the id we gave them. */
+    this.pendingHashes = new Map();
 
     this.loadSettings();
     this.loadPairedDevices();
@@ -588,6 +607,7 @@ class CompanionService extends EventEmitter {
     if (routeNotification(this, message)) return;
     if (routeMedia(this, message)) return;
     if (routeDeviceInfo(this, message)) return;
+    if (routeFileHash(this, message)) return;
     if (routeMirror(this, message)) return;
 
     if (message.type === protocol.TYPES.PING) {      socket.write(
@@ -630,44 +650,54 @@ class CompanionService extends EventEmitter {
     const request = this.fileRequests.get(id);
     this.fileRequests.delete(id);
     const forViewing = Boolean(request?.open);
+    const contentHash = crypto.createHash('sha256');
 
     // A preview is cached, not saved: the user asked to look at the file, not
     // to keep it, and dropping every preview into Downloads would turn
-    // "open" into "download" behind their back.
-    const destDir = forViewing
-      ? path.join(os.homedir(), '.cache', 'a-plus-connect', 'preview')
-      : this.destinationDir || path.join(os.homedir(), 'Downloads', 'A+Connect');
-    if (!fs.existsSync(destDir)) {
-      try { fs.mkdirSync(destDir, { recursive: true }); } catch {}
-    }
+    // "open" into "download" behind their back. The cache keys by hash, so the
+    // same file looked at twice is one copy.
+    let destDir;
+    let targetPath;
+    if (forViewing && this.previewCache) {
+      const reserved = this.previewCache.reserve(null, name);
+      targetPath = reserved.targetPath;
+      destDir = path.dirname(targetPath);
+    } else {
+      destDir = this.destinationDir || path.join(os.homedir(), 'Downloads', 'A+Connect');
+      if (!fs.existsSync(destDir)) {
+        try { fs.mkdirSync(destDir, { recursive: true }); } catch {}
+      }
 
-    let safeName = path.basename(name || 'transfer').replace(/[^a-zA-Z0-9._-]/g, '_');
-    let targetPath = path.join(destDir, safeName);
-    let counter = 1;
-    const ext = path.extname(safeName);
-    const base = path.basename(safeName, ext);
-    while (fs.existsSync(targetPath)) {
-      safeName = `${base} (${counter++})${ext}`;
+      let safeName = path.basename(name || 'transfer').replace(/[^a-zA-Z0-9._-]/g, '_');
       targetPath = path.join(destDir, safeName);
+      let counter = 1;
+      const ext = path.extname(safeName);
+      const base = path.basename(safeName, ext);
+      while (fs.existsSync(targetPath)) {
+        safeName = `${base} (${counter++})${ext}`;
+        targetPath = path.join(destDir, safeName);
+      }
     }
 
     const stream = fs.createWriteStream(targetPath);
     if (!socket.activeTransfers) socket.activeTransfers = new Map();
     socket.activeTransfers.set(id, {
       id,
-      name: safeName,
+      name: path.basename(targetPath),
       targetPath,
       size,
       received: 0,
       stream,
       forViewing,
+      contentHash: forViewing ? contentHash : null,
+      phonePath: request?.phonePath || '',
       startedAt: Date.now(),
     });
 
-    console.log(`[companion] incoming file from ${socket.deviceName}: ${safeName} (${size} bytes)`);
+    console.log(`[companion] incoming file from ${socket.deviceName}: ${path.basename(targetPath)} (${size} bytes)`);
     this.emit('file-transfer-start', {
       id,
-      name: safeName,
+      name: path.basename(targetPath),
       size,
       forViewing,
       deviceName: socket.deviceName
@@ -682,6 +712,7 @@ class CompanionService extends EventEmitter {
     try {
       const buffer = Buffer.from(data, 'base64');
       transfer.stream.write(buffer);
+      transfer.contentHash?.update(buffer);
       transfer.received += buffer.length;
       this.emit('file-transfer-progress', {
         id,
@@ -700,6 +731,20 @@ class CompanionService extends EventEmitter {
     if (!transfer) return;
 
     transfer.stream.end(() => {
+      // A finished preview is recorded under the bytes actually received; the
+      // phone's earlier hash may be stale if the file changed during transfer.
+      if (transfer.forViewing && this.previewCache) {
+        const actualHash = transfer.contentHash?.digest('hex');
+        if (actualHash) {
+          this.previewCache.commit(actualHash, {
+            name: transfer.name,
+            size: transfer.received,
+            phonePath: transfer.phonePath || '',
+            sourcePath: transfer.targetPath,
+          });
+          transfer.targetPath = this.previewCache.pathFor(actualHash, transfer.name);
+        }
+      }
       console.log(`[companion] file saved successfully to ${transfer.targetPath}`);
       socket.activeTransfers.delete(id);
       this.emit('file-transfer-done', {
@@ -708,6 +753,7 @@ class CompanionService extends EventEmitter {
         path: transfer.targetPath,
         size: transfer.received,
         forViewing: transfer.forViewing,
+        cached: false,
         deviceName: socket.deviceName,
       });
     });
@@ -775,6 +821,13 @@ class CompanionService extends EventEmitter {
    */
   requestFileSend(path = '', options = {}) {
     const open = options.open === true;
+
+    // A preview asks the phone for the file's hash first, so a file the user
+    // already looked at opens from the cache instead of being pulled again.
+    if (open && this.previewCache && !options.skipCache) {
+      return this.requestPreviewHash(path);
+    }
+
     // The request carries its own id so the transfer that comes back can be
     // matched to it. Without that, "which of these two files was the one the
     // user asked to preview" has no answer.
@@ -784,7 +837,11 @@ class CompanionService extends EventEmitter {
       open,
     });
 
-    this.fileRequests.set(requestId, { open, requestedAt: Date.now() });
+    this.fileRequests.set(requestId, {
+      open,
+      phonePath: path,
+      requestedAt: Date.now(),
+    });
     // Requests that never come back must not pile up for ever.
     setTimeout(() => this.fileRequests.delete(requestId), 5 * 60 * 1000).unref?.();
 
@@ -804,6 +861,46 @@ class CompanionService extends EventEmitter {
       return { success: false, error: 'The phone is not connected' };
     }
     return { success: true, id: requestId, open };
+  }
+
+  /**
+   * Asks the phone for a file's hash, to decide hit or miss for a preview.
+   *
+   * The phone's answer is handled in `routeFileHash`: a hit opens the cached
+   * copy, a miss downloads. A phone that stays silent past the timeout is
+   * downloaded from anyway - the cache is an optimisation, never a gate.
+   */
+  requestPreviewHash(path) {
+    const hashId = `hash-${crypto.randomUUID().slice(0, 8)}`;
+    const payload = protocol.buildFileHashRequest(path, hashId);
+
+    const timer = setTimeout(() => {
+      this.pendingHashes.delete(hashId);
+      // No answer in time: fall through to a preview download. The receiver
+      // hashes the bytes as they arrive, so this path is still cacheable.
+      this.requestFileSend(path, { open: true, skipCache: true });
+    }, HASH_TIMEOUT_MS);
+    timer.unref?.();
+
+    this.pendingHashes.set(hashId, { path, timer, requestedAt: Date.now() });
+
+    const sent = sendToPhones(
+      this,
+      protocol.encode({
+        version: protocol.PROTOCOL_VERSION,
+        type: protocol.TYPES.FILE_HASH_REQUEST,
+        id: hashId,
+        ts: Date.now(),
+        payload,
+      }),
+      'a file hash request'
+    );
+    if (sent === 0) {
+      clearTimeout(timer);
+      this.pendingHashes.delete(hashId);
+      return { success: false, error: 'The phone is not connected' };
+    }
+    return { success: true, id: hashId, open: true, checking: true };
   }
 
   /** Answers a listing the user asked for, and orders it the way the UI draws it. */
@@ -1136,6 +1233,68 @@ function routeDeviceInfo(service, message) {
 }
 
 CompanionService.routeDeviceInfo = routeDeviceInfo;
+
+/**
+ * Routes the phone's answer to a hash request.
+ *
+ * A hit opens the cached copy and reports the transfer as done without any
+ * bytes crossing the wire. A miss, or an error, falls through to an ordinary
+ * preview download. Exported so a check can drive it without a socket.
+ */
+function routeFileHash(service, message) {
+  if (message.type !== protocol.TYPES.FILE_HASH) return false;
+  const answer = protocol.parseFileHash(message.payload);
+  if (!answer) return false;
+
+  // Use the correlation id whenever the peer supplies one. Path fallback is
+  // only for legacy peers that omit ids; it must not reinterpret a stale id.
+  let pendingKey = answer.id && service.pendingHashes.has(answer.id) ? answer.id : null;
+  if (!pendingKey && !answer.id) {
+    for (const [key, value] of service.pendingHashes) {
+      if (value.path === answer.path) {
+        pendingKey = key;
+        break;
+      }
+    }
+  }
+  if (!pendingKey) {
+    // A late answer for a request we already gave up on. Nothing to do.
+    return true;
+  }
+
+  const pending = service.pendingHashes.get(pendingKey);
+  if (pending.timer) clearTimeout(pending.timer);
+  if (!pending.timedOut) service.pendingHashes.delete(pendingKey);
+
+  if (!answer.error && isSha256(answer.sha256)) {
+    const hit = service.previewCache.lookup(answer.sha256);
+    if (hit) {
+      // The bytes are already here. Report the same event a finished download
+      // would, so the desktop opens it through one path and the user sees no
+      // difference except that it was instant.
+      service.emit('file-transfer-done', {
+        id: `cache-${answer.sha256.slice(0, 8)}`,
+        name: hit.name,
+        path: hit.path,
+        size: hit.size,
+        forViewing: true,
+        cached: true,
+        deviceName: '',
+      });
+      return true;
+    }
+    // Miss: download; the desktop hashes the received bytes before committing.
+    service.requestFileSend(answer.path, { open: true, skipCache: true });
+    return true;
+  }
+
+  // The phone could not hash it. Download anyway; the transfer's own error
+  // reporting will say what went wrong if it cannot be read either.
+  service.requestFileSend(answer.path, { open: true, skipCache: true });
+  return true;
+}
+
+CompanionService.routeFileHash = routeFileHash;
 
 /**
  * Routes one media-state message to the service's events.

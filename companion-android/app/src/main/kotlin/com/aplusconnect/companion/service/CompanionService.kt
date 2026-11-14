@@ -23,6 +23,7 @@ import com.aplusconnect.companion.clip.ClipboardReadActivity
 import com.aplusconnect.companion.clip.ClipboardBridgeReceiver
 import com.aplusconnect.companion.clip.KeyboardBridge
 import com.aplusconnect.companion.data.CompanionSettings
+import com.aplusconnect.companion.file.FileHash
 import com.aplusconnect.companion.file.PhoneFileBrowser
 import com.aplusconnect.companion.file.StorageSearch
 import com.aplusconnect.companion.mirror.ScreenMirror
@@ -483,6 +484,11 @@ class CompanionService : Service() {
             onFileSearchRequest = { query, fresh ->
                 searchThread.execute { answerFileSearch(query, fresh) }
             },
+            onFileHashRequest = { path, requestId ->
+                // Hashing can walk a whole large file, so it runs on the file
+                // thread rather than the reader thread that must stay free.
+                fileThread.execute { answerFileHash(path, requestId) }
+            },
             onMirrorStart = { request ->
                 // Off the reader thread: starting an encoder is a binder call
                 // that must not delay the answers the computer is waiting for.
@@ -781,12 +787,13 @@ class CompanionService : Service() {
         val c = client
         if (c == null || !c.isReady) return
 
-        val entries = fileBrowser.list(path) ?: run {
+        val entries = fileBrowser.list(path)
+        val safeEntries = entries ?: run {
             Log.i(TAG, "nothing to list: no access, or the folder cannot be read")
             emptyList()
         }
 
-        if (!c.sendMessage(Protocol.TYPE_FILE_LIST, FeaturePayloads.fileList(path, entries))) {
+        if (!c.sendMessage(Protocol.TYPE_FILE_LIST, FeaturePayloads.fileList(path, safeEntries))) {
             Log.w(TAG, "could not send the file list")
         }
     }
@@ -1188,12 +1195,35 @@ class CompanionService : Service() {
     }
 
     /**
-     * Sends one file the computer asked for.
+     * Answers the computer's request for a file's SHA256.
      *
-     * The streaming is the existing phone-to-computer transfer, so both
-     * directions keep using the same file-start/chunk/done messages and the
-     * computer needs no new file code.
+     * The desktop checks its preview cache against this before downloading, so
+     * a file the user looked at before opens instantly instead of being pulled
+     * again. A file that cannot be read answers with the reason.
      */
+    private fun answerFileHash(path: String, requestId: String) {
+        val file = fileBrowser.resolve(path)
+        if (file == null || !file.isFile) {
+            sendThread.execute {
+                client?.sendFileHashError(path, "that file is not on the phone any more", requestId)
+            }
+            return
+        }
+
+        val digest = FileHash.sha256Of(file)
+        if (digest == null) {
+            Log.w(TAG, "could not hash ${file.name}")
+            sendThread.execute {
+                client?.sendFileHashError(path, "the phone could not read that file", requestId)
+            }
+            return
+        }
+
+        sendThread.execute {
+            client?.sendFileHash(path, digest, file.length(), requestId)
+        }
+    }
+
     private fun answerFileSend(path: String, requestId: String) {
         // The transfer carries the request's own id, so the desktop can tie
         // the file that arrives to the click that asked for it.

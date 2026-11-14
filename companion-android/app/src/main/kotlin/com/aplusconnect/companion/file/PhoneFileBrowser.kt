@@ -79,7 +79,10 @@ class PhoneFileBrowser(private val context: Context) {
      * the root. One level per call, so a huge folder cannot flood the channel.
      */
     fun list(path: String): List<FileEntry>? {
-        if (!isGranted()) return null
+        if (!isGranted()) {
+            Log.i(TAG, "list $path: all-files access is not granted (isExternalStorageManager=false)")
+            return null
+        }
         val root = root() ?: return null
         val dir = within(root, path) ?: run {
             Log.w(TAG, "the computer asked for a folder outside the phone's storage")

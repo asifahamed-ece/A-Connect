@@ -23,6 +23,7 @@ const { EventEmitter } = require('events');
 
 const protocol = require('../services/companion-protocol');
 const CompanionService = require('../services/companion');
+const { PreviewCache } = require('../services/preview-cache');
 
 /** A service with one connected phone that records what was written to it. */
 function connectedService() {
@@ -40,6 +41,10 @@ function connectedService() {
   // The service remembers which file request is a preview and which is a
   // download; a fake without it cannot answer requestFileSend at all.
   service.fileRequests = new Map();
+  // requestFileSend hands a preview to the hash-first flow, so the fake needs
+  // that method too, not only the one the check calls by name.
+  service.requestPreviewHash = CompanionService.prototype.requestPreviewHash;
+  service.requestFileSend = CompanionService.prototype.requestFileSend;
   service.written = written;
   return service;
 }
@@ -297,6 +302,10 @@ async function checkSendRequest() {
 async function checkPreviewGoesToTheCacheNotTheDownloads() {
   const service = connectedService();
   service.destinationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aplus-dl-'));
+  // The preview cache is what decides where a viewed file lands, so the fake
+  // service needs a real one pointed at a temp folder.
+  service.previewCache = new PreviewCache({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'aplus-pv-')) });
+  service.pendingHashes = new Map();
   const socket = service.clients[0];
   socket.activeTransfers = new Map();
 
@@ -314,10 +323,30 @@ async function checkPreviewGoesToTheCacheNotTheDownloads() {
   );
   assert.strictEqual(kept.forViewing, false, 'a download was marked as a preview');
 
+  // A preview asks for the hash first, so a file already in the cache never
+  // crosses the wire again.
   const view = CompanionService.prototype.requestFileSend.call(service, 'doc:2', { open: true });
   assert.strictEqual(view.open, true, 'the preview request did not report itself as a preview');
+  const hashFrame = protocol.decode(service.written.at(-1));
+  assert.strictEqual(
+    hashFrame.type,
+    protocol.TYPES.FILE_HASH_REQUEST,
+    'a preview did not start by asking for the file hash'
+  );
+  assert.strictEqual(hashFrame.payload.path, 'doc:2', 'the hash request asked for the wrong file');
+
+  // The phone says the bytes are not cached yet, so the download is requested.
+  const sha = 'e'.repeat(64);
+  CompanionService.routeFileHash(service, {
+    type: protocol.TYPES.FILE_HASH,
+    id: 'h',
+    ts: Date.now(),
+    payload: protocol.buildFileHash('doc:2', sha, 3, undefined, hashFrame.payload.id),
+  });
   const viewFrame = protocol.decode(service.written.at(-1));
+  assert.strictEqual(viewFrame.type, protocol.TYPES.FILE_SEND_REQUEST, 'a miss did not download');
   assert.strictEqual(viewFrame.payload.open, true, 'a preview did not say it was for viewing');
+
   CompanionService.prototype.handleFileStart.call(service, socket, {
     id: viewFrame.payload.id,
     name: 'look.txt',
@@ -328,7 +357,12 @@ async function checkPreviewGoesToTheCacheNotTheDownloads() {
     !viewed.targetPath.startsWith(service.destinationDir),
     'a preview was saved into the user\'s downloads folder'
   );
+  assert.ok(
+    viewed.targetPath.startsWith(service.previewCache.dir),
+    'a preview was not saved into the preview cache'
+  );
   assert.strictEqual(viewed.forViewing, true, 'a preview was not marked as one');
+  assert.ok(viewed.contentHash, 'a preview did not prepare to hash the received bytes');
 }
 
 /** A phone that cannot send the file says so, instead of going quiet. */

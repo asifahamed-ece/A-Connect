@@ -1,0 +1,9 @@
+[Unit]
+Description=A+ Connect: clear previews inactive for 30 days
+
+[Service]
+Type=oneshot
+# Where the previews live and how long an untouched one is kept. The sweep is
+# keyed on the last access, so a file opened again gets a fresh window.
+Environment=APLUS_PREVIEW_DAYS=30
+ExecStart="__NODE__" "__PROJECT__/scripts/preview-cleanup.js" --days 30

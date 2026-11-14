@@ -2,6 +2,7 @@ package com.aplusconnect.companion.net
 
 import android.util.Log
 import com.aplusconnect.companion.protocol.ClipboardPayloads
+import com.aplusconnect.companion.protocol.FeaturePayloads
 import com.aplusconnect.companion.protocol.FrameCodec
 import com.aplusconnect.companion.protocol.Handshake
 import com.aplusconnect.companion.protocol.HandshakeResult
@@ -49,6 +50,7 @@ class CompanionClient(
     private val onFileListRequest: (path: String) -> Unit = { },
     private val onFileSendRequest: (path: String, requestId: String) -> Unit = { _, _ -> },
     private val onFileSearchRequest: (query: String, fresh: Boolean) -> Unit = { _, _ -> },
+    private val onFileHashRequest: (path: String, requestId: String) -> Unit = { _, _ -> },
     private val onMirrorStart: (request: JSONObject) -> Unit = { },
     private val onMirrorStop: () -> Unit = { },
 ) {
@@ -209,6 +211,20 @@ class CompanionClient(
             false
         }
     }
+
+    /**
+     * The answer to a hash request: the file's SHA256 and size.
+     *
+     * The desktop uses it to decide whether it already has a cached copy of the
+     * file the user asked to preview, so a second look does not pull the bytes
+     * again.
+     */
+    fun sendFileHash(path: String, sha256: String, size: Long, id: String = ""): Boolean =
+        sendMessage(Protocol.TYPE_FILE_HASH, FeaturePayloads.fileHash(path, sha256, size, id))
+
+    /** The hash could not be computed; say why rather than staying silent. */
+    fun sendFileHashError(path: String, error: String, id: String = ""): Boolean =
+        sendMessage(Protocol.TYPE_FILE_HASH, FeaturePayloads.fileHashError(path, error, id))
 
     fun sendFileStart(id: String, name: String, size: Long, mime: String): Boolean {
         if (!ready) return false
@@ -487,6 +503,20 @@ class CompanionClient(
                         // A search over the whole storage is the slowest thing
                         // this channel does; it must never cost the connection.
                         Log.w(TAG, "the search request failed: ${e.message}")
+                    }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_HASH_REQUEST) {
+                    try {
+                        // Hashing a large file takes a while; it runs off the
+                        // reader thread in the service, like the other file work.
+                        onFileHashRequest(
+                            message.payload.optString("path"),
+                            message.payload.optString("id"),
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "the hash request failed: ${e.message}")
                     }
                     continue
                 }
