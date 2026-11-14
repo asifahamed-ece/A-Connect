@@ -224,6 +224,8 @@ DESKTOP - services/ and scripts/
   scripts/check-mirror.js        the video socket over real TLS
   scripts/check-handshake.js     the two pairing rules
   scripts/check-kill-switch.js   the switch, the port, and the reason
+  scripts/check-without-adb.js   the preconditions of the real test
+  scripts/verify-without-adb.md  the walkthrough itself
   scripts/check-mpris.js         the MPRIS mapping
   scripts/check-companion-media.js       media routing and commands
   scripts/check-companion-notifications.js  notification routing
@@ -264,6 +266,22 @@ unplugged, copy something on the phone and start a mirror. Everything
 above was verified with the cable in, where a copy could still have
 taken the ADB path and adb was used to install, read logs and tap the
 consent dialog.
+
+====================================================================
+PROVING IT WITHOUT ADB
+====================================================================
+  Everything above was built with a cable plugged in, where a clipboard copy
+  could still have taken the ADB path by accident. The walkthrough that
+  settles it is scripts/verify-without-adb.md, and the preconditions it needs
+  are checked by scripts/check-without-adb.js:
+    - no phone attached over ADB at all (any state counts, including
+      "unauthorized" - that is still a phone on the cable)
+    - the companion port serves the certificate the phone has pinned
+    - the companion switch is on
+    - the phone is still paired, so the run tests the link and not the pairing
+  The phone's side still needs a human: the camera permission, the default
+  keyboard role, notification access and all-files access are all granted by
+  hand, by design.
 
 ====================================================================
 KNOWN GOTCHAS
@@ -309,6 +327,7 @@ HOW TO VERIFY IT RIGHT NOW
   node scripts/check-mirror.js                # the video socket, real TLS
   node scripts/check-handshake.js             # pairing rules, both sockets
   node scripts/check-kill-switch.js           # the kill switch
+  node scripts/check-without-adb.js           # is ADB out of the picture?
   node scripts/check-mpris.js                 # the MPRIS mapping
   node scripts/check-companion-media.js       # media routing
   node scripts/check-companion-notifications.js
