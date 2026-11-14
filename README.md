@@ -131,6 +131,37 @@ The USB setup script eliminates the need to:
 
 Just plug USB once, run the script, unplug, and you're wireless forever.
 
+### The companion app: no USB, no developer options
+
+The USB setup above is the original path, and it needs developer options. There
+is now a second path that does not: a small app on the phone, and a TLS
+connection between it and this app over plain Wi-Fi.
+
+What it does, with no cable and no debugging port on the phone:
+
+- **Clipboard, both ways**, with no tap on the phone. This needs the
+  *A+ Connect Keyboard* to be the phone's default keyboard, because Android
+  gives clipboard access to the default keyboard and nothing else.
+- **Notifications**, mirrored, with their arrival times, dismissible from here.
+- **Playback control**: the phone's music shows up as an MPRIS player, so your
+  desktop's shell can pause and seek it.
+- **The phone's files**: browse the whole storage and search it, read-only.
+- **Screen mirroring**, view-only, on its own encrypted socket.
+- **A kill switch** on each device: off means dormant, and the choice is
+  remembered.
+
+To try it:
+
+```bash
+npm start                              # the desktop
+node scripts/check-without-adb.js      # are the preconditions met?
+```
+
+Then follow the walkthrough in
+[`scripts/verify-without-adb.md`](scripts/verify-without-adb.md), and read
+[`docs/companion/companion-status.md`](docs/companion/companion-status.md) for
+how each part works and what it cannot do.
+
 ### Connecting Your Device
 
 #### Option A: Wi-Fi Connection (Recommended)

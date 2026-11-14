@@ -46,8 +46,8 @@ pairs; deleting the certificate means pairing again.
 
 1. On the desktop: **Add a device** (the button in the device list).
    The modal opens on the **Pair by QR** tab, which is the point: the QR code
-   carries the address, the port and the fingerprint, so nothing is typed and
-   nothing is trusted by hand.
+   carries the address, the port, the one-time code and the certificate
+   fingerprint, so nothing is typed and nothing is trusted by hand.
 2. The panel shows a QR code, the six-digit code, and the computer's name and
    address.
 3. On the phone: **Scan pairing QR** (the first button in the connect dialog),
