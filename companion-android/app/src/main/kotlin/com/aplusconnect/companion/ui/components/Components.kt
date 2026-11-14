@@ -133,7 +133,7 @@ internal fun AplusCard(
     if (onClick != null) m = m.pressScale(source, 0.985f)
     m = m
         .clip(shape)
-        .background(c.surface)
+        .background(cardFill())
         .border(1.dp, c.divider, shape)
     if (glowColor != null) {
         m = m.drawWithContent {
@@ -554,7 +554,7 @@ internal fun StatTile(value: String, label: String, modifier: Modifier = Modifie
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(Radius.md))
-            .background(c.surfaceSunken)
+            .background(cardFill())
             .padding(horizontal = Space.s3, vertical = Space.s3)
             .semantics(mergeDescendants = true) { contentDescription = "$label: $value" },
         verticalArrangement = Arrangement.spacedBy(2.dp),

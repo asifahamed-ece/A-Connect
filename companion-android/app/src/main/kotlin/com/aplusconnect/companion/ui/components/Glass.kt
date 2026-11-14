@@ -50,6 +50,21 @@ internal fun Modifier.glassChrome(state: HazeState, overlay: Boolean = true): Mo
 }
 
 /**
+ * The fill for a card or a stat tile: translucent, so the ambient canvas reads
+ * through it the way the desktop's glass cards do.
+ *
+ * Blur is deliberately not used here. A card sits inside the scroll content,
+ * which Haze already treats as a blur source, so blurring the card would sample
+ * its own pixels; and one blur layer per card costs a lot of frames to soften a
+ * background that is already soft. "Reduce transparency" gives solid back.
+ */
+@Composable
+internal fun cardFill(): Color {
+    val c = AplusTheme.colors
+    return if (AplusTheme.reducedTransparency) c.surface else c.glassChrome
+}
+
+/**
  * The ambient canvas: the desktop's `.ambient` in Compose - four colour fields
  * in the same corners, then three orbs with real edges so the frosted bar has
  * something to blur rather than a smooth wash. It never moves.
@@ -88,10 +103,18 @@ internal fun AmbientCanvas(modifier: Modifier = Modifier, content: @Composable B
                 field(Offset(w * 0.78f, h * 0.96f), w * 0.48f, c.canvasD, 0.70f)
 
                 if (showOrbs) {
+                    // The desktop's orbs end in a hard rim because they sit
+                    // mostly off-screen. At phone scale the rim would cross the
+                    // cards and give away that the tint is not blurred, so here
+                    // they fade out instead.
                     fun orb(center: Offset, radius: Float, inner: Color, outer: Color) {
                         drawCircle(
                             brush = Brush.radialGradient(
-                                colorStops = arrayOf(0f to inner, 0.72f to outer, 1f to outer),
+                                colorStops = arrayOf(
+                                    0f to inner,
+                                    0.55f to outer,
+                                    1f to outer.copy(alpha = 0f),
+                                ),
                                 center = center,
                                 radius = radius,
                             ),
