@@ -463,7 +463,11 @@ function setupServiceEvents() {
   });
 
   companion.on('notification-dismissed', ({ id }) => {
-    notifications.removeById(id);
+    // The phone cleared it, so its bubble leaves the desktop drawer: the
+    // drawer mirrors what is still live on the phone. The app's own history
+    // keeps the row - the phone tidying its shade is not the user erasing
+    // what we recorded.
+    notifications.closeDesktop(id);
   });
 
   companion.on('media-state', (state) => {
@@ -702,10 +706,9 @@ function setupIpcHandlers() {
     return { success: true };
   });
   ipcMain.handle('notifications:dismiss', async (_, id) => {
-    // A notification that came from the phone has to be dismissed on the phone
-    // too, or it stays in the shade and comes straight back.
-    const entry = notifications.history.find((n) => n.id === id);
-    if (entry && entry.fromCompanion) companion.dismissNotification(id);
+    // Removing a row here is local. The desktop is read-only towards the
+    // phone: clearing our history must not clear the notification on the
+    // device, the same way looking at a file does not move it.
     return { success: notifications.dismiss(id) };
   });
 

@@ -4,16 +4,24 @@ const EventEmitter = require('events');
 
 const execFileAsync = promisify(execFile);
 
-// Packages whose notifications are noise in a mirroring UI.
-const IGNORED_PACKAGES = new Set([
-  'android',
-  'com.android.systemui',
-  'com.android.settings',
-  'com.android.providers.downloads',
-]);
-
-// Our own "file received" posts.
+// Our own "file received" posts. This is loop prevention, not package
+// filtering: every notification the phone shows is mirrored, the system's own
+// included, so nothing the user can see on the device goes missing here. Cards
+// that would be noisy - a hotspot counter, a charging battery - are kept out of
+// the desktop's popups by the ongoing rule instead, and still recorded.
 const IGNORED_TAGS = new Set(['aplus_connect']);
+
+/**
+ * The key one notification's desktop bubble is tracked under.
+ *
+ * The ADB path builds a key that carries the notification's timestamp, so the
+ * same notification re-posted is a different key there. `baseKey` is the part
+ * that stays put, and that is what a bubble has to be keyed by for an update to
+ * replace the bubble instead of adding another.
+ */
+function desktopKey(notif) {
+  return String(notif.baseKey || notif.key || notif.id || '');
+}
 
 /**
  * A+ Connect - Notification mirroring
@@ -38,6 +46,23 @@ class NotificationService extends EventEmitter {
     this.seen = new Map(); // notification key -> when we first saw it
     this.lastEmitted = new Map(); // pkg|id|tag -> last emit time (anti-spam)
     this.baselineDone = false;
+
+    /**
+     * The desktop's notification drawer.
+     *
+     * Created on first use so a check can inject a stand-in, and so the
+     * session bus is only touched when there is something to show.
+     */
+    this.desktopNotify = options.desktopNotify || null;
+  }
+
+  /** The drawer client, connected on first use. */
+  desktopNotifier() {
+    if (!this.desktopNotify) {
+      const { DesktopNotify } = require('./desktop-notify');
+      this.desktopNotify = new DesktopNotify();
+    }
+    return this.desktopNotify;
   }
 
   start(deviceId) {
@@ -115,7 +140,6 @@ class NotificationService extends EventEmitter {
       const tag = header.match(/\btag=(\S+)/)?.[1];
 
       if (!pkg || !idMatch) continue;
-      if (IGNORED_PACKAGES.has(pkg)) continue;
       if (tag && IGNORED_TAGS.has(tag)) continue;
 
       // Group summaries duplicate their children; skip them.
@@ -148,10 +172,28 @@ class NotificationService extends EventEmitter {
         message: this.clean(message),
         time: when ? new Date(when).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
         timestamp: when || Date.now(),
+        ongoing: this.isOngoing(block),
       });
     }
 
     return notifications;
+  }
+
+  /**
+   * Whether a dumped notification is one the phone keeps up.
+   *
+   * An ongoing card - a hotspot counter, a running download - is re-posted
+   * every time it changes, so it is shown in the app's list and kept out of
+   * the desktop's popups. The dump carries the flag either as a name or as the
+   * raw bit, so both spellings are accepted; anything unrecognised is treated
+   * as an ordinary notification.
+   */
+  isOngoing(block) {
+    if (/\bONGOING_EVENT\b/.test(block)) return true;
+    const flags = block.match(/flags=(0x[0-9a-fA-F]+)/)?.[1];
+    if (!flags) return false;
+    // Notification.FLAG_ONGOING_EVENT
+    return (parseInt(flags, 16) & 0x00000002) !== 0;
   }
 
   extractString(block, fieldPattern) {
@@ -235,22 +277,61 @@ class NotificationService extends EventEmitter {
 
     this.emit('notification-received', notif);
 
-    // A notification that changes on a timer (a download's progress, a
-    // stopwatch) updates its row without popping up again every second.
-    const last = this.lastEmitted.get(notif.key) ?? 0;
-    if (Date.now() - last < 2000) return;
-    this.lastEmitted.set(notif.key, Date.now());
+    // An update to a notification already on screen replaces its bubble, which
+    // is why the popup is no longer throttled: a second guard would only make
+    // the drawer show stale words for a moment, and there is nothing left to
+    // stack.
     this.sendDesktopNotification(notif);
   }
 
+  /**
+   * Shows one notification in the desktop's own drawer.
+   *
+   * An ongoing card - a hotspot counter, a running download, a media card - is
+   * not news on every tick. The phone re-posts it each time something changes,
+   * and a popup per tick buries every real message: so it never pops. It is
+   * still recorded and still updated in the app's own list, which is where a
+   * persistent card belongs.
+   */
   sendDesktopNotification(notif) {
-    const args = ['-a', 'A+ Connect', '-i', 'phone', '-u', 'normal'];
-    if (notif.title) args.push(notif.title);
-    if (notif.message) args.push(notif.message);
+    if (notif.ongoing) return;
 
-    execFile('notify-send', args, () => {
-      // notify-send is optional.
-    });
+    const key = desktopKey(notif);
+    const notifier = this.desktopNotifier();
+    // Fire and forget: a popup that fails must never hold up the history.
+    Promise.resolve(
+      notifier.notify(key, {
+        summary: notif.title || notif.app || 'Phone',
+        body: notif.message || notif.text || '',
+      })
+    ).catch(() => {});
+  }
+
+  /** Releases a bubble if one was posted for this entry. */
+  releaseBubble(entry) {
+    // An ongoing card never popped, so it has no bubble to release.
+    if (!entry || entry.ongoing) return;
+    const notifier = this.desktopNotify;
+    if (!notifier) return;
+    try {
+      Promise.resolve(notifier.close(desktopKey(entry))).catch(() => {});
+    } catch (e) {
+      // A close that cannot be attempted is not worth reporting.
+    }
+  }
+
+  /**
+   * Releases the drawer bubble for a notification, keeping its history row.
+   *
+   * This is what a notification the phone cleared does. The drawer mirrors
+   * what is still live on the phone; the app keeps its own record of what
+   * arrived, and clearing that is the user's to do.
+   */
+  closeDesktop(id) {
+    const entry = this.history.find((n) => n.id === id);
+    if (!entry) return false;
+    this.releaseBubble(entry);
+    return true;
   }
 
   clearHistory() {
@@ -260,9 +341,12 @@ class NotificationService extends EventEmitter {
 
   /** Remove one notification from the visible history. */
   dismiss(id) {
-    const before = this.history.length;
-    this.history = this.history.filter((n) => n.id !== id);
-    if (this.history.length === before) return false;
+    const index = this.history.findIndex((n) => n.id === id);
+    if (index === -1) return false;
+    const [entry] = this.history.splice(index, 1);
+    // The user tidied the row here, so its bubble goes with it. This stays
+    // local: the phone's own notification is left alone.
+    this.releaseBubble(entry);
     this.emit('history-dismissed', { id });
     return true;
   }
@@ -275,11 +359,6 @@ class NotificationService extends EventEmitter {
    */
   addFromCompanion(notif) {
     this.addNotification(notif);
-  }
-
-  /** Removes one, after the phone said it was gone. */
-  removeById(id) {
-    return this.dismiss(id);
   }
 }
 
