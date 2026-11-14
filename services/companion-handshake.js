@@ -15,7 +15,7 @@
  *   host.isPairingCodeValid   the live five-minute code
  *   host.savePairedDevices()  persist after a change
  *   host.pcId, host.fingerprint   what goes back in the ack
- *   host.onPaired(device, isNew)  the caller's own bookkeeping
+ *   host.onPaired(device, socket)  the caller's own bookkeeping
  *   host.logLine(text)        optional, for the caller's own log
  *
  * `allowPairing` is the one behavioural difference: a brand new phone may pair
@@ -137,7 +137,7 @@ function finish(host, socket, message, deviceId, deviceName, isNew) {
   });
 
   if (typeof host.onPaired === 'function') {
-    host.onPaired({ deviceId, deviceName, ip: socket.clientIp, isNew });
+    host.onPaired({ deviceId, deviceName, ip: socket.clientIp, isNew }, socket);
   }
   return true;
 }

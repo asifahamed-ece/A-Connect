@@ -469,7 +469,7 @@ class CompanionService extends EventEmitter {
         socket.activeTransfers.clear();
       }
       this.clients.delete(socket);
-      if (socket.handshakeDone) {
+      if (socket.handshakeDone && !socket.superseded) {
         log(`phone disconnected: ${socket.deviceName || socket.clientIp}`);
         this.failPendingFileLists();
         this.emit('client-disconnected', { deviceId: socket.deviceId, ip: socket.clientIp });
@@ -501,8 +501,31 @@ class CompanionService extends EventEmitter {
     log(text);
   }
 
-  onPaired(device) {
+  onPaired(device, socket) {
+    // A phone that redials - a dropped Wi-Fi link, a retry after a timeout -
+    // used to leave the previous socket open, so the desktop ended up holding
+    // two or three sessions for one device and sent every broadcast once per
+    // session. Keep only the newest.
+    this.retireOlderSessions(device.deviceId, socket);
     this.emit('client-paired', device);
+  }
+
+  /**
+   * Closes any earlier session for the same device, keeping `keep`.
+   *
+   * Marked `superseded` before the close so the close handler does not report
+   * a disconnect: main.js tears down mirroring and MPRIS on that event, and the
+   * phone that just reconnected is still there.
+   */
+  retireOlderSessions(deviceId, keep) {
+    if (!deviceId) return;
+    for (const other of this.clients) {
+      if (other === keep || other.destroyed) continue;
+      if (other.deviceId !== deviceId) continue;
+      other.superseded = true;
+      log(`${other.deviceName || other.clientIp} reconnected, closing the older session`);
+      other.destroy();
+    }
   }
 
   /** Pings the connected phones and drops the ones that stopped answering. */
