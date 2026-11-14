@@ -76,7 +76,9 @@ object FeaturePayloads {
         .put("id", id)
 
     fun mediaState(
+        pkg: String,
         app: String,
+        side: String = "phone",
         title: String,
         artist: String,
         album: String,
@@ -84,10 +86,16 @@ object FeaturePayloads {
         positionMs: Long,
         durationMs: Long,
         art: String? = null,
+        artCleared: Boolean = false,
         idle: Boolean = false,
     ): JSONObject {
         val payload = JSONObject()
             .put("type", Protocol.TYPE_MEDIA_STATE)
+            .put("pkg", pkg)
+            // Which device the player is on. Today everything is the phone;
+            // the field exists so the desktop's own players can share the
+            // same messages without a second vocabulary.
+            .put("side", side)
             .put("app", app)
             .put("title", title)
             .put("artist", artist)
@@ -103,6 +111,10 @@ object FeaturePayloads {
         // The cover, base64 JPEG, only when it changed. Sending it with every
         // one second position update would dwarf the state itself.
         if (art != null) payload.put("art", art)
+        // "This track has no cover at all", which is not the same as "this
+        // state did not carry one": without the difference the computer
+        // blanks artwork that is still correct.
+        if (artCleared) payload.put("artCleared", true)
         return payload
     }
 

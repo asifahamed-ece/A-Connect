@@ -69,4 +69,52 @@ assert.ok(advanced < 3000, 'the position jumped ahead');
 service.update({ ...state, playing: false, positionMs: 5000 });
 assert.strictEqual(service.positionMs(), 5000, 'a paused position must not advance');
 
+// --- the cover must survive metadata that arrives in stages ---------------
+//
+// A player fills in the artist and the album a beat after the title, so the
+// text key changes a moment after the artwork landed. Wiping the cover on
+// that change blanks artwork that is already correct, and the phone will not
+// send it again for a while - which the user sees as the cover vanishing and
+// reloading several seconds later.
+const cover = new MprisService();
+cover.update({
+  pkg: 'com.example.music',
+  app: 'Music',
+  title: 'Song',
+  artist: '',
+  album: '',
+  playing: true,
+  positionMs: 0,
+  durationMs: 0,
+  art: state.art || 'AAAA',
+});
+assert.ok(cover.artUrl, 'the cover was not stored at all');
+
+cover.update({
+  pkg: 'com.example.music',
+  app: 'Music',
+  title: 'Song',
+  artist: 'Band',
+  album: 'Album',
+  playing: true,
+  positionMs: 1000,
+  durationMs: 0,
+});
+assert.ok(cover.artUrl, 'the cover was wiped when the artist and album arrived late');
+assert.strictEqual(cover.state.artist, 'Band', 'the late metadata did not land');
+
+// Only the phone can say a track has no cover.
+cover.update({
+  pkg: 'com.example.music',
+  app: 'Music',
+  title: 'Another',
+  artist: '',
+  album: '',
+  playing: true,
+  positionMs: 0,
+  durationMs: 0,
+  artCleared: true,
+});
+assert.strictEqual(cover.artUrl, null, 'a track with no cover kept the previous one');
+
 console.log('mpris mapping: ok');

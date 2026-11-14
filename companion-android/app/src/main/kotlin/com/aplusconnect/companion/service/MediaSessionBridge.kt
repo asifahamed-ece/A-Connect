@@ -29,6 +29,8 @@ class MediaSessionBridge(
     private val send: (JSONObject) -> Boolean,
 ) {
     data class MediaState(
+        /** The player's identity on the computer: one player per package. */
+        val pkg: String,
         val app: String,
         val title: String,
         val artist: String,
@@ -56,6 +58,12 @@ class MediaSessionBridge(
 
     /** The track whose cover was already delivered; the cover goes once per track. */
     private var lastCoverKey: String? = null
+
+    /** A track the phone has already reported as having no cover at all. */
+    private var lastCoverMissKey: String? = null
+
+    /** The package of the player last published, which the idle message names. */
+    private var lastPublishedPkg: String = ""
 
     /** The track whose cover is in hand, waiting to be delivered. */
     private var pendingCoverKey: String? = null
@@ -195,6 +203,7 @@ class MediaSessionBridge(
         val playback = c.playbackState
 
         return toMediaState(
+            pkg = c.packageName,
             app = label(c.packageName),
             title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
             artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
@@ -247,8 +256,10 @@ class MediaSessionBridge(
 
     private fun publishNow() {
         val state = currentState() ?: return
-        val art = encodeArt()
+        lastPublishedPkg = state.pkg
+        val cover = encodeArt()
         val payload = FeaturePayloads.mediaState(
+            pkg = state.pkg,
             app = state.app,
             title = state.title,
             artist = state.artist,
@@ -256,7 +267,8 @@ class MediaSessionBridge(
             playing = state.playing,
             positionMs = state.positionMs,
             durationMs = state.durationMs,
-            art = art?.base64,
+            art = (cover as? Cover.Ready)?.base64,
+            artCleared = cover is Cover.None,
         )
 
         val sent = send(payload)
@@ -264,7 +276,7 @@ class MediaSessionBridge(
         // Marking it sent while the computer was still connecting would leave
         // that track without art for its whole length. A placeholder does not
         // count: real art must still be able to replace it.
-        if (sent && art != null && art.real) {
+        if (sent && cover is Cover.Ready && cover.real) {
             lastCoverKey = pendingCoverKey
             Log.i(TAG, "sent the cover for $pendingCoverKey")
         }
@@ -279,6 +291,7 @@ class MediaSessionBridge(
      */
     private fun publishIdleNow() {
         val payload = FeaturePayloads.mediaState(
+            pkg = lastPublishedPkg,
             app = "",
             title = "",
             artist = "",
@@ -293,6 +306,7 @@ class MediaSessionBridge(
             lastCoverKey = null
             pendingCoverKey = null
             lastPlaceholderKey = null
+            lastCoverMissKey = null
         }
     }
 
@@ -309,35 +323,56 @@ class MediaSessionBridge(
      *    not marked as the track's cover, so real artwork still replaces it;
      *  - nothing new: send nothing.
      */
-    private fun encodeArt(): Art? {
-        val metadata = controller?.metadata ?: return null
+    private fun encodeArt(): Cover {
+        val metadata = controller?.metadata ?: return Cover.None
         val key = "${metadata.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()}|" +
             "${metadata.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()}|" +
             "${metadata.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty()}"
 
-        if (key == lastCoverKey) return null
+        if (key == lastCoverKey) return Cover.Unchanged
+
+        // Already told the computer this track has no cover: saying it again
+        // every second would be noise.
+        if (key == lastCoverMissKey) return Cover.None
 
         // A player often attaches the cover a moment after the track starts,
         // so a miss is not final. Try again - but not every second.
         val now = System.currentTimeMillis()
-        if (now - lastCoverAttemptAt < COVER_RETRY_MS) return null
+        if (now - lastCoverAttemptAt < COVER_RETRY_MS) return Cover.Unchanged
         lastCoverAttemptAt = now
 
         val artwork = coverBitmap(metadata)
         if (artwork != null) {
             pendingCoverKey = key
-            return encodeJpeg(artwork)?.let { Art(it, real = true) }
+            return encodeJpeg(artwork)?.let { Cover.Ready(it, real = true) } ?: Cover.Unchanged
         }
 
-        if (key != lastPlaceholderKey) {
-            val icon = appIcon(controller?.packageName.orEmpty())
-            if (icon != null) {
-                Log.i(TAG, "no cover for this track; using the app's icon")
-                lastPlaceholderKey = key
-                return encodeJpeg(icon)?.let { Art(it, real = false) }
-            }
+        val icon = appIcon(controller?.packageName.orEmpty())
+        if (icon != null) {
+            Log.i(TAG, "no cover for this track; using the app's icon")
+            lastPlaceholderKey = key
+            return encodeJpeg(icon)?.let { Cover.Ready(it, real = false) } ?: Cover.Unchanged
         }
-        return null
+
+        // Looked, and there is nothing. The computer is told so once, which is
+        // what stops it from wiping a cover it should keep.
+        lastCoverMissKey = key
+        return Cover.None
+    }
+
+    /**
+     * What to say about the cover this time.
+     *
+     * Three answers, not two: "here is new art", "this track has no art" and
+     * "nothing has changed". Only the first two are worth saying, and the
+     * middle one has to be said explicitly - otherwise the computer cannot
+     * tell a track without a cover from a state that simply did not carry one,
+     * and it blanks artwork that was already right.
+     */
+    private sealed interface Cover {
+        data class Ready(val base64: String, val real: Boolean) : Cover
+        object None : Cover
+        object Unchanged : Cover
     }
 
     /** Scales a bitmap down to a frame-friendly JPEG, as base64. */
@@ -576,6 +611,7 @@ class MediaSessionBridge(
          * that describes no track maps to null rather than to an empty card.
          */
         fun toMediaState(
+            pkg: String,
             app: String,
             title: String,
             artist: String,
@@ -586,6 +622,7 @@ class MediaSessionBridge(
         ): MediaState? {
             if (title.isBlank() && artist.isBlank() && album.isBlank()) return null
             return MediaState(
+                pkg = pkg,
                 app = app,
                 title = title,
                 artist = artist,

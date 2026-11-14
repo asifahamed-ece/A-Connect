@@ -9,12 +9,20 @@
     "ts": 1700000000000,
     "ongoing": false,
     "actions": [
-      { "id": "reply", "title": "Reply" },
-      { "id": "archive", "title": "Archive" }
+      {
+        "id": "reply",
+        "title": "Reply"
+      },
+      {
+        "id": "archive",
+        "title": "Archive"
+      }
     ]
   },
   "mediaState": {
     "type": "media-state",
+    "pkg": "com.example.music",
+    "side": "phone",
     "app": "Music",
     "title": "Song",
     "artist": "Band",
@@ -49,8 +57,20 @@
     "type": "file-list",
     "path": "root",
     "entries": [
-      { "id": "doc:pictures", "name": "Pictures", "size": 0, "isDir": true, "mime": "" },
-      { "id": "doc:photo", "name": "photo.jpg", "size": 1024, "isDir": false, "mime": "image/jpeg" }
+      {
+        "id": "doc:pictures",
+        "name": "Pictures",
+        "size": 0,
+        "isDir": true,
+        "mime": ""
+      },
+      {
+        "id": "doc:photo",
+        "name": "photo.jpg",
+        "size": 1024,
+        "isDir": false,
+        "mime": "image/jpeg"
+      }
     ]
   }
 }

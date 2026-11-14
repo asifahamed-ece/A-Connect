@@ -217,6 +217,7 @@ function checkFeaturePayloads() {
   );
 
   const mediaState = protocol.buildMediaState({
+    pkg: 'com.example.music',
     app: 'Music',
     title: 'Song',
     artist: 'Band',
@@ -227,6 +228,38 @@ function checkFeaturePayloads() {
   });
   assert.deepStrictEqual(mediaState, expected.mediaState, 'the media state payload changed');
   assert.strictEqual(protocol.parseMediaState(mediaState).playing, true, 'playing did not survive');
+  assert.strictEqual(
+    protocol.parseMediaState(mediaState).pkg,
+    'com.example.music',
+    'the player identity did not survive the parser'
+  );
+
+  // "There is no cover for this track" is not the same as "this state did not
+  // carry one": without the distinction the desktop blanks artwork that is
+  // still correct.
+  const cleared = protocol.buildMediaState({
+    pkg: 'com.example.music',
+    app: 'Music',
+    title: 'Song',
+    playing: true,
+    artCleared: true,
+  });
+  assert.strictEqual(cleared.artCleared, true, 'a track without a cover did not say so');
+  assert.strictEqual(
+    protocol.parseMediaState(cleared).artCleared,
+    true,
+    'the "no cover" flag did not survive the parser'
+  );
+  assert.strictEqual(protocol.buildMediaState({ app: 'x', title: 'y' }).artCleared, undefined,
+    'a state with no flag invented one');
+
+  // One player ending is its own message, so it cannot withdraw the others.
+  assert.deepStrictEqual(
+    protocol.buildMediaOff('com.example.music'),
+    { type: protocol.TYPES.MEDIA_OFF, pkg: 'com.example.music', side: 'phone' },
+    'the media-off payload changed'
+  );
+  assert.strictEqual(protocol.parseMediaOff({ pkg: '' }), null, 'an empty package parsed as a player');
 
   // Screen mirroring: the request, the two outcomes, and the video frame
   // header that both ends read. A drift here shows up as a blank canvas.

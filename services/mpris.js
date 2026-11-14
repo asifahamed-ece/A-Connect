@@ -329,12 +329,16 @@ class MprisService extends EventEmitter {
     if (state.art) {
       this.artUrl = saveArt(state.art);
       this.artKey = key;
-    } else if (key !== this.artKey) {
-      // A different track that arrived without a cover: showing the previous
-      // track's cover would be a lie.
+    } else if (state.artCleared) {
+      // The phone looked for a cover for this track and there is none. Only
+      // the phone can say that: a change in the text is not evidence, because
+      // a player fills in the artist and the album a moment after the title.
       this.artUrl = null;
       this.artKey = key;
     }
+    // Otherwise the cover we have stays. Wiping it because the text moved
+    // would blank artwork that is already correct, and the phone would not
+    // send it again for a while - which is the long reload the user sees.
     this.state = { ...state, artUrl: this.artUrl };
     this.positionAt = Date.now();
     this.publishChanged();

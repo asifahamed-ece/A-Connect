@@ -16,6 +16,7 @@ class MediaSessionBridgeTest {
     @Test
     fun `a playing session maps to a media state`() {
         val state = MediaSessionBridge.toMediaState(
+            pkg = "com.example.music",
             app = "Music",
             title = "Song",
             artist = "Band",
@@ -37,6 +38,7 @@ class MediaSessionBridgeTest {
     @Test
     fun `a paused session is still worth showing`() {
         val state = MediaSessionBridge.toMediaState(
+            pkg = "com.example.music",
             app = "Music",
             title = "Song",
             artist = "Band",
@@ -55,6 +57,7 @@ class MediaSessionBridgeTest {
         // track. Showing an empty "now playing" card is worse than showing none.
         assertNull(
             MediaSessionBridge.toMediaState(
+                pkg = "com.example.music",
                 app = "Music",
                 title = "",
                 artist = "",

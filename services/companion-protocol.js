@@ -48,6 +48,7 @@ const TYPES = {
   NOTIFICATION_REMOVED: 'notification-removed',
   NOTIFICATION_ACTION: 'notification-action',
   MEDIA_STATE: 'media-state',
+  MEDIA_OFF: 'media-off',
   MEDIA_COMMAND: 'media-command',
   FILE_LIST_REQUEST: 'file-list-request',
   FILE_LIST: 'file-list',
@@ -275,6 +276,10 @@ function parseNotification(payload) {
 function buildMediaState(s) {
   const state = {
     type: TYPES.MEDIA_STATE,
+    // The package is the player's identity: it survives a track change and a
+    // reconnect, which is what makes it usable as a bus name.
+    pkg: s.pkg,
+    side: s.side || 'phone',
     app: s.app,
     title: s.title,
     artist: s.artist,
@@ -284,13 +289,19 @@ function buildMediaState(s) {
     durationMs: s.durationMs,
   };
   if (s.art) state.art = s.art;
+  if (s.artCleared) state.artCleared = true;
   if (s.idle) state.idle = true;
   return state;
 }
 
 function parseMediaState(payload) {
   if (!payload || typeof payload.title !== 'string') return null;
+  // Older builds send no package. Dropping their media entirely would be a
+  // worse failure than losing the per-app identity, so they get a stand-in.
+  const pkg = typeof payload.pkg === 'string' && payload.pkg ? payload.pkg : 'aplusconnect.phone';
   const state = {
+    pkg,
+    side: payload.side === 'pc' ? 'pc' : 'phone',
     app: payload.app || '',
     title: payload.title,
     artist: payload.artist || '',
@@ -299,8 +310,11 @@ function parseMediaState(payload) {
     positionMs: payload.positionMs || 0,
     durationMs: payload.durationMs || 0,
   };
-  // The cover travels only when it changed, so it is optional.
+  // The cover travels only when it changed, so it is optional. Its absence
+  // means "unchanged", NOT "none" - which is why a track with no art says so
+  // explicitly.
   if (payload.art) state.art = payload.art;
+  if (payload.artCleared === true) state.artCleared = true;
   // "Nothing is playing any more", which is not the same as a paused track:
   // the desktop clears the player rather than leaving the last one on screen.
   if (payload.idle === true) state.idle = true;
@@ -407,6 +421,16 @@ function parseVideoFrame(buffer) {
     ptsMicros,
     payload: buffer.subarray(VIDEO_HEADER_BYTES),
   };
+}
+
+/** One player ended. The others keep playing. */
+function buildMediaOff(pkg, side = 'phone') {
+  return { type: TYPES.MEDIA_OFF, pkg, side };
+}
+
+function parseMediaOff(payload) {
+  if (!payload || typeof payload.pkg !== 'string' || !payload.pkg) return null;
+  return { pkg: payload.pkg, side: payload.side === 'pc' ? 'pc' : 'phone' };
 }
 
 function buildFileList(path, entries) {
@@ -592,6 +616,8 @@ module.exports = {
   STREAM_VIDEO,
   VIDEO_HEADER_BYTES,
   MIRROR_REASONS,
+  buildMediaOff,
+  parseMediaOff,
   buildFileList,
   parseFileList,
   sortFileEntries,

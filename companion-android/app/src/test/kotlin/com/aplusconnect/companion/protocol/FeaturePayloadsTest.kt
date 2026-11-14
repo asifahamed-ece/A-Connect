@@ -36,6 +36,7 @@ class FeaturePayloadsTest {
     @Test
     fun `a media state payload keeps playing and the position`() {
         val payload = FeaturePayloads.mediaState(
+            pkg = "com.example.music",
             app = "Music",
             title = "Song",
             artist = "Band",
@@ -91,6 +92,7 @@ class FeaturePayloadsTest {
         assertEquals(fixture.getJSONObject("notification").toString(), notification.toString())
 
         val media = FeaturePayloads.mediaState(
+            pkg = "com.example.music",
             app = "Music",
             title = "Song",
             artist = "Band",
