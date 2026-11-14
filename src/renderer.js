@@ -49,6 +49,10 @@ const state = {
     seq: 0,
     searchSeq: 0,
   },
+  selectedFiles: {
+    adb: new Map(),
+    companion: new Map(),
+  },
 };
 
 const THEME_KEY = 'aplus-theme';
@@ -56,6 +60,72 @@ const CAST_CONFIRM_KEY = 'aplus-cast-confirm';
 const RECENT_DAYS = 30;
 
 const $ = (id) => document.getElementById(id);
+
+function fileSelectionMode() {
+  return state.target === 'companion' && state.companion ? 'companion' : 'adb';
+}
+
+function fileSelectionMap(mode = fileSelectionMode()) {
+  return state.selectedFiles[mode];
+}
+
+function isFileSelected(path, mode = fileSelectionMode()) {
+  return fileSelectionMap(mode).has(path);
+}
+
+function toggleFileSelection(path, name, selected, mode = fileSelectionMode()) {
+  const selection = fileSelectionMap(mode);
+  if (selected) selection.set(path, name);
+  else selection.delete(path);
+  renderFileSelectionActions();
+}
+
+function clearFileSelection(mode = fileSelectionMode()) {
+  fileSelectionMap(mode).clear();
+  renderFileSelectionActions();
+  renderBrowser();
+  renderPhoneBrowser();
+}
+
+function renderFileSelectionActions() {
+  const selection = fileSelectionMap();
+  const count = selection.size;
+  const actions = $('file-selection-actions');
+  const label = $('file-selection-count');
+  const download = $('btn-download-selected');
+  const clear = $('btn-clear-selection');
+  if (actions) actions.hidden = count === 0;
+  if (label) label.textContent = `${count} ${count === 1 ? 'file' : 'files'} selected`;
+  if (download) download.disabled = count === 0;
+  if (clear) clear.hidden = count === 0;
+}
+
+async function downloadSelectedFiles() {
+  const mode = fileSelectionMode();
+  const selected = [...fileSelectionMap(mode)];
+  if (!selected.length) return;
+  fileSelectionMap(mode).clear();
+  renderFileSelectionActions();
+  renderBrowser();
+  renderPhoneBrowser();
+
+  if (mode === 'companion') {
+    for (const [path, name] of selected) await pullPhoneFile(path, name);
+    return;
+  }
+
+  if (!state.device) {
+    toast('Connect a device first', 'err');
+    return;
+  }
+  for (const [path] of selected) {
+    try {
+      await downloadEntry(path);
+    } catch (err) {
+      toast(`Download failed: ${err.message}`, 'err');
+    }
+  }
+}
 
 /* ---------- Small helpers ---------- */
 
@@ -69,6 +139,11 @@ function escapeHtml(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** A click after dragging to select text must not activate the surrounding row. */
+function hasSelectedText() {
+  return Boolean(window.getSelection?.()?.toString());
 }
 
 function formatBytes(bytes) {
@@ -153,28 +228,28 @@ function showView(name) {
  * whatever arrives.
  */
 function updateFilesTransport() {
-  const note = $('companion-files-note');
   const companionOnly = state.target === 'companion' && Boolean(state.companion);
   const overAdb = state.target === 'adb' && Boolean(state.device);
 
-  if (note) {
-    note.style.display = companionOnly ? '' : 'none';
-    const text = $('companion-files-text');
-    if (text) {
-      text.textContent =
-        'Click a file to pull it here. Nothing on the phone can be changed ' +
-        'from this computer.';
-    }
-  }
-
   const dropzone = $('dropzone');
-  if (dropzone) dropzone.hidden = !overAdb;
+  if (dropzone) {
+    dropzone.hidden = !overAdb && !companionOnly;
+    const title = dropzone.querySelector('.dropzone-title');
+    const sub = dropzone.querySelector('.dropzone-sub');
+    if (title) title.textContent = companionOnly ? 'Drop files to send to phone' : 'Drop files here';
+    if (sub) sub.textContent = companionOnly ? 'or click to choose files from your computer' : 'or click to browse your computer';
+    dropzone.setAttribute('aria-label', companionOnly ? 'Choose or drop files to send to phone' : 'Choose files to send');
+  }
   document.querySelectorAll('#view-files .browser').forEach((el) => {
     el.hidden = !overAdb;
   });
 
   const phoneBrowser = $('phone-browser');
   if (phoneBrowser) phoneBrowser.hidden = !companionOnly;
+
+  // The action bar counts the connection the user is looking at, so it must
+  // follow a transport switch rather than stay on the other side's total.
+  renderFileSelectionActions();
 
   // Open the root the first time the phone is shown, not on every render: an
   // empty folder would otherwise be re-requested forever.
@@ -328,6 +403,7 @@ function renderPhoneBrowser() {
         const where = phoneParentOf(entry.id) || '/';
         return `
       <div class="browse-row ${entry.isDir ? 'dir' : 'file'}" data-id="${escapeHtml(entry.id)}" data-dir="${entry.isDir ? '1' : '0'}">
+        ${entry.isDir ? '' : fileSelectionControl(entry.id, entry.name, 'companion')}
         ${icon(entry.isDir ? 'folder' : 'file')}
         <div class="browse-name" title="${escapeHtml(entry.id)}">${escapeHtml(entry.name)}</div>
         <div class="browse-meta">${entry.isDir ? 'Folder' : formatBytes(entry.size)} · ${escapeHtml(where)}</div>
@@ -357,6 +433,7 @@ function renderPhoneBrowser() {
     .map(
       (entry) => `
       <div class="browse-row ${entry.isDir ? 'dir' : 'file'}" data-id="${escapeHtml(entry.id)}" data-dir="${entry.isDir ? '1' : '0'}">
+        ${entry.isDir ? '' : fileSelectionControl(entry.id, entry.name, 'companion')}
         ${icon(entry.isDir ? 'folder' : 'file')}
         <div class="browse-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
         <div class="browse-meta">${entry.isDir ? 'Folder' : formatBytes(entry.size)}</div>
@@ -734,6 +811,61 @@ async function browseFiles() {
   await sendFiles(paths);
 }
 
+async function sendCompanionFiles(paths) {
+  if (!state.companion || !Array.isArray(paths) || paths.length === 0) return;
+  if (!window.api.sendFileToPhone) {
+    toast('Sending files over Companion is not available', 'err');
+    return;
+  }
+
+  for (const filePath of paths) {
+    try {
+      const result = await window.api.sendFileToPhone(filePath);
+      if (!result || !result.success) {
+        toast(`Could not send ${filePath.split(/[\\/]/).pop()} to the phone`, 'err');
+        continue;
+      }
+      toast(`Sending ${filePath.split(/[\\/]/).pop()} to the phone`);
+    } catch (err) {
+      toast(`Send failed: ${err.message}`, 'err');
+    }
+  }
+}
+
+async function browseCompanionFiles() {
+  if (!state.companion) {
+    toast('Connect a phone first', 'err');
+    return;
+  }
+  if (!window.api.pickAndSendFileToPhone) {
+    toast('Sending files over Companion is not available', 'err');
+    return;
+  }
+
+  try {
+    const result = await window.api.pickAndSendFileToPhone();
+    if (result?.canceled) return;
+    if (result?.success) {
+      const name = result.name || result.filePath?.split(/[\\/]/).pop() || 'file';
+      toast(`Sending ${name} to the phone`);
+    } else {
+      toast('Could not send the file', 'err');
+    }
+  } catch (err) {
+    toast(`Send failed: ${err.message}`, 'err');
+  }
+}
+
+async function browseFilesForTarget() {
+  if (state.target === 'companion' && state.companion) return browseCompanionFiles();
+  return browseFiles();
+}
+
+async function sendDroppedFiles(paths) {
+  if (state.target === 'companion' && state.companion) return sendCompanionFiles(paths);
+  return sendFiles(paths);
+}
+
 /* ---------- Phone storage browser ---------- */
 
 function parentPath(current) {
@@ -746,6 +878,11 @@ function parentPath(current) {
 
 function joinPath(base, name) {
   return `${base.replace(/\/+$/, '')}/${name}`;
+}
+
+function fileSelectionControl(path, name, mode = fileSelectionMode()) {
+  const checked = isFileSelected(path, mode) ? 'checked' : '';
+  return `<input class="file-select" type="checkbox" data-select-file="${escapeHtml(path)}" data-select-name="${escapeHtml(name)}" aria-label="Select ${escapeHtml(name)}" ${checked}>`;
 }
 
 function formatAge(ms) {
@@ -774,6 +911,7 @@ function richRow(entry, { showParent = false, showAge = false, reveal = false } 
 
   return `
     <div class="browse-row ${entry.isDir ? 'dir' : 'file'} rich" data-path="${escapeHtml(entry.path)}" data-dir="${entry.isDir ? '1' : '0'}">
+      ${entry.isDir ? '' : fileSelectionControl(entry.path, entry.name, 'adb')}
       ${icon(entry.isDir ? 'folder' : 'file')}
       <div class="browse-body">
         <div class="browse-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
@@ -853,6 +991,7 @@ function renderDirectory() {
     .map(
       (entry) => `
       <div class="browse-row ${entry.isDir ? 'dir' : 'file'}" data-path="${escapeHtml(entry.path)}" data-dir="${entry.isDir ? '1' : '0'}">
+        ${entry.isDir ? '' : fileSelectionControl(entry.path, entry.name, 'adb')}
         ${icon(entry.isDir ? 'folder' : 'file')}
         <div class="browse-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
         <div class="browse-meta">${entry.isDir ? 'Folder' : formatBytes(entry.size)}</div>
@@ -1809,13 +1948,15 @@ function initPairing() {
 function initFiles() {
   const zone = $('dropzone');
 
-  // Exactly one entry point: the zone itself. The button inside it does not
-  // have its own handler, so a click can never open two pickers.
-  zone.addEventListener('click', browseFiles);
+  // Exactly one entry point: the zone itself. Companion and ADB retain their
+  // own picker and send paths, while drag-and-drop uses the same routing.
+  const chooseFilesForTarget = () => browseFilesForTarget();
+
+  zone.addEventListener('click', chooseFilesForTarget);
   zone.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      browseFiles();
+      chooseFilesForTarget();
     }
   });
 
@@ -1837,7 +1978,7 @@ function initFiles() {
       toast('Could not read the dropped files', 'err');
       return;
     }
-    sendFiles(paths);
+    return sendDroppedFiles(paths);
   });
 
   $('transfer-list').addEventListener('click', (e) => {
@@ -1902,6 +2043,10 @@ function initFiles() {
   });
 
   $('browser-list').addEventListener('click', (e) => {
+    // A checkbox is a selection, not an open: it must not fall through to the
+    // row underneath, or ticking a file would also open it.
+    if (e.target.closest('[data-select-file]')) return;
+
     const download = e.target.closest('[data-download]');
     if (download) {
       downloadEntry(download.dataset.download);
@@ -1921,7 +2066,7 @@ function initFiles() {
     }
 
     const row = e.target.closest('.browse-row');
-    if (!row) return;
+    if (!row || hasSelectedText()) return;
 
     if (row.dataset.dir === '1') {
       loadDirectory(row.dataset.path);
@@ -1929,6 +2074,17 @@ function initFiles() {
       openEntry(row.dataset.path);
     }
   });
+
+  // The checkboxes only change a set, so the list is left standing: re-rendering
+  // it would drop focus and scroll position on every tick.
+  $('browser-list').addEventListener('change', (e) => {
+    const box = e.target.closest('[data-select-file]');
+    if (!box) return;
+    toggleFileSelection(box.dataset.selectFile, box.dataset.selectName, box.checked, 'adb');
+  });
+
+  $('btn-download-selected').addEventListener('click', downloadSelectedFiles);
+  $('btn-clear-selection').addEventListener('click', () => clearFileSelection());
 
   // The one way a failure with no row of its own reaches the window: a phone
   // that would not send a file, or a file the desktop would not open.
@@ -2090,20 +2246,6 @@ function initClipboard() {
     });
   }
 
-  const sendFileButton = $('btn-send-file-to-phone');
-  if (sendFileButton) {
-    sendFileButton.addEventListener('click', async () => {
-      if (!window.api.pickAndSendFileToPhone) return;
-      const result = await window.api.pickAndSendFileToPhone();
-      if (result && result.canceled) return;
-      if (result && result.success) {
-        toast(`Sent ${result.name} to the phone`);
-      } else {
-        toast('Could not send the file', 'err');
-      }
-    });
-  }
-
   const phoneUpButton = $('phone-up');
   if (phoneUpButton) phoneUpButton.addEventListener('click', phoneUp);
 
@@ -2150,6 +2292,7 @@ function initClipboard() {
   const phoneList = $('phone-browser-list');
   if (phoneList) {
     phoneList.addEventListener('click', (event) => {
+      if (event.target.closest('[data-select-file]')) return;
       const open = event.target.closest('[data-open]');
       if (open) {
         const row = open.closest('.browse-row');
@@ -2165,11 +2308,17 @@ function initClipboard() {
         return;
       }
       const row = event.target.closest('.browse-row');
-      if (row && row.dataset.dir === '1') {
+      if (row && row.dataset.dir === '1' && !hasSelectedText()) {
         // A search result opens the folder it lives in; the breadcrumb then
         // shows a real path instead of the query.
         openPhoneFolder(row.dataset.id);
       }
+    });
+
+    phoneList.addEventListener('change', (event) => {
+      const box = event.target.closest('[data-select-file]');
+      if (!box) return;
+      toggleFileSelection(box.dataset.selectFile, box.dataset.selectName, box.checked, 'companion');
     });
   }
 

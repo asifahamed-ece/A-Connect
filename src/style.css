@@ -110,11 +110,13 @@ body {
   background: var(--bg);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
-  user-select: none;
+  user-select: text;
 }
 
-button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; user-select: none; }
 button:disabled { cursor: not-allowed; opacity: 0.5; }
+input, textarea, select { user-select: text; }
+.titlebar { user-select: none; }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
 
 .sprite { display: none; }
@@ -193,6 +195,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .device-row {
   display: flex; align-items: center; gap: var(--s-2);
+  user-select: text;
   width: 100%;
   padding: var(--s-2) var(--s-2);
   border-radius: var(--r-sm);
@@ -686,6 +689,27 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 /* ---------- Phone file browser ---------- */
 .browser { margin-bottom: var(--s-5); overflow: hidden; }
+.file-selection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.file-selection-actions > div { display: flex; gap: var(--s-2); }
+.file-select {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
 /* The same browser, driven by the companion channel instead of debugging. */
 .phone-browser { margin-bottom: var(--s-5); overflow: hidden; }
 .phone-browser .browser-head { justify-content: space-between; }

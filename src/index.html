@@ -252,14 +252,20 @@
             </div>
           </header>
 
-          <!-- The phone's own folder, over the companion channel. -->
-          <div class="card row-card" id="companion-files-note" style="display: none; margin-bottom: 16px;">
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose files to send">
+            <svg class="icon icon-lg"><use href="#i-upload"/></svg>
+            <div class="dropzone-title">Drop files here</div>
+            <div class="dropzone-sub">or click to browse your computer</div>
+          </div>
+
+          <!-- Files ticked in whichever finder is showing, waiting for one
+               download. Sits under the dropzone so both connections show it in
+               the same place. -->
+          <div class="file-selection-actions" id="file-selection-actions" hidden>
+            <span id="file-selection-count" aria-live="polite">0 files selected</span>
             <div>
-              <div class="row-title">The folder shared from your phone</div>
-              <div class="row-sub" id="companion-files-text"></div>
-            </div>
-            <div>
-              <button class="btn-secondary" id="btn-send-file-to-phone" style="padding: 6px 12px; font-size: 12px;">Send a file…</button>
+              <button class="btn-ghost btn-sm" id="btn-clear-selection">Clear selection</button>
+              <button class="btn-secondary btn-sm" id="btn-download-selected" disabled>Download selected</button>
             </div>
           </div>
 
@@ -294,12 +300,6 @@
             <div class="browser-list" id="phone-browser-list">
               <div class="list-empty">Loading the phone's files...</div>
             </div>
-          </div>
-
-          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose files to send">
-            <svg class="icon icon-lg"><use href="#i-upload"/></svg>
-            <div class="dropzone-title">Drop files here</div>
-            <div class="dropzone-sub">or click to browse your computer</div>
           </div>
 
           <div class="browser card">

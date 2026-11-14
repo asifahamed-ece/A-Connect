@@ -347,13 +347,33 @@ class FileTransferService extends EventEmitter {
     });
   }
 
+  /**
+   * Picks a destination that does not overwrite an existing file.
+   *
+   * A batch download can carry the same name from two folders; without this,
+   * the second copy would silently replace the first. Sequential pulls make
+   * the existence check race-free.
+   */
+  uniqueLocalTarget(localDestDir, filename) {
+    let target = path.join(localDestDir, filename);
+    if (!fs.existsSync(target)) return target;
+
+    const ext = path.extname(filename);
+    const base = path.basename(filename, ext);
+    let counter = 1;
+    do {
+      target = path.join(localDestDir, `${base} (${counter++})${ext}`);
+    } while (fs.existsSync(target));
+    return target;
+  }
+
   async pullFile(deviceId, remoteFilePath, localDestDir = path.join(os.homedir(), 'Downloads', 'A+Connect')) {
     if (!fs.existsSync(localDestDir)) {
       fs.mkdirSync(localDestDir, { recursive: true });
     }
 
     const filename = path.basename(remoteFilePath);
-    const localTarget = path.join(localDestDir, filename);
+    const localTarget = this.uniqueLocalTarget(localDestDir, filename);
     const transferId = `pull_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     return new Promise((resolve, reject) => {
