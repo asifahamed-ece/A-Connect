@@ -20,6 +20,8 @@ const state = {
   mirror: { state: 'idle', reason: null, width: 0, height: 0, encoder: '', frames: 0 },
   // The phone connected over the companion channel (TLS), if any.
   companion: null,
+  // The last companion info block, which carries the device-info vitals.
+  companionInfo: null,
   browse: {
     path: '/sdcard',
     entries: [],
@@ -528,12 +530,24 @@ function renderDevice() {
     }
   }
 
-  // The phone details come from the debugging connection only.
+  // The phone details: over DEBUG the ADB transport collects them; over the
+  // companion channel the phone sends them itself (device-info). Either way
+  // the cards fill in, instead of the dashes that used to sit there while only
+  // the encrypted channel was connected.
+  const cinfo = (state.companionInfo && state.companionInfo.deviceInfo) || {};
   const battery = onCompanion ? {} : (device.battery || {});
-  $('t-battery').textContent = battery.level != null ? `${battery.level}%` : '—';
-  $('t-android').textContent = onCompanion ? '—' : (device.androidVersion || '—');
-  $('t-storage').textContent = onCompanion ? '—' : (device.storage?.free || '—');
-  $('t-rom').textContent = onCompanion ? '—' : (device.colorOsVersion || '—');
+  const batteryLevel = onCompanion ? cinfo.batteryLevel : battery.level;
+  $('t-battery').textContent =
+    batteryLevel != null && batteryLevel !== '' ? `${batteryLevel}%` : '—';
+  $('t-android').textContent = onCompanion
+    ? (cinfo.androidVersion || '—')
+    : (device.androidVersion || '—');
+  $('t-storage').textContent = onCompanion
+    ? (cinfo.storageFree || '—')
+    : (device.storage?.free || '—');
+  $('t-rom').textContent = onCompanion
+    ? (cinfo.colorOsVersion || '—')
+    : (device.colorOsVersion || '—');
 
   $('files-dest-label').textContent = '/sdcard/Download';
 }
@@ -1299,6 +1313,10 @@ function applyCompanionInfo(info) {
   if (!info) return;
   state.companionConnected = Boolean(info.connected);
   state.companion = state.companionConnected ? (info.clients && info.clients[0]) || null : null;
+  // The phone's vitals ride alongside the connection info. Kept on the state
+  // so the device cards can show them, and refreshed by the live event as the
+  // phone republishes every minute.
+  state.companionInfo = info;
 
   // A phone that has just arrived must not leave the window saying "No
   // devices found". The empty screen is for when there is nothing, and there
@@ -2203,6 +2221,15 @@ function initClipboard() {
   }
   if (window.api.onCompanionDisconnected) {
     window.api.onCompanionDisconnected(() => refreshCompanionInfo());
+  }
+  // The phone republishes its vitals every minute. Merge them into the stored
+  // info block and redraw, so the battery moves without a full refresh.
+  if (window.api.onCompanionDeviceInfo) {
+    window.api.onCompanionDeviceInfo((deviceInfo) => {
+      if (!deviceInfo) return;
+      state.companionInfo = { ...(state.companionInfo || {}), deviceInfo };
+      renderDevice();
+    });
   }
   refreshCompanionInfo();
 }

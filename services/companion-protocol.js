@@ -67,6 +67,15 @@ const TYPES = {
   MIRROR_STARTED: 'mirror-started',
   MIRROR_STOPPED: 'mirror-stopped',
   MIRROR_FAILED: 'mirror-failed',
+
+  // The phone's own vitals: battery, Android version, storage, etc.
+  // Sent right after the handshake and then every ~60 s.
+  DEVICE_INFO: 'device-info',
+
+  // Preview cache: the desktop asks for a file's hash before downloading it,
+  // so a second look at the same file opens the cached copy instantly.
+  FILE_HASH_REQUEST: 'file-hash-request',
+  FILE_HASH: 'file-hash',
 };
 
 /**
@@ -586,6 +595,74 @@ function verifyProof(secret, deviceId, nonce, proof) {
   return crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(proof, 'utf8'));
 }
 
+/**
+ * The phone's vitals: battery, OS version, storage, model.
+ *
+ * Sent right after pairing and then every ~60 s, so the desktop's device
+ * cards stay current.
+ */
+function buildDeviceInfo(info) {
+  const payload = {
+    type: TYPES.DEVICE_INFO,
+    batteryLevel: typeof info.batteryLevel === 'number' ? info.batteryLevel : 0,
+    isCharging: Boolean(info.isCharging),
+    androidVersion: info.androidVersion || '',
+    colorOsVersion: info.colorOsVersion || '',
+    storageFree: info.storageFree || '',
+    storageTotal: info.storageTotal || '',
+    model: info.model || '',
+  };
+  return payload;
+}
+
+function parseDeviceInfo(payload) {
+  if (!payload || payload.type !== TYPES.DEVICE_INFO) return null;
+  return {
+    batteryLevel: typeof payload.batteryLevel === 'number' ? payload.batteryLevel : 0,
+    isCharging: Boolean(payload.isCharging),
+    androidVersion: payload.androidVersion || '',
+    colorOsVersion: payload.colorOsVersion || '',
+    storageFree: payload.storageFree || '',
+    storageTotal: payload.storageTotal || '',
+    model: payload.model || '',
+  };
+}
+
+/**
+ * Asks the phone for a file's SHA256, so the desktop can check its cache
+ * before downloading.
+ */
+function buildFileHashRequest(path) {
+  return { type: TYPES.FILE_HASH_REQUEST, path };
+}
+
+function parseFileHashRequest(payload) {
+  if (!payload || payload.type !== TYPES.FILE_HASH_REQUEST) return null;
+  return { path: payload.path || '' };
+}
+
+/** The phone's answer: the hash, or an error. */
+function buildFileHash(path, sha256, size, error) {
+  const payload = { type: TYPES.FILE_HASH, path };
+  if (error) payload.error = error;
+  else {
+    payload.sha256 = sha256;
+    payload.size = size;
+  }
+  return payload;
+}
+
+function parseFileHash(payload) {
+  if (!payload || payload.type !== TYPES.FILE_HASH) return null;
+  const result = { path: payload.path || '' };
+  if (payload.error) result.error = payload.error;
+  else {
+    result.sha256 = payload.sha256 || '';
+    result.size = typeof payload.size === 'number' ? payload.size : 0;
+  }
+  return result;
+}
+
 module.exports = {
   PROTOCOL_VERSION,
   KIND_JSON,
@@ -631,4 +708,10 @@ module.exports = {
   parsePairingPayload,
   normalize,
   truncateToBytes,
+  buildDeviceInfo,
+  parseDeviceInfo,
+  buildFileHashRequest,
+  parseFileHashRequest,
+  buildFileHash,
+  parseFileHash,
 };

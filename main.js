@@ -476,6 +476,12 @@ function setupServiceEvents() {
     mpris.update(state);
   });
 
+  // The phone's vitals: the desktop's device cards use them instead of the
+  // dashes they show while only the companion channel is connected.
+  companion.on('device-info', (info) => {
+    sendToRenderer('event:companion-device-info', info);
+  });
+
   mpris.on('command', (name, positionMs) => {
     companion.sendMediaCommand(name, positionMs);
   });

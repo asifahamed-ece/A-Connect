@@ -154,6 +154,12 @@ class CompanionService extends EventEmitter {
     /** File requests that have not come back yet, by the id we gave them. */
     this.fileRequests = new Map();
 
+    /**
+     * The phone's vitals (battery, OS, storage), once it has told us.
+     * Null until the first `device-info` arrives.
+     */
+    this.deviceInfo = null;
+
     this.loadSettings();
     this.loadPairedDevices();
     this.generatePairingCode();
@@ -581,6 +587,7 @@ class CompanionService extends EventEmitter {
 
     if (routeNotification(this, message)) return;
     if (routeMedia(this, message)) return;
+    if (routeDeviceInfo(this, message)) return;
     if (routeMirror(this, message)) return;
 
     if (message.type === protocol.TYPES.PING) {      socket.write(
@@ -1059,6 +1066,8 @@ class CompanionService extends EventEmitter {
       destinationDir: this.destinationDir,
       // The kill switch, so the UI can show the switch where it left it.
       enabled: this.enabled,
+      // The phone's vitals, or null before the first device-info arrives.
+      deviceInfo: this.deviceInfo,
     };
   }
 }
@@ -1109,6 +1118,24 @@ function routeNotification(service, message) {
 }
 
 CompanionService.routeNotification = routeNotification;
+
+/**
+ * The phone's vitals, which the ADB transport collects over `adb shell` and
+ * the companion channel gets as a plain message.
+ *
+ * Exported as a property of the class so the check can drive it without a
+ * socket; production calls it from `handleMessage`.
+ */
+function routeDeviceInfo(service, message) {
+  if (message.type !== protocol.TYPES.DEVICE_INFO) return false;
+  const info = protocol.parseDeviceInfo(message.payload);
+  if (!info) return false;
+  service.deviceInfo = info;
+  service.emit('device-info', info);
+  return true;
+}
+
+CompanionService.routeDeviceInfo = routeDeviceInfo;
 
 /**
  * Routes one media-state message to the service's events.

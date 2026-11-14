@@ -246,4 +246,57 @@ object FeaturePayloads {
     fun mirrorFailed(reason: String): JSONObject = JSONObject()
         .put("type", Protocol.TYPE_MIRROR_FAILED)
         .put("reason", reason)
+
+    // ---- Device info: battery, OS version, storage, model ----
+
+    fun deviceInfo(
+        batteryLevel: Int,
+        isCharging: Boolean,
+        androidVersion: String,
+        colorOsVersion: String,
+        storageFree: String,
+        storageTotal: String,
+        model: String,
+    ): JSONObject = JSONObject()
+        .put("type", Protocol.TYPE_DEVICE_INFO)
+        .put("batteryLevel", batteryLevel)
+        .put("isCharging", isCharging)
+        .put("androidVersion", androidVersion)
+        .put("colorOsVersion", colorOsVersion)
+        .put("storageFree", storageFree)
+        .put("storageTotal", storageTotal)
+        .put("model", model)
+
+    data class DeviceInfo(
+        val batteryLevel: Int,
+        val isCharging: Boolean,
+        val androidVersion: String,
+        val colorOsVersion: String,
+        val storageFree: String,
+        val storageTotal: String,
+        val model: String,
+    )
+
+    fun parseDeviceInfo(json: JSONObject): DeviceInfo = DeviceInfo(
+        batteryLevel = json.optInt("batteryLevel", 0),
+        isCharging = json.optBoolean("isCharging", false),
+        androidVersion = json.optString("androidVersion", ""),
+        colorOsVersion = json.optString("colorOsVersion", ""),
+        storageFree = json.optString("storageFree", ""),
+        storageTotal = json.optString("storageTotal", ""),
+        model = json.optString("model", ""),
+    )
+
+    // ---- File hash: preview cache deduplication ----
+
+    fun fileHash(path: String, sha256: String, size: Long): JSONObject = JSONObject()
+        .put("type", Protocol.TYPE_FILE_HASH)
+        .put("path", path)
+        .put("sha256", sha256)
+        .put("size", size)
+
+    fun fileHashError(path: String, error: String): JSONObject = JSONObject()
+        .put("type", Protocol.TYPE_FILE_HASH)
+        .put("path", path)
+        .put("error", error)
 }

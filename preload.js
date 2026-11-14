@@ -102,6 +102,7 @@ contextBridge.exposeInMainWorld('api', {
   onClipboardSynced: (callback) => ipcRenderer.on('event:clipboard-synced', (_, data) => callback(data)),
   onClipboardHistory: (callback) => ipcRenderer.on('event:clipboard-history', (_, data) => callback(data)),
   onCompanionStatus: (callback) => ipcRenderer.on('event:companion-status', (_, data) => callback(data)),
+  onCompanionDeviceInfo: (callback) => ipcRenderer.on('event:companion-device-info', (_, data) => callback(data)),
   onCompanionEnabled: (callback) => ipcRenderer.on('event:companion-enabled', (_, data) => callback(data)),
   onCompanionPaired: (callback) => ipcRenderer.on('event:companion-paired', (_, data) => callback(data)),
   onCompanionDisconnected: (callback) => ipcRenderer.on('event:companion-disconnected', (_, data) => callback(data))

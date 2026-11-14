@@ -134,4 +134,27 @@ class FeaturePayloadsTest {
         )
         assertEquals(fixture.getJSONObject("fileList").toString(), files.toString())
     }
+
+    @Test
+    fun `a device info payload keeps every vital and parses back`() {
+        val payload = FeaturePayloads.deviceInfo(
+            batteryLevel = 82,
+            isCharging = true,
+            androidVersion = "14",
+            colorOsVersion = "ColorOS 14.0",
+            storageFree = "37 GB",
+            storageTotal = "128 GB",
+            model = "CPH2737",
+        )
+
+        assertEquals(Protocol.TYPE_DEVICE_INFO, payload.getString("type"))
+        val parsed = FeaturePayloads.parseDeviceInfo(payload)
+        assertEquals(82, parsed.batteryLevel)
+        assertEquals(true, parsed.isCharging)
+        assertEquals("14", parsed.androidVersion)
+        assertEquals("ColorOS 14.0", parsed.colorOsVersion)
+        assertEquals("37 GB", parsed.storageFree)
+        assertEquals("128 GB", parsed.storageTotal)
+        assertEquals("CPH2737", parsed.model)
+    }
 }

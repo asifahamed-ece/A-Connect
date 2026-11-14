@@ -328,6 +328,48 @@ function checkFeaturePayloads() {
     'doc:photo',
     'the document id did not survive the parser, so nothing can be opened'
   );
+
+  // The phone's vitals, which the desktop's device cards read. Both sides must
+  // agree byte for byte, or the cards show dashes while the channel is live.
+  const deviceInfo = protocol.buildDeviceInfo({
+    batteryLevel: 82,
+    isCharging: true,
+    androidVersion: '14',
+    colorOsVersion: 'ColorOS 14.0',
+    storageFree: '37 GB',
+    storageTotal: '128 GB',
+    model: 'CPH2737',
+  });
+  assert.deepStrictEqual(deviceInfo, expected.deviceInfo, 'the device-info payload changed');
+  const parsedInfo = protocol.parseDeviceInfo(deviceInfo);
+  assert.strictEqual(parsedInfo.batteryLevel, 82, 'the battery level did not survive');
+  assert.strictEqual(parsedInfo.storageFree, '37 GB', 'the free storage did not survive');
+  assert.strictEqual(parsedInfo.model, 'CPH2737', 'the model did not survive');
+}
+
+/**
+ * The preview cache's hash messages.
+ *
+ * The desktop asks for a file's SHA256 before downloading it, so a second look
+ * at the same file opens the cached copy instead of pulling it again.
+ */
+function checkFileHash() {
+  const request = protocol.buildFileHashRequest('doc:trace');
+  assert.strictEqual(request.type, protocol.TYPES.FILE_HASH_REQUEST, 'the request type changed');
+  assert.strictEqual(protocol.parseFileHashRequest(request).path, 'doc:trace', 'the path was lost');
+
+  const answer = protocol.buildFileHash('doc:trace', 'abc123', 4096);
+  const parsed = protocol.parseFileHash(answer);
+  assert.strictEqual(parsed.sha256, 'abc123', 'the hash did not survive');
+  assert.strictEqual(parsed.size, 4096, 'the size did not survive');
+  assert.strictEqual(parsed.error, undefined, 'a good answer invented an error');
+
+  const failure = protocol.buildFileHash('doc:trace', null, null, 'not found');
+  const parsedFailure = protocol.parseFileHash(failure);
+  assert.strictEqual(parsedFailure.error, 'not found', 'the failure reason was lost');
+  assert.strictEqual(parsedFailure.sha256, undefined, 'a failure invented a hash');
+
+  assert.strictEqual(protocol.parseFileHashRequest({ type: 'other' }), null, 'a foreign frame was claimed');
 }
 
 /**
@@ -536,6 +578,7 @@ function main() {
   checkClipboardRules();
   checkBinaryFrames();
   checkFeaturePayloads();
+  checkFileHash();
   checkFileBrowser();
   checkNoHardcodedVersion();
   checkProofRules();

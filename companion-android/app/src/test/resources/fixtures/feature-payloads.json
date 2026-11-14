@@ -72,5 +72,15 @@
         "mime": "image/jpeg"
       }
     ]
+  },
+  "deviceInfo": {
+    "type": "device-info",
+    "batteryLevel": 82,
+    "isCharging": true,
+    "androidVersion": "14",
+    "colorOsVersion": "ColorOS 14.0",
+    "storageFree": "37 GB",
+    "storageTotal": "128 GB",
+    "model": "CPH2737"
   }
 }

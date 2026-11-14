@@ -47,6 +47,13 @@ object Protocol {
     /** Mirroring never started, and why. */
     const val TYPE_MIRROR_FAILED = "mirror-failed"
 
+    /** The phone's vitals: battery, OS, storage. Sent after pairing and every ~60 s. */
+    const val TYPE_DEVICE_INFO = "device-info"
+
+    /** Preview cache: the desktop asks for a file's SHA256 before downloading. */
+    const val TYPE_FILE_HASH_REQUEST = "file-hash-request"
+    const val TYPE_FILE_HASH = "file-hash"
+
     /**
      * Why the desktop closed a session when it is going dormant.
      *

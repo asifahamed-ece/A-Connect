@@ -226,6 +226,9 @@ class CompanionService : Service() {
 
     private val mediaSettled = android.os.Handler(android.os.Looper.getMainLooper())
 
+    /** Publishes the phone's vitals every 60 s while connected. */
+    private var deviceInfoTimer: java.util.concurrent.ScheduledExecutorService? = null
+
     override fun onCreate() {
         super.onCreate()
         settings = CompanionSettings(this)
@@ -415,6 +418,10 @@ class CompanionService : Service() {
                     // The storage walk is slow, so it starts now rather than on
                     // the user's first keystroke in the search box.
                     searchThread.execute { searcher()?.warm() }
+                    // The computer's device cards want our vitals right away,
+                    // and from then on every 60 s.
+                    sendThread.execute { publishDeviceInfo() }
+                    startDeviceInfoTimer()
                 }
             },
             onClosed = { reason ->
@@ -426,6 +433,7 @@ class CompanionService : Service() {
                 }
                 if (client === thisClient) {
                     Log.i(TAG, "disconnected: $reason")
+                    stopDeviceInfoTimer()
                     // Clearing the slot is what lets the reconnect loop (and
                     // the Reconnect button) actually connect again: connect()
                     // refuses to run while a client is still recorded.
@@ -671,6 +679,94 @@ class CompanionService : Service() {
         val c = client
         if (c == null || !c.isReady) return false
         return c.sendMessage(Protocol.TYPE_MEDIA_STATE, payload)
+    }
+
+    /**
+     * Publishes the phone's vitals: battery, OS version, storage, model.
+     *
+     * Sent right after pairing and then every 60 s, so the desktop's device
+     * cards stay current.
+     */
+    private fun publishDeviceInfo() {
+        val c = client
+        if (c == null || !c.isReady) return
+
+        try {
+            val batteryManager = getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            val batteryLevel = batteryManager?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
+            val isCharging = batteryManager?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_STATUS) == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+
+            val androidVersion = Build.VERSION.RELEASE ?: "Unknown"
+            val colorOsVersion = colorOsVersion()
+            val model = Build.MODEL ?: "Unknown"
+
+            val storagePath = android.os.Environment.getExternalStorageDirectory()
+            val stat = if (storagePath != null) android.os.StatFs(storagePath.path) else null
+            val blockSize = stat?.blockSizeLong ?: 0L
+            val availableBlocks = stat?.availableBlocksLong ?: 0L
+            val totalBlocks = stat?.blockCountLong ?: 0L
+            val freeGb = if (blockSize > 0) (availableBlocks * blockSize) / (1024 * 1024 * 1024) else 0L
+            val totalGb = if (blockSize > 0) (totalBlocks * blockSize) / (1024 * 1024 * 1024) else 0L
+
+            val payload = FeaturePayloads.deviceInfo(
+                batteryLevel = batteryLevel,
+                isCharging = isCharging,
+                androidVersion = androidVersion,
+                colorOsVersion = colorOsVersion,
+                storageFree = if (freeGb > 0) "$freeGb GB" else "Unknown",
+                storageTotal = if (totalGb > 0) "$totalGb GB" else "Unknown",
+                model = model,
+            )
+
+            c.sendMessage(Protocol.TYPE_DEVICE_INFO, payload)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not publish device info: ${e.message}")
+        }
+    }
+
+    /** Starts the device-info timer: publishes vitals every 60 s. */
+    private fun startDeviceInfoTimer() {
+        stopDeviceInfoTimer()
+        deviceInfoTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "companion-device-info").apply { isDaemon = true }
+        }
+        deviceInfoTimer?.scheduleAtFixedRate(
+            { publishDeviceInfo() },
+            60L,
+            60L,
+            java.util.concurrent.TimeUnit.SECONDS
+        )
+    }
+
+    /** Stops the device-info timer. */
+    private fun stopDeviceInfoTimer() {
+        deviceInfoTimer?.shutdownNow()
+        deviceInfoTimer = null
+    }
+
+    /**
+     * The ColorOS version, the way the OPPO build reports it ("V16.1.0").
+     *
+     * It lives in the system property `ro.build.version.oplusrom`, which has no
+     * public API: reflection is the only way an ordinary app can read it, and a
+     * device that blocks hidden APIs simply throws. When that happens the build
+     * id still carries the major version - `CPH2737_16.0.10.601(EX01)` - so we
+     * read that instead of showing a bare "ColorOS".
+     */
+    private fun colorOsVersion(): String {
+        try {
+            val cls = Class.forName("android.os.SystemProperties")
+            val get = cls.getMethod("get", String::class.java, String::class.java)
+            val value = get.invoke(null, "ro.build.version.oplusrom", "") as? String
+            if (!value.isNullOrBlank()) return value
+        } catch (_: Throwable) {
+            // Hidden API blocked, or the class moved. The fallback below is
+            // still honest, so this is not worth a log every minute.
+        }
+
+        val match = Regex("_(\\d+)\\.(\\d+)").find(Build.DISPLAY ?: "")
+        if (match != null) return "ColorOS ${match.groupValues[1]}"
+        return "ColorOS"
     }
 
     /**
