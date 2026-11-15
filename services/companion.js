@@ -737,8 +737,7 @@ class CompanionService extends EventEmitter {
     }
 
     const stream = fs.createWriteStream(targetPath);
-    if (!socket.activeTransfers) socket.activeTransfers = new Map();
-    socket.activeTransfers.set(id, {
+    const transfer = {
       id,
       name: path.basename(targetPath),
       targetPath,
@@ -749,7 +748,18 @@ class CompanionService extends EventEmitter {
       contentHash: forViewing ? contentHash : null,
       phonePath: request?.phonePath || '',
       startedAt: Date.now(),
+      cancelled: false,
+    };
+    // A cancelled transfer destroys this stream, which makes any in-flight
+    // write complete with ERR_STREAM_DESTROYED. Without an error listener that
+    // becomes an uncaught exception that takes the whole main process (and the
+    // mirror running on it) down - so swallow it once the transfer is cancelled.
+    stream.on('error', (err) => {
+      if (transfer.cancelled) return;
+      console.error(`[companion] incoming file stream error for ${id}:`, err.message);
     });
+    if (!socket.activeTransfers) socket.activeTransfers = new Map();
+    socket.activeTransfers.set(id, transfer);
 
     console.log(`[companion] incoming file from ${socket.deviceName}: ${path.basename(targetPath)} (${size} bytes)`);
     this.emit('file-transfer-start', {
