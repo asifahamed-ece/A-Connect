@@ -9,7 +9,8 @@
     "start": "electron . --disable-vulkan",
     "dev": "electron . --disable-vulkan",
     "install-desktop": "bash scripts/install-desktop-entry.sh",
-    "check:history": "node scripts/check-file-history.js"
+    "check:history": "node scripts/check-file-history.js",
+    "dist": "electron-builder --linux AppImage --publish never"
   },
   "dependencies": {
     "@yume-chan/adb": "3.0.0-beta.5",
@@ -17,7 +18,40 @@
     "@yume-chan/adb-server-node-tcp": "3.0.0-beta.5",
     "@yume-chan/scrcpy": "3.0.0-beta.5",
     "dbus-next": "^0.10.2",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "usocket": "^1.1.0"
+  },
+  "devDependencies": {
+    "electron": "44.11.2",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.aplusconnect.desktop",
+    "productName": "A+ Connect",
+    "artifactName": "A-Plus-Connect-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "services/**/*",
+      "scripts/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@yume-chan/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "assets/icon.png"
+    }
   },
   "keywords": [
     "oppo",
@@ -31,5 +65,8 @@
     "clipboard"
   ],
   "author": "Asif Ahamed",
-  "license": "MIT"
+  "license": "MIT",
+  "allowScripts": {
+    "electron@44.11.2": true
+  }
 }

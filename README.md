@@ -44,6 +44,54 @@ over TLS. The phone never opens a listening port.
   remembered and the other side is told why.
 - **Tray app** — closing the window hides to the tray instead of quitting.
 
+## Interface Showcase
+
+A+ Connect features a cohesive frosted glass design language inspired by ColorOS and O+ Connect, complete with fluid transparency and live hardware telemetries across both the Linux desktop and Android mobile companion.
+
+### Mobile Companion App (ColorOS / Android)
+
+The Android companion client runs on the OPPO Reno 14 5G. Below is an interface tour across all primary screens, showcasing alternating Light and Dark modes alongside active file transfer progress:
+
+| Connect (Light Mode) | Files & Active Transfer (Dark Mode) | Clipboard Sync (Light Mode) |
+| :---: | :---: | :---: |
+| <img src="assets/screenshots/mobile-connect-light.png" width="240" alt="Mobile Connect Screen (Light Mode)"> | <img src="assets/screenshots/mobile-files-transfer-dark.png" width="240" alt="Mobile Active File Reception (Dark Mode)"> | <img src="assets/screenshots/mobile-clipboard-light.png" width="240" alt="Mobile Clipboard Sync (Light Mode)"> |
+| **Encrypted Link & Vitals**<br>Connection state, IP/port, battery level, Android version, and storage telemetry. | **Active File Transfer**<br>Real-time reception progress bar (`large-transfer.iso`, 300 MB) with transfer rate and cancellation. | **Bidirectional Clipboard**<br>Live clipboard sync status, background keyboard engine, and clip history. |
+
+<br>
+
+| Transfer History (Dark Mode) | Settings & Customization (Light Mode) |
+| :---: | :---: |
+| <img src="assets/screenshots/mobile-history-dark.png" width="240" alt="Mobile File Transfer History (Dark Mode)"> | <img src="assets/screenshots/mobile-settings-light.png" width="240" alt="Mobile Settings Screen (Light Mode)"> |
+| **Transfer History**<br>Audited log of sent & received files with timestamps, file sizes, and quick open actions. | **Appearance & Themes**<br>Theme selector (Light/Dark/System), frosted glass opacity slider, and motion toggles. |
+
+### Desktop Application (Linux / Electron)
+
+The Linux desktop client runs natively on KDE / Wayland and X11 sessions, featuring frosted glass cards, system tray integration, and real-time device telemetries:
+
+#### 1. Device Connection & Vitals
+Overview of paired devices, battery levels, storage statistics, TLS encryption status, and one-click screen mirroring.
+![Desktop Connect View](assets/screenshots/desktop-connect.png)
+
+#### 2. File Sharing & Active Progress
+Integrated phone storage browser, search, multi-file batch downloads, and real-time upload progress with speed metrics and cancellation.
+![Desktop Files View](assets/screenshots/desktop-files-transfer.png)
+
+#### 3. Bidirectional Clipboard Sync
+Instant clipboard synchronization between desktop and phone, clipboard history with one-click copying, and direction indicators.
+![Desktop Clipboard View](assets/screenshots/desktop-clipboard.png)
+
+#### 4. Mirrored Phone Notifications
+Phone notification drawer displaying ongoing media controls and dismissible alerts in real time.
+![Desktop Notifications View](assets/screenshots/desktop-notifications.png)
+
+#### 5. Transfer History
+Comprehensive transfer logs categorized by incoming and outgoing files, with direct folder opening and item management.
+![Desktop Transfer History View](assets/screenshots/desktop-history.png)
+
+#### 6. Settings & Customization
+Configurable appearance themes, glass transparency adjustment, motion preferences, and local download destination path.
+![Desktop Settings View](assets/screenshots/desktop-settings.png)
+
 ## Requirements
 
 **System binaries on `PATH`:**
@@ -92,11 +140,38 @@ network.
 
 ### Companion path: no cable, no developer options
 
-1. Install the companion app from `companion-android/`.
-2. Start the desktop: `npm start`.
-3. Pair by scanning the desktop's QR code, or by entering the address and code.
+Download the pre-built APKs directly onto your phone from the [Latest Release](https://github.com/asifahamed-ece/A-Connect/releases/latest):
 
-To check the preconditions first:
+| Package | Direct Download Link | Purpose |
+|---|---|---|
+| **A+ Connect Companion** | [⬇️ Download `A-Plus-Connect-android.apk`](https://github.com/asifahamed-ece/A-Connect/releases/latest/download/A-Plus-Connect-1.1.0-android.apk) | Core companion service for file transfers, notification mirroring, screen mirroring, and media controls. |
+| **A+ Connect Keyboard** | [⬇️ Download `A-Plus-Connect-Keyboard-android.apk`](https://github.com/asifahamed-ece/A-Connect/releases/latest/download/A-Plus-Connect-Keyboard-android.apk) | Patched HeliBoard IME for seamless, background phone ↔ PC clipboard synchronization without tripping banking restrictions. |
+
+#### Setup steps:
+
+1. **Install the Companion APK:**
+   * Download and install `A-Plus-Connect-android.apk` on your phone.
+   * Open the app and grant **Notification access** (*Settings → Special app access → Notification access*) when prompted so notifications can be mirrored.
+   * Grant **All files access** to allow browsing and transferring files.
+
+2. **Install the Keyboard APK (required for bidirectional clipboard):**
+   * Download and install `A-Plus-Connect-Keyboard-android.apk`.
+   * Enable it in **Settings → System & updates → Keyboard & input method**.
+   * Set **A+ Connect Keyboard** as the default keyboard. Android 10+ exclusively permits the active default keyboard to read the clipboard in the background without user interaction.
+
+3. **Start the Desktop app:**
+   * Run via source:
+     ```bash
+     npm start
+     ```
+   * Or run the standalone AppImage:
+     [⬇️ Download `A-Plus-Connect-x86_64.AppImage`](https://github.com/asifahamed-ece/A-Connect/releases/latest/download/A-Plus-Connect-1.1.0-x86_64.AppImage)
+
+4. **Pair the devices:**
+   * In the mobile app, tap **Connect**.
+   * Scan the pairing QR code shown on the desktop app, or enter the local IP address and 6-digit one-time code. Both devices connect immediately over an encrypted TLS 1.3 link.
+
+To check local companion preconditions first:
 
 ```bash
 node scripts/check-without-adb.js
