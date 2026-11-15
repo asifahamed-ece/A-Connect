@@ -764,7 +764,7 @@ class CompanionService extends EventEmitter {
   handleFileChunk(socket, payload) {
     const { id, chunkIndex, data } = payload;
     const transfer = socket.activeTransfers?.get(id);
-    if (!transfer) return;
+    if (!transfer || transfer.cancelled) return;
 
     try {
       const buffer = Buffer.from(data, 'base64');
