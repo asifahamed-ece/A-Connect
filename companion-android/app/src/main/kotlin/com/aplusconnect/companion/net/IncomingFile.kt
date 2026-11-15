@@ -217,6 +217,11 @@ class IncomingFile(private val tempFolder: File) {
             return false
         }
         return try {
+            // The cache folder (and any parents) may not exist yet on a fresh
+            // install. Create it so incoming PC->phone transfers can land here.
+            if (!tempFolder.exists() && !tempFolder.mkdirs()) {
+                throw IllegalStateException("the incoming transfer folder could not be created")
+            }
             val temp = File(tempFolder, "incoming-$id.part")
             if (temp.exists()) temp.delete()
             currentId = id
