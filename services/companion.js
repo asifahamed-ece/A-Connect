@@ -737,8 +737,7 @@ class CompanionService extends EventEmitter {
     }
 
     const stream = fs.createWriteStream(targetPath);
-    if (!socket.activeTransfers) socket.activeTransfers = new Map();
-    socket.activeTransfers.set(id, {
+    const transfer = {
       id,
       name: path.basename(targetPath),
       targetPath,
@@ -749,7 +748,18 @@ class CompanionService extends EventEmitter {
       contentHash: forViewing ? contentHash : null,
       phonePath: request?.phonePath || '',
       startedAt: Date.now(),
+      cancelled: false,
+    };
+    // A cancelled transfer destroys this stream, which makes any in-flight
+    // write complete with ERR_STREAM_DESTROYED. Without an error listener that
+    // becomes an uncaught exception that takes the whole main process (and the
+    // mirror running on it) down - so swallow it once the transfer is cancelled.
+    stream.on('error', (err) => {
+      if (transfer.cancelled) return;
+      console.error(`[companion] incoming file stream error for ${id}:`, err.message);
     });
+    if (!socket.activeTransfers) socket.activeTransfers = new Map();
+    socket.activeTransfers.set(id, transfer);
 
     console.log(`[companion] incoming file from ${socket.deviceName}: ${path.basename(targetPath)} (${size} bytes)`);
     this.emit('file-transfer-start', {
@@ -764,7 +774,7 @@ class CompanionService extends EventEmitter {
   handleFileChunk(socket, payload) {
     const { id, chunkIndex, data } = payload;
     const transfer = socket.activeTransfers?.get(id);
-    if (!transfer) return;
+    if (!transfer || transfer.cancelled) return;
 
     try {
       const buffer = Buffer.from(data, 'base64');
@@ -1042,6 +1052,7 @@ class CompanionService extends EventEmitter {
   cancelFile(id) {
     const send = this.outgoing.get(id);
     if (send) {
+      if (send.cancelled) return true;
       send.cancelled = true;
       for (const socket of send.sockets) this.writeCancel(socket, id);
       this.finishSend(send, 'cancelled');
@@ -1049,7 +1060,7 @@ class CompanionService extends EventEmitter {
     }
     for (const socket of this.clients) {
       const transfer = socket.activeTransfers?.get(id);
-      if (!transfer) continue;
+      if (!transfer || transfer.cancelled) continue;
       this.writeCancel(socket, id);
       this.dropIncoming(socket, transfer);
       this.emit('file-transfer-cancelled', { id, name: transfer.name, by: 'computer' });
@@ -1081,7 +1092,12 @@ class CompanionService extends EventEmitter {
       payload,
     });
     const writeAll = async (frame) => {
+      // A cancel (from the phone or the computer) must stop writing at once.
+      // Writing to a socket that is mid-teardown throws "write after end",
+      // which surfaces as a spurious JS error on the desktop.
+      if (send.cancelled) return;
       for (const socket of send.sockets) {
+        if (send.cancelled) return;
         if (socket.destroyed) throw new Error('the phone disconnected');
         if (!socket.write(frame)) await new Promise((r) => socket.once('drain', r));
       }
@@ -1098,12 +1114,13 @@ class CompanionService extends EventEmitter {
       let lastProgress = 0;
       while (!send.cancelled) {
         const { bytesRead } = await fd.read(buffer, 0, chunkSize, send.sent);
-        if (bytesRead === 0) break;
+        if (bytesRead === 0 || send.cancelled) break;
         await writeAll(encode(protocol.TYPES.FILE_CHUNK, {
           id: send.id,
           chunkIndex: index++,
           data: buffer.subarray(0, bytesRead).toString('base64'),
         }));
+        if (send.cancelled) break;
         send.sent += bytesRead;
         while (send.peerAcks && !send.cancelled && send.sent - send.acked > window) {
           await this.waitForAck(send, 15000);
