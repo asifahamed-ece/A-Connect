@@ -33,6 +33,7 @@ import com.aplusconnect.companion.mirror.ScreenMirror
 import com.aplusconnect.companion.net.CompanionClient
 import com.aplusconnect.companion.net.DownloadDestination
 import com.aplusconnect.companion.net.IncomingFile
+import com.aplusconnect.companion.net.LiveTransfers
 import com.aplusconnect.companion.net.ReconnectPolicy
 import com.aplusconnect.companion.net.VideoClient
 import com.aplusconnect.companion.protocol.ClipboardPayload
@@ -92,6 +93,10 @@ class CompanionService : Service() {
         /** Whether the screen is being mirrored right now, for the app's own UI. */
         @Volatile
         var mirroring: Boolean = false
+
+        /** Last transfer error, consumed once by the UI. */
+        @Volatile
+        var lastTransferError: String? = null
     }
 
     private lateinit var settings: CompanionSettings
@@ -156,6 +161,12 @@ class CompanionService : Service() {
 
     /** Guards the pending clipboard and the last sent hash. */
     private val stateLock = Any()
+
+    /** Tracks bytes acknowledged for the current receive, so we ACK periodically. */
+    private var lastAckAt = 0L
+
+    /** When we last showed a transfer notification, to throttle updates. */
+    private val notifiedAt = mutableMapOf<String, Long>()
 
     /**
      * Where clipboard sends happen.
@@ -273,6 +284,12 @@ class CompanionService : Service() {
         manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "A+ Connect", NotificationManager.IMPORTANCE_LOW)
         )
+        manager?.createNotificationChannel(
+            NotificationChannel(TRANSFER_CHANNEL_ID, "File transfers", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Progress of files moving between this phone and the computer"
+                setShowBadge(false)
+            }
+        )
         // The foreground type is named explicitly, and it is the connection
         // type only. Declaring mediaProjection in the manifest is necessary
         // but not enough: Android refuses to start a mediaProjection service
@@ -298,6 +315,9 @@ class CompanionService : Service() {
             if (client == null || client?.isReady != true) {
                 connect()
             }
+        }
+        if (intent?.action == ACTION_CANCEL_TRANSFER) {
+            intent.getStringExtra(EXTRA_TRANSFER_ID)?.let { id -> fileThread.execute { cancelTransferHere(id) } }
         }
         val text = intent?.getStringExtra(EXTRA_CLIPBOARD)
         if (text != null) {
@@ -383,42 +403,87 @@ class CompanionService : Service() {
             clipboardAccess = isDefaultKeyboard(),
             onSecretCreated = { secret -> settings.sharedSecret = secret },
             onFileStart = { id, name, size, mime ->
-                incomingFile.start(id, name, size, mime)
+                if (incomingFile.start(id, name, size, mime)) {
+                    LiveTransfers.start(id, name, LiveTransfers.Direction.Receiving, size)
+                    lastAckAt = 0L
+                    thisClient?.sendFileAck(id, 0, "progress")
+                    showTransferNotification(id)
+                } else {
+                    thisClient?.sendFileAck(id, 0, "failed", "the phone is already receiving another file")
+                }
             },
-            onFileChunk = { id, index, bytes ->
-                incomingFile.chunk(id, bytes)
+            onFileChunk = { id, _, bytes ->
+                if (LiveTransfers.isCancelled(id)) {
+                    // Cancelled here; computer informed
+                } else if (incomingFile.chunk(id, bytes)) {
+                    val got = incomingFile.received
+                    LiveTransfers.progress(id, got)
+                    if (got - lastAckAt >= ACK_EVERY_BYTES) {
+                        lastAckAt = got
+                        thisClient?.sendFileAck(id, got, "progress")
+                    }
+                    showTransferNotification(id)
+                } else if (incomingFile.activeId == null && LiveTransfers.get(id) != null) {
+                    val t = LiveTransfers.cancel(id)
+                    thisClient?.sendFileAck(id, 0, "failed", "the phone could not write the file")
+                    finishTransferNotification(id, "${t?.name ?: "File"} didn't arrive", "The phone could not write it")
+                }
             },
             onFileDone = { id ->
-                val received = incomingFile.finish(id)
-                if (received != null) {
-                    val receivedBytes = received.file.length()
-                    val saved = destination.save(
-                        received.file,
-                        received.name,
-                        settings.downloadFolderUri,
-                    )
-                    received.file.delete()
-                    if (saved != null) {
-                        Status.lastReceivedFile = received.name
-                        fileHistory.add(
-                            SharedFileEntry(
-                                id = "received-$id",
-                                name = received.name,
-                                direction = Direction.Received,
-                                sizeBytes = receivedBytes,
-                                timestamp = System.currentTimeMillis(),
-                                uri = saved.toString(),
-                            )
-                        )
-                        Status.fileHistoryVersion++
-                        Log.i(TAG, "saved ${received.name}")
-                        // The search index was built before this file existed,
-                        // so without this the file is invisible to search until
-                        // the index ages out or the user reconnects.
-                        searcher?.invalidate()
-                    } else {
-                        Log.w(TAG, "could not save ${received.name}")
+                val live = LiveTransfers.get(id)
+                when (val outcome = incomingFile.finish(id)) {
+                    is IncomingFile.Outcome.Complete -> {
+                        val received = outcome.received
+                        val receivedBytes = received.file.length()
+                        // A tree the app can no longer write is dropped, so the
+                        // next file does not try it again and the Files page
+                        // stops pointing at a folder that is not there.
+                        if (!destination.canWrite(settings.downloadFolderUri)) {
+                            settings.downloadFolderUri = ""
+                        }
+                        val result = destination.save(received.file, received.name, settings.downloadFolderUri)
+                        received.file.delete()
+                        LiveTransfers.finish(id)
+                        when (result) {
+                            is DownloadDestination.Result.Saved -> {
+                                thisClient?.sendFileAck(id, receivedBytes, "saved")
+                                Status.lastReceivedFile = received.name
+                                fileHistory.add(
+                                    SharedFileEntry(
+                                        id = "received-$id",
+                                        name = received.name,
+                                        direction = Direction.Received,
+                                        sizeBytes = receivedBytes,
+                                        timestamp = System.currentTimeMillis(),
+                                        uri = result.uri.toString(),
+                                    )
+                                )
+                                Status.fileHistoryVersion++
+                                Log.i(TAG, "saved ${received.name} to ${result.where}")
+                                finishTransferNotification(id, "Received ${received.name}", "Saved to ${result.where}", openUri = result.uri.toString(), mime = received.mime)
+                                searcher?.invalidate()
+                            }
+                            is DownloadDestination.Result.Failed -> {
+                                thisClient?.sendFileAck(id, receivedBytes, "failed", result.reason)
+                                Status.lastTransferError = "${received.name}: ${result.reason}"
+                                finishTransferNotification(id, "Couldn't save ${received.name}", result.reason)
+                            }
+                        }
                     }
+                    is IncomingFile.Outcome.Broken -> {
+                        LiveTransfers.finish(id)
+                        thisClient?.sendFileAck(id, 0, "failed", outcome.reason)
+                        Status.lastTransferError = "${live?.name ?: "File"}: ${outcome.reason}"
+                        finishTransferNotification(id, "${live?.name ?: "File"} didn't arrive", outcome.reason)
+                    }
+                    IncomingFile.Outcome.NotRunning -> Unit
+                }
+            },
+            onFileCancel = { id ->
+                val t = LiveTransfers.cancel(id)
+                incomingFile.cancel(id)
+                if (t != null) {
+                    finishTransferNotification(id, "Cancelled ${t.name}", "Cancelled on the computer")
                 }
             },
             onPaired = { pcId, fingerprint, pcName ->
@@ -1367,6 +1432,23 @@ class CompanionService : Service() {
         manager?.notify(NOTIFICATION_ID, buildNotification(text, withStop = screenMirror != null))
     }
 
+    internal fun cancelTransferHere(id: String) {
+        val t = LiveTransfers.cancel(id) ?: return
+        incomingFile.cancel(id)
+        client?.sendFileCancel(id)
+        CompanionService.finishTransferNotification(this, id, "Cancelled ${t.name}", "You cancelled it")
+    }
+
+    private fun showTransferNotification(id: String, force: Boolean = false) {
+        CompanionService.showTransferNotification(this, id, force)
+    }
+
+    private fun finishTransferNotification(id: String, title: String, text: String, openUri: String? = null, mime: String? = null) {
+        CompanionService.finishTransferNotification(this, id, title, text, openUri, mime)
+    }
+
+    private fun transferNotificationId(id: String): Int = CompanionService.transferNotificationId(id)
+
     /**
      * Whether the app is the default keyboard.
      *
@@ -1409,6 +1491,14 @@ class CompanionService : Service() {
 
         /** How long to wait for the video socket's handshake before giving up. */
         private const val VIDEO_READY_TIMEOUT_MS = 6000L
+
+        /** Transfer progress notifications (ongoing, cancellable). */
+        private const val TRANSFER_CHANNEL_ID = "aplus_connect_transfers"
+        private const val TRANSFER_NOTIFICATION_BASE = 1000
+        private const val ACK_EVERY_BYTES = 256 * 1024
+        const val ACTION_CANCEL_TRANSFER = "com.aplusconnect.companion.CANCEL_TRANSFER"
+        const val EXTRA_TRANSFER_ID = "transfer_id"
+        const val CANCELLED = "Cancelled"
 
         /**
          * The user granted capture. Called by MainActivity, which is the only
@@ -1559,6 +1649,84 @@ class CompanionService : Service() {
             }
         }
 
+        /** Cancels a transfer by id, from the computer or the phone. */
+        fun cancelTransfer(context: Context, id: String) {
+            instance?.fileThread?.execute { instance?.cancelTransferHere(id) }
+        }
+
+        private fun showTransferNotification(instance: CompanionService, id: String, force: Boolean = false) {
+            val t = LiveTransfers.get(id) ?: return
+            val now = System.currentTimeMillis()
+            if (!force && now - (instance.notifiedAt[id] ?: 0L) < 500L) return
+            instance.notifiedAt[id] = now
+            val receiving = t.direction == LiveTransfers.Direction.Receiving
+            val percent = t.progress?.let { (it * 100).toInt() }
+            val cancel = PendingIntent.getService(
+                instance,
+                transferNotificationId(id),
+                Intent(instance, CompanionService::class.java)
+                    .setAction(ACTION_CANCEL_TRANSFER)
+                    .putExtra(EXTRA_TRANSFER_ID, id),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val open = PendingIntent.getActivity(
+                instance,
+                4,
+                Intent(instance, com.aplusconnect.companion.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val title = (if (receiving) "Receiving " else "Sending ") + t.name
+            val text = buildString {
+                if (percent != null) append("$percent% · ")
+                append(com.aplusconnect.companion.ui.humanBytes(t.doneBytes))
+                if (t.totalBytes > 0) append(" of ").append(com.aplusconnect.companion.ui.humanBytes(t.totalBytes))
+                val speed = t.speed(now)
+                if (speed > 0) append(" · ").append(com.aplusconnect.companion.ui.humanBytes(speed)).append("/s")
+            }
+            val notification = Notification.Builder(instance, TRANSFER_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setSmallIcon(if (receiving) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setProgress(100, percent ?: 0, percent == null)
+                .setContentIntent(open)
+                .addAction(
+                    Notification.Action.Builder(
+                        Icon.createWithResource(instance, android.R.drawable.ic_menu_close_clear_cancel),
+                        "Cancel",
+                        cancel,
+                    ).build()
+                )
+                .build()
+            try {
+                instance.getSystemService(NotificationManager::class.java)?.notify(transferNotificationId(id), notification)
+            } catch (_: SecurityException) {}
+        }
+
+        private fun finishTransferNotification(instance: CompanionService, id: String, title: String, text: String, openUri: String? = null, mime: String? = null) {
+            instance.notifiedAt.remove(id)
+            val manager = instance.getSystemService(NotificationManager::class.java) ?: return
+            val tap = if (openUri != null) {
+                val view = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(android.net.Uri.parse(openUri), mime?.ifEmpty { null } ?: "*/*")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                PendingIntent.getActivity(instance, transferNotificationId(id), view, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            } else null
+            val builder = Notification.Builder(instance, TRANSFER_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setSmallIcon(if (openUri != null) android.R.drawable.stat_sys_download_done else android.R.drawable.stat_notify_error)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+            if (tap != null) builder.setContentIntent(tap)
+            try {
+                manager.notify(transferNotificationId(id), builder.build())
+            } catch (_: SecurityException) {}
+        }
+
+        private fun transferNotificationId(id: String): Int = TRANSFER_NOTIFICATION_BASE + (id.hashCode() and 0xFFFF)
+
         /** Disconnects and stops the background service. */
         fun stop(context: Context) {
             val running = instance
@@ -1578,6 +1746,7 @@ class CompanionService : Service() {
         fun sendFile(
             context: Context,
             uri: android.net.Uri,
+            transferId: String = "",
             onProgress: (Float) -> Unit,
             onComplete: (Boolean, String?) -> Unit
         ) {
@@ -1600,7 +1769,7 @@ class CompanionService : Service() {
                 // name and the size in the header are lost.
             }
 
-            stream("file", fileName, fileSize, mimeType, { cr.openInputStream(uri) }, onProgress, onComplete)
+            stream("file", fileName, fileSize, mimeType, { cr.openInputStream(uri) }, onProgress, onComplete, transferId)
         }
 
         /**
@@ -1641,20 +1810,26 @@ class CompanionService : Service() {
             transferIdOverride: String = "",
         ) {
             val active = instance?.client
-            if (active == null || !active.isReady) {
+            val inst = instance
+            if (active == null || !active.isReady || inst == null) {
                 onComplete(false, "Not connected to PC")
                 return
             }
 
             Thread {
+                val transferId = transferIdOverride.ifEmpty {
+                    "${idPrefix}_${UUID.randomUUID().toString().take(8)}"
+                }
                 try {
                     val inputStream = open() ?: throw Exception("Could not open file")
-                    val transferId = transferIdOverride.ifEmpty {
-                        "${idPrefix}_${UUID.randomUUID().toString().take(8)}"
-                    }
+
+                    LiveTransfers.start(transferId, fileName, LiveTransfers.Direction.Sending, fileSize)
+                    CompanionService.showTransferNotification(inst, transferId, force = true)
 
                     if (!active.sendFileStart(transferId, fileName, fileSize, mimeType)) {
                         inputStream.close()
+                        LiveTransfers.finish(transferId)
+                        CompanionService.finishTransferNotification(inst, transferId, "Couldn't send $fileName", "PC rejected file transfer")
                         onComplete(false, "PC rejected file transfer")
                         return@Thread
                     }
@@ -1665,6 +1840,13 @@ class CompanionService : Service() {
                     var chunkIndex = 0
 
                     while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        if (LiveTransfers.isCancelled(transferId)) {
+                            inputStream.close()
+                            LiveTransfers.finish(transferId)
+                            CompanionService.finishTransferNotification(inst, transferId, "Cancelled $fileName", "You cancelled it")
+                            onComplete(false, CANCELLED)
+                            return@Thread
+                        }
                         val chunkBase64 = android.util.Base64.encodeToString(
                             buffer,
                             0,
@@ -1672,10 +1854,14 @@ class CompanionService : Service() {
                             android.util.Base64.NO_WRAP
                         )
                         if (!active.sendFileChunk(transferId, chunkIndex++, chunkBase64)) {
+                            LiveTransfers.finish(transferId)
+                            CompanionService.finishTransferNotification(inst, transferId, "Couldn't send $fileName", "Connection broke while sending")
                             onComplete(false, "Connection broke while sending")
                             return@Thread
                         }
                         totalSent += bytesRead
+                        LiveTransfers.progress(transferId, totalSent)
+                        CompanionService.showTransferNotification(inst, transferId)
                         val progress = if (fileSize > 0) totalSent.toFloat() / fileSize else 0f
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
                             onProgress(progress)
@@ -1689,6 +1875,8 @@ class CompanionService : Service() {
                         onComplete(true, null)
                     }
                 } catch (e: Exception) {
+                    LiveTransfers.finish(transferId)
+                    CompanionService.finishTransferNotification(inst, transferId, "Couldn't send $fileName", e.message ?: "unknown error")
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         onComplete(false, e.message)
                     }

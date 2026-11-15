@@ -48,6 +48,8 @@ internal data class TransferItem(
     val state: TransferState,
     val progress: Float?,
     val message: String?,
+    /** The id on the wire, so Cancel can reach the service and the computer. */
+    val transferId: String = "",
 )
 
 internal data class FilesUi(
@@ -55,6 +57,8 @@ internal data class FilesUi(
     val computerLabel: String,
     /** Only sends in flight or failed. Finished ones are in History. */
     val transfers: List<TransferItem>,
+    /** Files the computer is sending to this phone right now. */
+    val incoming: List<com.aplusconnect.companion.net.LiveTransfers.Transfer> = emptyList(),
     val historyCount: Int,
     val receivedFolder: String,
     val browseGranted: Boolean,
@@ -66,6 +70,8 @@ internal class FilesActions(
     val onPickMedia: () -> Unit,
     val onRetry: (TransferItem) -> Unit,
     val onDismiss: (TransferItem) -> Unit,
+    val onCancel: (TransferItem) -> Unit = {},
+    val onCancelIncoming: (String) -> Unit = {},
     val onOpenHistory: () -> Unit,
     val onChangeFolder: () -> Unit,
     val onGrantBrowse: () -> Unit,

@@ -597,6 +597,47 @@ function setupServiceEvents() {
   // A file this computer sent to the phone over the companion channel. The
   // service writes it in one go, so there is no progress to report - only
   // that it went, which is what the history needs.
+  companion.on('file-send-start', (data) => {
+    sendToRenderer('event:transfer-progress', {
+      status: 'started',
+      type: 'push',
+      id: data.id,
+      filename: data.name,
+      size: data.size,
+      localFilePath: data.path,
+    });
+  });
+  companion.on('file-send-progress', (data) => {
+    sendToRenderer('event:transfer-progress', {
+      status: 'progress',
+      id: data.id,
+      received: data.received,
+      total: data.total,
+    });
+  });
+  companion.on('file-send-cancelled', (data) => {
+    sendToRenderer('event:transfer-progress', { status: 'cancelled', id: data.id });
+    if (data.by === 'phone') {
+      sendToRenderer('event:toast', { message: `The phone cancelled ${data.name}`, kind: 'err' });
+    }
+  });
+  companion.on('file-send-failed', (data) => {
+    sendToRenderer('event:transfer-progress', {
+      status: 'failed',
+      type: 'push',
+      id: data.id,
+      filename: data.name,
+      error: data.error,
+    });
+    sendToRenderer('event:toast', { message: `${data.name} didn't reach the phone: ${data.error}`, kind: 'err' });
+  });
+  companion.on('file-transfer-cancelled', (data) => {
+    sendToRenderer('event:transfer-progress', { status: 'cancelled', id: data.id });
+    if (data.by === 'phone') {
+      sendToRenderer('event:toast', { message: `The phone cancelled ${data.name}`, kind: 'err' });
+    }
+  });
+
   companion.on('file-sent', (data) => {
     sendToRenderer('event:transfer-progress', {
       status: 'completed',
@@ -698,7 +739,7 @@ function setupIpcHandlers() {
     return result.filePaths;
   });
   ipcMain.handle('file:cancel', async (_, transferId) => ({
-    success: fileTransfer.cancelTransfer(transferId)
+    success: fileTransfer.cancelTransfer(transferId) || companion.cancelFile(transferId)
   }));
   ipcMain.handle('file:cancelAll', async () => ({ cancelled: fileTransfer.cancelAll() }));
   ipcMain.handle('file:listDirectory', async (_, deviceId, remotePath) => {
@@ -778,8 +819,9 @@ function setupIpcHandlers() {
     }
   });
   ipcMain.handle('companion:sendFile', async (_, filePath) => {
-    const sent = companion.sendFile(filePath);
-    return { success: sent, filePath };
+    // sendFile returns the transfer id, so the row can be cancelled later.
+    const id = companion.sendFile(filePath);
+    return { success: Boolean(id), id, filePath };
   });
   ipcMain.handle('companion:pickAndSendFile', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -789,8 +831,8 @@ function setupIpcHandlers() {
     if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
 
     const filePath = result.filePaths[0];
-    const sent = companion.sendFile(filePath);
-    return { success: sent, filePath, name: require('path').basename(filePath) };
+    const id = companion.sendFile(filePath);
+    return { success: Boolean(id), id, filePath, name: require('path').basename(filePath) };
   });
   ipcMain.handle('companion:listFiles', async (_, path) => companion.requestFileList(path));
   ipcMain.handle('companion:searchFiles', async (_, query, fresh) =>

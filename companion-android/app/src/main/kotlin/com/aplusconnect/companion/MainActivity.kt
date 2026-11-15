@@ -300,6 +300,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
 
     val transfers = remember { mutableStateListOf<TransferItem>() }
     val pendingUris = remember { mutableMapOf<Long, Uri>() }
+    var incomingTransfers by remember { mutableStateOf<List<com.aplusconnect.companion.net.LiveTransfers.Transfer>>(emptyList()) }
 
     var showScanner by remember { mutableStateOf(false) }
     var showManual by remember { mutableStateOf(false) }
@@ -348,6 +349,12 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
             keyboardActive = isDefaultKeyboard(context)
             batteryOptimized = isBatteryOptimized(context)
             if (tick++ % 20 == 0) vitals = readVitals(context)
+            incomingTransfers = com.aplusconnect.companion.net.LiveTransfers.all()
+                .filter { it.direction == com.aplusconnect.companion.net.LiveTransfers.Direction.Receiving }
+            CompanionService.Status.lastTransferError?.let { err ->
+                notify(err, error = true)
+                CompanionService.Status.lastTransferError = null
+            }
             delay(500L)
         }
     }
@@ -382,7 +389,8 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
         val id = existingId ?: System.nanoTime()
         val (name, size) = queryFile(context, uri)
         pendingUris[id] = uri
-        val item = TransferItem(id, name, size, TransferState.Queued, null, null)
+        val transferWireId = "send_${id}"
+        val item = TransferItem(id, name, size, TransferState.Queued, null, null, transferId = transferWireId)
         val index = transfers.indexOfFirst { it.id == id }
         if (index >= 0) transfers[index] = item else transfers.add(0, item)
 
@@ -393,6 +401,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
         CompanionService.sendFile(
             context = context,
             uri = uri,
+            transferId = transferWireId,
             onProgress = { p -> update { it.copy(state = TransferState.Active, progress = p) } },
             onComplete = { success, error ->
                 if (success) {
@@ -415,6 +424,10 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                         historyDirection = Direction.Sent
                         showHistory = true
                     }
+                } else if (error == CompanionService.CANCELLED) {
+                    transfers.removeAll { it.id == id }
+                    pendingUris.remove(id)
+                    notify("Cancelled $name")
                 } else {
                     update { it.copy(state = TransferState.Failed, message = error) }
                     notify("$name didn't send", error = true, action = "Retry") { startSend(uri, id) }
@@ -533,6 +546,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                                 connected = isConnected,
                                 computerLabel = computerLabel,
                                 transfers = transfers.toList(),
+                                incoming = incomingTransfers,
                                 historyCount = fileHistoryEntries.size,
                                 receivedFolder = folderLabel(downloadFolder),
                                 browseGranted = allFilesGranted,
@@ -546,6 +560,8 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                                     transfers.removeAll { it.id == t.id }
                                     pendingUris.remove(t.id)
                                 },
+                                onCancel = { t -> CompanionService.cancelTransfer(context, t.transferId) },
+                                onCancelIncoming = { id -> CompanionService.cancelTransfer(context, id) },
                                 onOpenHistory = { showHistory = true },
                                 onChangeFolder = { folderPicker.launch(null) },
                                 onGrantBrowse = { context.startActivity(PhoneFileBrowser(context).grantIntent()) },
@@ -845,7 +861,7 @@ private fun readVitals(context: Context): PhoneVitals {
 }
 
 private fun folderLabel(uri: String): String =
-    if (uri.isEmpty()) "This app's Downloads folder"
+    if (uri.isEmpty()) "Downloads / A+ Connect"
     else Uri.decode(uri).substringAfterLast(':').substringAfterLast('/').ifEmpty { "Chosen folder" }
 
 private fun appVersion(context: Context): String = try {

@@ -54,6 +54,11 @@ object Protocol {
     const val TYPE_FILE_HASH_REQUEST = "file-hash-request"
     const val TYPE_FILE_HASH = "file-hash"
 
+    /** Receiver to sender: bytes written so far, and at the end saved or failed. */
+    const val TYPE_FILE_ACK = "file-ack"
+    /** Either side: stop this transfer and delete the partial file. */
+    const val TYPE_FILE_CANCEL = "file-cancel"
+
     /**
      * Why the desktop closed a session when it is going dormant.
      *

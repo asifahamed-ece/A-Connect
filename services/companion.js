@@ -47,6 +47,20 @@ const FILE_LIST_TIMEOUT_MS = 10 * 1000;
  */
 const FILE_SEARCH_TIMEOUT_MS = 40 * 1000;
 
+/** The type the phone saves a file under; a wrong one can rename or reject it. */
+function mimeForName(name) {
+  const ext = String(name).split('.').pop().toLowerCase();
+  const map = {
+    apk: 'application/vnd.android.package-archive',
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+    mp4: 'video/mp4', mkv: 'video/x-matroska', mov: 'video/quicktime', mp3: 'audio/mpeg', m4a: 'audio/mp4',
+    pdf: 'application/pdf', txt: 'text/plain', json: 'application/json', zip: 'application/zip',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
 const PAIRED_DEVICES_FILE = path.join(
   process.env.HOME || process.env.USERPROFILE || '.',
   '.config',
@@ -178,6 +192,9 @@ class CompanionService extends EventEmitter {
 
     /** Preview requests waiting on the phone's hash, by the id we gave them. */
     this.pendingHashes = new Map();
+
+    /** Outgoing sends, by transfer id: { cancelled, acked, socket, ... }. */
+    this.outgoing = new Map();
 
     this.loadSettings();
     this.loadPairedDevices();
@@ -462,6 +479,13 @@ class CompanionService extends EventEmitter {
     });
 
     socket.on('close', () => {
+      // A send to a phone that left can never finish: say so instead of leaving the row spinning.
+      for (const send of Array.from(this.outgoing.values())) {
+        if (send.sockets.includes(socket)) {
+          send.cancelled = true;
+          this.finishSend(send, 'failed', 'the phone disconnected');
+        }
+      }
       if (socket.activeTransfers) {
         for (const t of socket.activeTransfers.values()) {
           try { t.stream.destroy(); } catch {}
@@ -619,6 +643,16 @@ class CompanionService extends EventEmitter {
 
     if (message.type === protocol.TYPES.FILE_DONE) {
       this.handleFileDone(socket, message.payload);
+      return;
+    }
+
+    if (message.type === protocol.TYPES.FILE_ACK) {
+      this.handleFileAck(socket, message.payload || {});
+      return;
+    }
+
+    if (message.type === protocol.TYPES.FILE_CANCEL) {
+      this.handleFileCancel(socket, message.payload || {});
       return;
     }
 
@@ -964,72 +998,208 @@ class CompanionService extends EventEmitter {
    * The chunks are base64 in JSON frames, the same shape the phone uses when
    * it sends a file, so both directions share one code path on the wire.
    */
-  sendFile(filePath, mime = 'application/octet-stream') {
+  sendFile(filePath, mime) {
     if (typeof filePath !== 'string' || !filePath) return false;
 
     const targets = Array.from(this.clients).filter((c) => c.handshakeDone && !c.destroyed);
-    if (targets.length === 0) return false;
+    if (!targets.length) {
+      console.warn('[companion] cannot send file: no authenticated phone is connected');
+      return false;
+    }
 
     let stat;
     try {
       stat = fs.statSync(filePath);
     } catch (e) {
-      console.error(`[companion] cannot send ${filePath}: ${e.message}`);
+      console.error(`[companion] cannot read ${filePath}: ${e.message}`);
       return false;
     }
     if (!stat.isFile()) return false;
 
     const name = path.basename(filePath);
     const transferId = crypto.randomUUID();
-    const chunkSize = 128 * 1024;
-
-    const start = protocol.encode({
-      version: protocol.PROTOCOL_VERSION,
-      type: protocol.TYPES.FILE_START,
+    const send = {
       id: transferId,
-      ts: Date.now(),
-      payload: { id: transferId, name, size: stat.size, mime },
-    });
+      name,
+      path: filePath,
+      size: stat.size,
+      mime: mime || mimeForName(name),
+      sockets: targets,
+      cancelled: false,
+      finished: false,
+      acked: 0,
+      peerAcks: false,
+      sent: 0,
+      waiters: [],
+    };
+    this.outgoing.set(transferId, send);
+    this.emit('file-send-start', { id: transferId, name, path: filePath, size: stat.size });
+    this.streamFile(send).catch((e) => this.finishSend(send, 'failed', e.message));
+    return transferId;
+  }
 
-    try {
-      const data = fs.readFileSync(filePath);
-      for (const socket of targets) {
-        socket.write(start);
-        let index = 0;
-        for (let offset = 0; offset < data.length; offset += chunkSize) {
-          const slice = data.subarray(offset, Math.min(offset + chunkSize, data.length));
-          socket.write(
-            protocol.encode({
-              version: protocol.PROTOCOL_VERSION,
-              type: protocol.TYPES.FILE_CHUNK,
-              id: transferId,
-              ts: Date.now(),
-              payload: {
-                id: transferId,
-                chunkIndex: index,
-                data: slice.toString('base64'),
-              },
-            })
-          );
-          index += 1;
-        }
-        socket.write(
-          protocol.encode({
-            version: protocol.PROTOCOL_VERSION,
-            type: protocol.TYPES.FILE_DONE,
-            id: transferId,
-            ts: Date.now(),
-            payload: { id: transferId },
-          })
-        );
-      }
-      console.log(`[companion] sent ${name} (${stat.size} bytes) to ${targets.length} device(s)`);
-      this.emit('file-sent', { id: transferId, name, path: filePath, size: stat.size, count: targets.length });
+  /** Stops a send to the phone, or a file coming from it. True if one was found. */
+  cancelFile(id) {
+    const send = this.outgoing.get(id);
+    if (send) {
+      send.cancelled = true;
+      for (const socket of send.sockets) this.writeCancel(socket, id);
+      this.finishSend(send, 'cancelled');
       return true;
-    } catch (e) {
-      console.error(`[companion] could not send ${name}: ${e.message}`);
-      return false;
     }
+    for (const socket of this.clients) {
+      const transfer = socket.activeTransfers?.get(id);
+      if (!transfer) continue;
+      this.writeCancel(socket, id);
+      this.dropIncoming(socket, transfer);
+      this.emit('file-transfer-cancelled', { id, name: transfer.name, by: 'computer' });
+      return true;
+    }
+    return false;
+  }
+
+  writeCancel(socket, id) {
+    try {
+      socket.write(protocol.encode({
+        version: protocol.PROTOCOL_VERSION,
+        type: protocol.TYPES.FILE_CANCEL,
+        id,
+        ts: Date.now(),
+        payload: { id },
+      }));
+    } catch {}
+  }
+
+  async streamFile(send) {
+    const chunkSize = 128 * 1024;
+    const window = 4 * 1024 * 1024; // Pace maximum 4 MB ahead of phone ACK
+    const encode = (type, payload) => protocol.encode({
+      version: protocol.PROTOCOL_VERSION,
+      type,
+      id: send.id,
+      ts: Date.now(),
+      payload,
+    });
+    const writeAll = async (frame) => {
+      for (const socket of send.sockets) {
+        if (socket.destroyed) throw new Error('the phone disconnected');
+        if (!socket.write(frame)) await new Promise((r) => socket.once('drain', r));
+      }
+    };
+
+    await writeAll(encode(protocol.TYPES.FILE_START, {
+      id: send.id, name: send.name, size: send.size, mime: send.mime,
+    }));
+
+    const fd = await fs.promises.open(send.path, 'r');
+    try {
+      const buffer = Buffer.alloc(chunkSize);
+      let index = 0;
+      let lastProgress = 0;
+      while (!send.cancelled) {
+        const { bytesRead } = await fd.read(buffer, 0, chunkSize, send.sent);
+        if (bytesRead === 0) break;
+        await writeAll(encode(protocol.TYPES.FILE_CHUNK, {
+          id: send.id,
+          chunkIndex: index++,
+          data: buffer.subarray(0, bytesRead).toString('base64'),
+        }));
+        send.sent += bytesRead;
+        while (send.peerAcks && !send.cancelled && send.sent - send.acked > window) {
+          await this.waitForAck(send, 15000);
+        }
+        if (Date.now() - lastProgress > 200) {
+          lastProgress = Date.now();
+          this.emitSendProgress(send);
+        }
+      }
+    } finally {
+      await fd.close().catch(() => {});
+    }
+    if (send.cancelled) return;
+
+    await writeAll(encode(protocol.TYPES.FILE_DONE, { id: send.id }));
+    this.emitSendProgress(send);
+
+    const deadline = Date.now() + 60000;
+    while (!send.finished && send.peerAcks && Date.now() < deadline) {
+      await this.waitForAck(send, 5000);
+    }
+    if (!send.finished) {
+      if (send.peerAcks) this.finishSend(send, 'failed', 'the phone did not confirm the file was saved');
+      else this.finishSend(send, 'sent');
+    }
+  }
+
+  waitForAck(send, timeoutMs) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, timeoutMs);
+      function done() { clearTimeout(timer); resolve(); }
+      send.waiters.push(done);
+    });
+  }
+
+  wakeSend(send) {
+    const waiters = send.waiters.splice(0);
+    for (const w of waiters) w();
+  }
+
+  emitSendProgress(send) {
+    const confirmed = send.peerAcks ? send.acked : send.sent;
+    this.emit('file-send-progress', { id: send.id, received: confirmed, total: send.size });
+  }
+
+  finishSend(send, outcome, reason) {
+    if (send.finished) return;
+    send.finished = true;
+    this.outgoing.delete(send.id);
+    this.wakeSend(send);
+    if (outcome === 'sent') {
+      console.log(`[companion] sent ${send.name} (${send.size} bytes)`);
+      this.emit('file-sent', { id: send.id, name: send.name, path: send.path, size: send.size, count: send.sockets.length });
+    } else if (outcome === 'cancelled') {
+      console.log(`[companion] cancelled sending ${send.name}`);
+      this.emit('file-send-cancelled', { id: send.id, name: send.name, by: reason || 'computer' });
+    } else {
+      console.error(`[companion] could not send ${send.name}: ${reason}`);
+      this.emit('file-send-failed', { id: send.id, name: send.name, error: reason || 'the transfer failed' });
+    }
+  }
+
+  handleFileAck(socket, payload) {
+    const send = this.outgoing.get(payload.id);
+    if (!send) return;
+    send.peerAcks = true;
+    if (typeof payload.received === 'number') send.acked = Math.max(send.acked, payload.received);
+    if (payload.status === 'saved') {
+      this.emitSendProgress(send);
+      this.finishSend(send, 'sent');
+    } else if (payload.status === 'failed') {
+      this.finishSend(send, 'failed', payload.reason || 'the phone could not save the file');
+    }
+    this.wakeSend(send);
+  }
+
+  handleFileCancel(socket, payload) {
+    const id = payload.id;
+    const send = this.outgoing.get(id);
+    if (send) {
+      send.cancelled = true;
+      this.finishSend(send, 'cancelled', 'phone');
+      return;
+    }
+    const transfer = socket.activeTransfers?.get(id);
+    if (transfer) {
+      this.dropIncoming(socket, transfer);
+      this.emit('file-transfer-cancelled', { id, name: transfer.name, by: 'phone' });
+    }
+  }
+
+  dropIncoming(socket, transfer) {
+    socket.activeTransfers?.delete(transfer.id);
+    transfer.cancelled = true;
+    try { transfer.stream.destroy(); } catch {}
+    fs.promises.unlink(transfer.targetPath).catch(() => {});
   }
 
   sendClipboard(text) {
@@ -1411,3 +1581,4 @@ CompanionService.prototype.stopMirror = function stopMirror(reason) {
 CompanionService.routeMedia = routeMedia;
 
 module.exports = CompanionService;
+module.exports.mimeForName = mimeForName;

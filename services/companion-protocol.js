@@ -76,6 +76,13 @@ const TYPES = {
   // so a second look at the same file opens the cached copy instantly.
   FILE_HASH_REQUEST: 'file-hash-request',
   FILE_HASH: 'file-hash',
+
+  // Receiver -> sender: how many bytes are safely written, and at the end
+  // whether the file was saved. Lets the sender pace itself and report
+  // "sent" only once the file really exists on the other side.
+  FILE_ACK: 'file-ack',
+  // Either side: stop this transfer and throw the partial file away.
+  FILE_CANCEL: 'file-cancel',
 };
 
 /**

@@ -53,6 +53,8 @@ class CompanionClient(
     private val onFileHashRequest: (path: String, requestId: String) -> Unit = { _, _ -> },
     private val onMirrorStart: (request: JSONObject) -> Unit = { },
     private val onMirrorStop: () -> Unit = { },
+    private val onFileCancel: (id: String) -> Unit = { },
+    private val onFileAck: (id: String, received: Long, status: String, reason: String) -> Unit = { _, _, _, _ -> },
 ) {
     private var socket: Socket? = null
     private var input: InputStream? = null
@@ -290,6 +292,47 @@ class CompanionClient(
         }
     }
 
+    /** Tells the computer how much of a file is safely written, or how it ended. */
+    fun sendFileAck(id: String, received: Long, status: String, reason: String? = null): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
+        val payload = JSONObject().put("id", id).put("received", received).put("status", status)
+        if (!reason.isNullOrEmpty()) payload.put("reason", reason)
+        val message = ProtocolMessage(
+            type = Protocol.TYPE_FILE_ACK,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload
+        )
+        return try {
+            writeFrame(FrameCodec.encode(message))
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to send file ack: ${e.message}")
+            false
+        }
+    }
+
+    /** Tells the computer to stop a transfer in either direction. */
+    fun sendFileCancel(id: String): Boolean {
+        if (!ready) return false
+        val stream = output ?: return false
+        val payload = JSONObject().put("id", id)
+        val message = ProtocolMessage(
+            type = Protocol.TYPE_FILE_CANCEL,
+            id = UUID.randomUUID().toString(),
+            ts = System.currentTimeMillis(),
+            payload = payload
+        )
+        return try {
+            writeFrame(FrameCodec.encode(message))
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to send file cancel: ${e.message}")
+            false
+        }
+    }
+
     private fun readLoop() {
         var reason: String? = null
         try {
@@ -518,6 +561,21 @@ class CompanionClient(
                     } catch (e: Exception) {
                         Log.w(TAG, "the hash request failed: ${e.message}")
                     }
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_CANCEL) {
+                    onFileCancel(message.payload.optString("id"))
+                    continue
+                }
+
+                if (message.type == Protocol.TYPE_FILE_ACK) {
+                    onFileAck(
+                        message.payload.optString("id"),
+                        message.payload.optLong("received"),
+                        message.payload.optString("status"),
+                        message.payload.optString("reason"),
+                    )
                     continue
                 }
 

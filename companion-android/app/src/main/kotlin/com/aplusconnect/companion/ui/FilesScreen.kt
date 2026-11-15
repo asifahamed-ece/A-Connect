@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.History
@@ -110,7 +111,27 @@ internal fun FilesScreen(ui: FilesUi, actions: FilesActions, contentPadding: Pad
                                     GhostButton("Dismiss", { actions.onDismiss(t) })
                                 }
                             }
+                        } else if (t.state == TransferState.Active) {
+                            { GhostButton("Cancel", { actions.onCancel(t) }) }
                         } else null,
+                    )
+                }
+            }
+        }
+
+        if (ui.incoming.isNotEmpty()) {
+            SectionHeader("Receiving now")
+            AplusCard(padding = PaddingValues(horizontal = Space.s5, vertical = Space.s2)) {
+                ui.incoming.forEachIndexed { i, t ->
+                    if (i > 0) HairlineDivider(inset = Size.tile + Space.s4)
+                    TransferRow(
+                        name = t.name,
+                        meta = incomingMeta(t, ui.computerLabel),
+                        state = TransferState.Active,
+                        progress = t.progress,
+                        icon = Icons.Outlined.Download,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        trailing = { GhostButton("Cancel", { actions.onCancelIncoming(t.id) }) },
                     )
                 }
             }
@@ -160,6 +181,14 @@ private fun transferMeta(t: TransferItem): String = when (t.state) {
     }
     TransferState.Done -> "Sent to Downloads"
     TransferState.Failed -> "Didn't send: ${t.message ?: "the connection dropped"}"
+}
+
+private fun incomingMeta(t: com.aplusconnect.companion.net.LiveTransfers.Transfer, computerLabel: String): String = buildString {
+    if (t.totalBytes > 0) append(humanBytes(t.totalBytes)).append(" · ")
+    append(t.progress?.let { "${(it * 100).toInt()}%" } ?: "Receiving…")
+    append(" · From $computerLabel")
+    val speed = t.speed()
+    if (speed > 0) append(" · ").append(humanBytes(speed)).append("/s")
 }
 
 @Composable
