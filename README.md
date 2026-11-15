@@ -305,13 +305,14 @@ clipboard access to the default keyboard and nothing else.
 | [`docs/companion/`](docs/companion/) | Keyboard fork, clipboard handoff, file access, spike results |
 | [`docs/superpowers/specs/`](docs/superpowers/specs/) | Designs for the features that shipped |
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Implementation plans for the companion work |
+| [`docs/archive/`](docs/archive/) | Historical early design documents and reverse-engineering notes |
 
-> **Historical documents.** `development-plan.md`, `implementation-roadmap.md`,
-> `project-documentation.md`, `protocol-specifications.md`, and
-> `WEEKEND-SPRINT-SUMMARY.md` describe an early aspirational design — a Rust
-> transport, a Qt6/Kirigami UI, a D-Bus service, and a reverse-engineered
-> "Panta" protocol. **None of that was built.** The shipped app is Electron. They
-> are kept for reference only.
+> **Historical documents.** Files archived under [`docs/archive/`](docs/archive/)
+> (`development-plan.md`, `implementation-roadmap.md`, `project-documentation.md`,
+> `protocol-specifications.md`, and `WEEKEND-SPRINT-SUMMARY.md`) describe an early
+> aspirational design — a Rust transport, a Qt6/Kirigami UI, a D-Bus service, and
+> a reverse-engineered "Panta" protocol. **None of that was built.** The shipped
+> app is Electron. They are kept in the archive for reference only.
 
 ## License
 

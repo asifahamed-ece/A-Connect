@@ -119,11 +119,12 @@ Keep this convention — the renderer only ever talks through `window.api`
 
 ## Docs that do not match the code
 
-`development-plan.md`, `implementation-roadmap.md`, `project-documentation.md`,
-`protocol-specifications.md`, and `WEEKEND-SPRINT-SUMMARY.md` describe an
+The historical documents in `docs/archive/` (`development-plan.md`,
+`implementation-roadmap.md`, `project-documentation.md`,
+`protocol-specifications.md`, and `WEEKEND-SPRINT-SUMMARY.md`) describe an
 aspirational design or an early snapshot — an unimplemented Rust transport,
 Qt6/Kirigami UI, D-Bus service, and the reverse-engineered "Panta" protocol.
-**None of it is in this codebase**, and each file now carries a banner saying so.
+**None of it is in this codebase**, and each file carries a banner saying so.
 
 For the current truth use `README.md` and
 `docs/companion/companion-status.md`. Do not implement against the historical

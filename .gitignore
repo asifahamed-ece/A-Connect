@@ -21,3 +21,5 @@ keyboard/heliboard/
 
 # Kotlin build cache, written by Gradle on every Android build.
 .kotlin/
+
+.playwright-mcp/
