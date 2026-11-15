@@ -15,7 +15,7 @@ class CompanionClientTest {
             code = "123456",
             pairing = null,
             sharedSecret = "",
-            onPaired = { _, _ -> },
+            onPaired = { _, _, _ -> },
             onReady = {},
             onClosed = {},
         )
@@ -35,7 +35,7 @@ class CompanionClientTest {
             code = "123456",
             pairing = null,
             sharedSecret = "",
-            onPaired = { _, _ -> },
+            onPaired = { _, _, _ -> },
             onReady = {},
             onClosed = {},
         )

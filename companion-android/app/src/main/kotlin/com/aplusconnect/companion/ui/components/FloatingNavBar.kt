@@ -57,10 +57,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.aplusconnect.companion.ui.theme.AplusTheme
 import com.aplusconnect.companion.ui.theme.AplusType
-import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.HazeStyle
-import dev.chrisbanes.haze.HazeTint
-import dev.chrisbanes.haze.hazeChild
 import kotlinx.coroutines.launch
 
 internal class NavDestination(val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
@@ -85,7 +81,6 @@ internal fun FloatingNavBar(
     items: List<NavDestination>,
     selected: Int,
     onSelect: (Int) -> Unit,
-    glass: HazeState,
     modifier: Modifier = Modifier,
 ) {
     val c = AplusTheme.colors
@@ -111,15 +106,7 @@ internal fun FloatingNavBar(
     val glassMod = if (AplusTheme.reducedTransparency) {
         Modifier.drawWithContent { drawRect(c.surfaceElevated); drawContent() }
     } else {
-        Modifier.hazeChild(
-            state = glass,
-            style = HazeStyle(
-                backgroundColor = c.canvas,
-                tint = HazeTint(c.surfaceElevated.copy(alpha = alpha)),
-                blurRadius = 22.dp,
-                noiseFactor = 0f,
-            ),
-        )
+        Modifier.navBarGlass()
     }
 
     Box(

@@ -1,11 +1,20 @@
 package com.aplusconnect.companion.ui
 
+import java.io.File
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import com.aplusconnect.companion.ui.theme.BAR_CLARITY_DEFAULT
 import com.aplusconnect.companion.ui.theme.barAlphaFor
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class GlassAndLinkTest {
+    @Test fun hazeSourceIsAnAmbientSiblingNotAnAncestorOfContent() {
+        val glass = File("src/main/kotlin/com/aplusconnect/companion/ui/components/Glass.kt").readText()
+        assertTrue(glass.contains("AmbientCanvas(Modifier.matchParentSize().haze(state))"))
+        assertFalse(glass.contains(".fillMaxSize()\n            .haze(canvasGlass)"))
+    }
+
     @Test fun solidAtZeroClarity() = assertEquals(0.96f, barAlphaFor(0, reduceTransparency = false), 0.001f)
 
     @Test fun clearestKeepsReadableTint() = assertEquals(0.28f, barAlphaFor(100, reduceTransparency = false), 0.001f)

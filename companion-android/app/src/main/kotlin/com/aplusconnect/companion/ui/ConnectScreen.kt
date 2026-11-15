@@ -114,7 +114,7 @@ internal fun ConnectScreen(ui: ConnectUi, actions: ConnectActions, contentPaddin
             if (ui.paired || ui.hostPort.isNotEmpty()) {
                 HairlineDivider(inset = Size.tile + Space.s4)
                 ActionRow(
-                    title = "Computer",
+                    title = ui.pcName,
                     subtitle = ui.hostPort.ifEmpty { "Not set" },
                     subtitleStyle = AplusType.mono,
                     icon = Icons.Outlined.Laptop,
@@ -178,7 +178,7 @@ private fun Hero(ui: ConnectUi, actions: ConnectActions) {
         }
 
         Box(Modifier.height(Space.s5))
-        DataLinkGraphic(ui.phase)
+        DataLinkGraphic(ui.phase, ui.pcName)
         Box(Modifier.height(Space.s5))
 
         Row(verticalAlignment = Alignment.CenterVertically) {

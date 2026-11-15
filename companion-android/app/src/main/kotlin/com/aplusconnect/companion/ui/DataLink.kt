@@ -117,18 +117,18 @@ internal class LinkSchedule(private val mode: LinkMode, private val random: Rand
 
 /** Phone ⇄ computer with binary packets in transit (§10.1). Reduce motion keeps a still rail. */
 @Composable
-internal fun DataLinkGraphic(phase: ConnectionPhase) {
+internal fun DataLinkGraphic(phase: ConnectionPhase, pcName: String = "Computer") {
     val mode = linkModeFor(phase)
     val live = mode == LinkMode.Live
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) { contentDescription = "Phone to computer: ${phase.label}" },
+            .semantics(mergeDescendants = true) { contentDescription = "Phone to $pcName: ${phase.label}" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LinkNode(live, "This phone") { PhoneGlyph(live) }
         DataStream(mode, Modifier.weight(1f).padding(horizontal = Space.s2).height(48.dp))
-        LinkNode(live, "Computer") { ComputerGlyph(live) }
+        LinkNode(live, pcName) { ComputerGlyph(live) }
     }
 }
 

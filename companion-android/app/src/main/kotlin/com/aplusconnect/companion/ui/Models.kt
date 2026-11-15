@@ -16,6 +16,7 @@ internal data class ConnectUi(
     val phase: ConnectionPhase,
     val statusDetail: String,
     val deviceName: String,
+    val pcName: String,
     val hostPort: String,
     val paired: Boolean,
     val companionEnabled: Boolean,

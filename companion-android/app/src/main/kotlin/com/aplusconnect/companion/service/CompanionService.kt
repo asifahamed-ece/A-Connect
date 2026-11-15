@@ -421,8 +421,9 @@ class CompanionService : Service() {
                     }
                 }
             },
-            onPaired = { pcId, fingerprint ->
+            onPaired = { pcId, fingerprint, pcName ->
                 if (pcId.isNotEmpty()) settings.remember(pcId, fingerprint)
+                if (pcName.isNotEmpty()) settings.pcName = pcName
             },
             onReady = {
                 if (client === thisClient) {

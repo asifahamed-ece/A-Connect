@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -22,9 +24,18 @@ import dev.chrisbanes.haze.hazeChild
 /**
  * Glass, the one place Haze is touched (DESIGN.md §5.3).
  *
- * Content is marked as the blur source with [glassSource]; chrome on top of
- * it (bottom bar, sticky header, scanner bars) reads it with [glassChrome].
- * On API 26–30 Haze draws the tint alone, which is the solid-ish fallback.
+ * **Two blur layers**, exactly mirroring the desktop:
+ *
+ * 1. **Canvas → card** (`canvasGlass`): the ambient background is the source
+ *    and every card is a child. This gives cards their frosted finish by
+ *    blurring the orbs and gradient fields behind them, exactly like
+ *    `backdrop-filter: var(--glass-blur-card)` on the desktop's `.card`.
+ *
+ * 2. **Content → chrome** (`glass`): the whole scrollable page (including
+ *    cards) is the source and the floating nav bar is the child, so the
+ *    bar frosts what scrolls beneath it.
+ *
+ * On API 26-30 Haze draws the tint alone, which is the solid-ish fallback.
  * With "Reduce transparency" on, no blur is drawn and the tint is opaque.
  */
 @Composable
@@ -50,13 +61,60 @@ internal fun Modifier.glassChrome(state: HazeState, overlay: Boolean = true): Mo
 }
 
 /**
- * The fill for a card or a stat tile: translucent, so the ambient canvas reads
- * through it the way the desktop's glass cards do.
+ * CompositionLocal that provides the canvas-level [HazeState].
  *
- * Blur is deliberately not used here. A card sits inside the scroll content,
- * which Haze already treats as a blur source, so blurring the card would sample
- * its own pixels; and one blur layer per card costs a lot of frames to soften a
- * background that is already soft. "Reduce transparency" gives solid back.
+ * [AmbientCanvas] provides this; [cardGlass] reads it. Anything outside
+ * the canvas tree falls back to the empty state — cards draw their fill
+ * but skip the blur, which is the same as "Reduce transparency".
+ */
+internal val LocalCanvasGlass = compositionLocalOf { HazeState() }
+
+/**
+ * Frosted card material: `hazeChild` of the ambient canvas, so the orbs and
+ * gradient fields read through the card with a real blur — matching the
+ * desktop's `backdrop-filter: var(--glass-blur-card)`.
+ *
+ * On "Reduce transparency" the modifier falls back to a solid surface fill.
+ */
+@Composable
+internal fun Modifier.cardGlass(): Modifier {
+    val c = AplusTheme.colors
+    if (AplusTheme.reducedTransparency) return this.background(c.surface)
+    val canvasState = LocalCanvasGlass.current
+    return this.hazeChild(
+        state = canvasState,
+        style = HazeStyle(
+            backgroundColor = c.canvas,
+            tint = HazeTint(c.glassChrome),
+            blurRadius = 22.dp,
+            noiseFactor = 0f,
+        ),
+    )
+}
+
+/**
+ * Frosted nav bar material: `hazeChild` of the ambient canvas with a stronger
+ * blur and the elevated surface tint, matching the desktop's nav bar.
+ */
+@Composable
+internal fun Modifier.navBarGlass(): Modifier {
+    val c = AplusTheme.colors
+    if (AplusTheme.reducedTransparency) return this.background(c.surfaceElevated)
+    val canvasState = LocalCanvasGlass.current
+    return this.hazeChild(
+        state = canvasState,
+        style = HazeStyle(
+            backgroundColor = c.canvas,
+            tint = HazeTint(c.surfaceElevated.copy(alpha = AplusTheme.barAlpha)),
+            blurRadius = 24.dp,
+            noiseFactor = 0f,
+        ),
+    )
+}
+
+/**
+ * The fill for elements that should be slightly translucent but don't warrant
+ * a full blur pass (tags, stat tiles). Keeps the same fallback.
  */
 @Composable
 internal fun cardFill(): Color {
@@ -69,11 +127,15 @@ internal fun cardFill(): Color {
  * in the same corners, then three orbs with real edges so the frosted bar has
  * something to blur rather than a smooth wash. It never moves.
  *
+ * Provides [LocalCanvasGlass] so any [cardGlass] / [navBarGlass] modifier inside
+ * can blur this background. The canvas source and all haze children are siblings
+ * under a plain root container; Haze 1.1.1 forbids source/child ancestry.
+ *
  * "Reduce transparency" drops the orbs, exactly as
  * `[data-transparency="reduce"] .orb { display: none }` does on the desktop.
  */
 @Composable
-internal fun AmbientCanvas(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+internal fun AmbientCanvas(modifier: Modifier = Modifier) {
     val c = AplusTheme.colors
     val showOrbs = !AplusTheme.reducedTransparency
     Box(
@@ -81,53 +143,70 @@ internal fun AmbientCanvas(modifier: Modifier = Modifier, content: @Composable B
             .fillMaxSize()
             .background(c.canvas)
             .drawBehind {
-                val w = size.width
-                val h = size.height
+                    val w = size.width
+                    val h = size.height
 
-                // A soft field that fades out at `stop`, like the desktop's
-                // `radial-gradient(…, transparent 72%)`.
-                fun field(center: Offset, radius: Float, color: Color, stop: Float) {
-                    drawRect(
-                        Brush.radialGradient(
-                            colorStops = arrayOf(0f to color, stop to color.copy(alpha = 0f), 1f to color.copy(alpha = 0f)),
-                            center = center,
-                            radius = radius,
-                        )
-                    )
-                }
-
-                // The desktop's four corners: 92%/0%, 30%/6%, 2%/100%, 78%/96%.
-                field(Offset(w * 0.92f, 0f), w * 0.62f, c.canvasA, 0.72f)
-                field(Offset(w * 0.30f, h * 0.06f), w * 0.55f, c.canvasC, 0.70f)
-                field(Offset(w * 0.02f, h), w * 0.58f, c.canvasB, 0.72f)
-                field(Offset(w * 0.78f, h * 0.96f), w * 0.48f, c.canvasD, 0.70f)
-
-                if (showOrbs) {
-                    // The desktop's orbs end in a hard rim because they sit
-                    // mostly off-screen. At phone scale the rim would cross the
-                    // cards and give away that the tint is not blurred, so here
-                    // they fade out instead.
-                    fun orb(center: Offset, radius: Float, inner: Color, outer: Color) {
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colorStops = arrayOf(
-                                    0f to inner,
-                                    0.55f to outer,
-                                    1f to outer.copy(alpha = 0f),
-                                ),
+                    // A soft field that fades out at `stop`, like the desktop's
+                    // `radial-gradient(…, transparent 72%)`.
+                    fun field(center: Offset, radius: Float, color: Color, stop: Float) {
+                        drawRect(
+                            Brush.radialGradient(
+                                colorStops = arrayOf(0f to color, stop to color.copy(alpha = 0f), 1f to color.copy(alpha = 0f)),
                                 center = center,
                                 radius = radius,
-                            ),
-                            radius = radius,
-                            center = center,
-                            alpha = c.orbOpacity,
+                            )
                         )
                     }
-                    orb(Offset(w * 0.95f, h * 0.08f), w * 0.55f, c.orbA1, c.orbA2)
-                    orb(Offset(w * 0.25f, h * 0.94f), w * 0.50f, c.orbB1, c.orbB2)
-                    orb(Offset(w * 0.55f, h * 0.40f), w * 0.35f, c.orbC1, c.orbC2)
-                }
+
+                    // The desktop's four corners: 92%/0%, 30%/6%, 2%/100%, 78%/96%.
+                    field(Offset(w * 0.92f, 0f), w * 0.62f, c.canvasA, 0.72f)
+                    field(Offset(w * 0.30f, h * 0.06f), w * 0.55f, c.canvasC, 0.70f)
+                    field(Offset(w * 0.02f, h), w * 0.58f, c.canvasB, 0.72f)
+                    field(Offset(w * 0.78f, h * 0.96f), w * 0.48f, c.canvasD, 0.70f)
+
+                    if (showOrbs) {
+                        // The desktop's orbs end in a hard rim because they sit
+                        // mostly off-screen. At phone scale the rim would cross the
+                        // cards and give away that the tint is not blurred, so here
+                        // they fade out instead.
+                        fun orb(center: Offset, radius: Float, inner: Color, outer: Color) {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colorStops = arrayOf(
+                                        0f to inner,
+                                        0.55f to outer,
+                                        1f to outer.copy(alpha = 0f),
+                                    ),
+                                    center = center,
+                                    radius = radius,
+                                ),
+                                radius = radius,
+                                center = center,
+                                alpha = c.orbOpacity,
+                            )
+                        }
+                        orb(Offset(w * 0.95f, h * 0.08f), w * 0.55f, c.orbA1, c.orbA2)
+                        orb(Offset(w * 0.25f, h * 0.94f), w * 0.50f, c.orbB1, c.orbB2)
+                        orb(Offset(w * 0.55f, h * 0.40f), w * 0.35f, c.orbC1, c.orbC2)
+                    }
             },
-        content = content,
     )
+}
+
+/**
+ * Root glass layout: the ambient canvas Haze source is a sibling of [content],
+ * not an ancestor. The caller's foreground must be a hazeChild of [state].
+ */
+@Composable
+internal fun GlassRoot(
+    state: HazeState,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    CompositionLocalProvider(LocalCanvasGlass provides state) {
+        Box(modifier.fillMaxSize()) {
+            AmbientCanvas(Modifier.matchParentSize().haze(state))
+            Box(Modifier.fillMaxSize(), content = content)
+        }
+    }
 }

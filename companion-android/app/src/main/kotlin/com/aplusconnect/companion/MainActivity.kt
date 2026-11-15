@@ -102,12 +102,11 @@ import com.aplusconnect.companion.ui.SettingsActions
 import com.aplusconnect.companion.ui.SettingsScreen
 import com.aplusconnect.companion.ui.SettingsUi
 import com.aplusconnect.companion.ui.TransferItem
-import com.aplusconnect.companion.ui.components.AmbientCanvas
+import com.aplusconnect.companion.ui.components.GlassRoot
 import com.aplusconnect.companion.ui.components.TransferState
-import com.aplusconnect.companion.ui.components.glassSource
+import com.aplusconnect.companion.ui.components.rememberGlassState
 import com.aplusconnect.companion.ui.components.FloatingNavBar
 import com.aplusconnect.companion.ui.components.NavDestination
-import com.aplusconnect.companion.ui.components.rememberGlassState
 import com.aplusconnect.companion.ui.connectionPhase
 import com.aplusconnect.companion.ui.hostPort
 import com.aplusconnect.companion.ui.theme.AplusTheme
@@ -438,7 +437,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
     )
     val computerLabel = hostPort(host, port).ifEmpty { "your computer" }
 
-    AmbientCanvas {
+    GlassRoot(state = glass) {
         Scaffold(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -463,7 +462,6 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                         tab = Tab.entries[it]
                         showHistory = false
                     },
-                    glass = glass,
                 )
             },
         ) { innerPadding ->
@@ -472,7 +470,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                 bottom = innerPadding.calculateBottomPadding(),
             )
             val motion = AplusTheme.motion
-            Box(Modifier.fillMaxSize().glassSource(glass)) {
+            Box(Modifier.fillMaxSize()) {
                 AnimatedContent(
                     targetState = if (tab == Tab.Files && showHistory) null else tab,
                     transitionSpec = { fadeIn(motion.enter()) togetherWith fadeOut(motion.fade()) },
@@ -496,6 +494,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                                 phase = phase,
                                 statusDetail = statusText,
                                 deviceName = deviceName,
+                                pcName = settings.pcName,
                                 hostPort = hostPort(host, port),
                                 paired = paired,
                                 companionEnabled = companionEnabled,
@@ -633,6 +632,7 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
                     settings.host = info.host
                     settings.port = info.port
                     settings.pairingCode = info.code
+                    settings.pcName = info.pcName
                     host = info.host
                     port = info.port
                     tab = Tab.Connect
@@ -903,15 +903,21 @@ private fun isBatteryOptimized(context: Context): Boolean {
 
 private fun requestIgnoreBatteryOptimizations(context: Context) {
     try {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm != null && pm.isIgnoringBatteryOptimizations(context.packageName)) {
+            android.util.Log.i("AplusConnect", "battery optimizations already ignored")
+            return
+        }
         context.startActivity(
             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                 data = Uri.parse("package:${context.packageName}")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         )
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        android.util.Log.w("AplusConnect", "battery intent failed: ${e.message}")
         try {
-            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
         } catch (_: Exception) {}
     }
 }

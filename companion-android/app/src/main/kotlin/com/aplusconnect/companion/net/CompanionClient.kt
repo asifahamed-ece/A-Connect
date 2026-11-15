@@ -37,7 +37,7 @@ class CompanionClient(
     private val pairing: Pairing?,
     private val sharedSecret: String,
     private val clipboardAccess: Boolean = true,
-    private val onPaired: (pcId: String, fingerprint: String) -> Unit,
+    private val onPaired: (pcId: String, fingerprint: String, pcName: String) -> Unit,
     private val onReady: () -> Unit,
     private val onClosed: (String) -> Unit,
     private val onClipboardReceived: (String) -> Unit = {},
@@ -294,7 +294,7 @@ class CompanionClient(
         var reason: String? = null
         try {
             val trust = PeerTrust(pairing?.fingerprint) { fingerprint ->
-                onPaired("", fingerprint)
+                onPaired("", fingerprint, "")
             }
             val context = SSLContext.getInstance("TLS")
             context.init(null, arrayOf(trust), SecureRandom())
@@ -352,7 +352,7 @@ class CompanionClient(
                 }
                 is HandshakeResult.Success -> {
                     Log.i(TAG, "paired with ${result.pcId}")
-                    onPaired(result.pcId, result.fingerprint)
+                    onPaired(result.pcId, result.fingerprint, result.pcName)
                     ready = true
                     onReady()
                 }

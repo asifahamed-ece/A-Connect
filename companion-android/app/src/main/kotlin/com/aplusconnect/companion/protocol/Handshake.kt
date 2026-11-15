@@ -11,7 +11,7 @@ data class Pairing(val pcId: String, val fingerprint: String)
 
 /** Outcome of verifying the PC's reply to our hello. */
 sealed class HandshakeResult {
-    data class Success(val sessionId: String, val pcId: String, val fingerprint: String) : HandshakeResult()
+    data class Success(val sessionId: String, val pcId: String, val fingerprint: String, val pcName: String = "") : HandshakeResult()
     data class Failed(val reason: String) : HandshakeResult()
 }
 
@@ -124,6 +124,7 @@ object Handshake {
             sessionId = message.payload.optString("sessionId"),
             pcId = pcId,
             fingerprint = fingerprint,
+            pcName = message.payload.optString("pcName", ""),
         )
     }
 

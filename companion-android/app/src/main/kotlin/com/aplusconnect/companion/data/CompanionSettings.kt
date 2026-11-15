@@ -76,6 +76,14 @@ class CompanionSettings(context: Context) {
         set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
 
     /**
+     * The computer's name from the pairing QR code, so the UI can say
+     * "Connected to shadow-laptop" instead of "Computer".
+     */
+    var pcName: String
+        get() = prefs.getString(KEY_PC_NAME, "Computer") ?: "Computer"
+        set(value) = prefs.edit().putString(KEY_PC_NAME, value).apply()
+
+    /**
      * The secret this phone shares with the computer, used to prove on every
      * later connection that it is the same phone. It is sent once, during the
      * pairing, and never again.
@@ -203,5 +211,6 @@ class CompanionSettings(context: Context) {
         private const val KEY_REDUCE_MOTION = "reduce_motion"
         private const val KEY_BAR_CLARITY = "bar_clarity"
         private const val KEY_CLIPBOARD_SYNC = "clipboard_sync"
+        private const val KEY_PC_NAME = "pc_name"
     }
 }

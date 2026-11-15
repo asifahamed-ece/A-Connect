@@ -132,6 +132,7 @@ function finish(host, socket, message, deviceId, deviceName, isNew) {
   send(socket, protocol.TYPES.HELLO_ACK, {
     sessionId: 's-' + Date.now(),
     pcId: host.pcId,
+    pcName: host.pcName || '',
     fingerprint: host.fingerprint,
     nonce: message.payload.nonce,
   });
