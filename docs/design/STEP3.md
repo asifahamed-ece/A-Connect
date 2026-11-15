@@ -1,6 +1,6 @@
 # Step 3: Desktop component layer
 
-Against github.com/asifahamed-ece/A-Connect (default branch, 14 Nov 2026).
+Against github.com/asifahamed-ece/Aplus_Connect (default branch, 14 Nov 2026).
 Apply from the repo root: `patch -p1 < step3-desktop.patch`. Alternatively, `git apply step3-desktop.patch`, or copy the files in `files/` over the originals.
 
 ## Files changed

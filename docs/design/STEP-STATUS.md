@@ -1,7 +1,7 @@
 # Step status — what is applied, and the one gap
 
 Snapshot taken 14 Nov 2026, 23:05 IST, from the working tree of
-`github.com/asifahamed-ece/A-Connect`.
+`github.com/asifahamed-ece/Aplus_Connect`.
 
 ## Applied and present in this tree
 

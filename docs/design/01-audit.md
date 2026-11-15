@@ -1,6 +1,6 @@
 # A+ Connect: Step 1 audit
 
-Source: github.com/asifahamed-ece/A-Connect (default branch, read 14 Nov 2026).
+Source: github.com/asifahamed-ece/Aplus_Connect (default branch, read 14 Nov 2026).
 Scope: desktop renderer (`src/index.html`, `src/style.css`, `src/renderer.js`, tray in `main.js`) and Android UI (`MainActivity.kt`, `ui/*.kt`, `qr/QrScannerView.kt`).
 No code was changed in this step.
 

@@ -150,7 +150,7 @@ against those four files.
 ```
 19	README.md	10	```bash
 # Clone the repository
-git clone https://github.com/asifahamed-ece/A-Connect.git
+git clone https://github.com/asifahamed-ece/Aplus_Connect.git
 cd "A+ Connect"
 20	README.md	11	# No dependencies to install - uses system binaries only
 # Launch the app
@@ -260,8 +260,8 @@ A+ Connect/
 46	README.md	37	- **Scrcpy** - Genymobile's excellent screen mirroring solution
 - **O+ Connect** - OPPO's official Windows/Mac client (UI design inspiration)
 - **ColorOS Team** - For wireless debugging infrastructure in ColorOS 16/17
-47	README.md	38	- **GitHub**: https://github.com/asifahamed-ece/A-Connect
-- **Issues**: https://github.com/asifahamed-ece/A-Connect/issues
+47	README.md	38	- **GitHub**: https://github.com/asifahamed-ece/Aplus_Connect
+- **Issues**: https://github.com/asifahamed-ece/Aplus_Connect/issues
 48	README.md	39	**Built in a weekend • Designed for daily use • Optimized for ColorOS 16/17**
 49	WEEKEND-SPRINT-SUMMARY.md	0	# A+ Connect - Weekend Sprint Summary (Day 1 Complete)
 50	WEEKEND-SPRINT-SUMMARY.md	1	### 1. ✅ File Transfer "Silent Success" Bug
