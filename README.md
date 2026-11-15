@@ -316,10 +316,9 @@ clipboard access to the default keyboard and nothing else.
 
 ## License
 
-MIT, as declared in `package.json`.
-
-> There is currently no `LICENSE` file in this repository. The MIT declaration in
-> `package.json` is the authoritative statement until one is added.
+MIT, as declared in `package.json`. See [`LICENSE`](LICENSE) for the full
+text. For open-source reuse and author attribution, see
+[`CREDITS.md`](CREDITS.md).
 
 The `assets/` directory contains resources extracted from OPPO's official O+
 Connect client and is not covered by this project's license. The keyboard fork
