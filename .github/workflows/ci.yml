@@ -62,6 +62,20 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      - name: Use the preinstalled Android SDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          # The runner image ships the SDK but leaves it off PATH. Add the
+          # newest cmdline-tools so sdkmanager is available to the next step.
+          CMDLINE_BIN="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$CMDLINE_BIN" ]; then
+            echo "no cmdline-tools found under $ANDROID_HOME" >&2
+            exit 1
+          fi
+          echo "$CMDLINE_BIN" >> "$GITHUB_PATH"
+          sdkmanager --version
+
       - name: Install the SDK platform the app compiles against
         run: |
           yes | sdkmanager --licenses > /dev/null || true
