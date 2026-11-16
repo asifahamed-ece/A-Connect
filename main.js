@@ -8,6 +8,22 @@ if (process.platform === 'linux' && !process.env.CHROME_DESKTOP) {
 const path = require('path');
 const fs = require('fs');
 
+// One A+ Connect at a time: a second launch focuses the window that is already
+// open instead of starting a rival tray icon, port binding and poll loop.
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 const AdbService = require('./services/adb');
 const ScrcpyService = require('./services/scrcpy');
 const FileTransferService = require('./services/file-transfer');
@@ -918,6 +934,11 @@ function setupIpcHandlers() {
 }
 
 app.whenReady().then(() => {
+  // The lock check at the top quit this process, but `ready` can still fire
+  // before the quit finishes. Bail out so a second copy never opens a window
+  // or fights the first one for the companion port.
+  if (!gotTheLock) return;
+
   createWindow();
   createTray();
   setupServiceEvents();
