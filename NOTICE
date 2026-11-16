@@ -1,0 +1,35 @@
+# NOTICE
+
+A+ Connect — Linux desktop companion for OPPO / ColorOS phones.
+
+Copyright (c) 2026 Asif Ahamed.
+
+The source code of this project — the Electron desktop app (`main.js`,
+`preload.js`, `src/`, `services/`, `scripts/`), the Android companion app
+(`companion-android/`), and the keyboard patch (`keyboard/patch-heliboard.py`,
+excluding the upstream HeliBoard checkout) — is licensed under the MIT License.
+The full text is in [`LICENSE`](LICENSE).
+
+## Not covered by the MIT License
+
+**`assets/`** — icons, screenshots, and other resources extracted from OPPO's
+official O+ Connect client. They remain OPPO's property and are included only as
+design reference for this reimplementation. No license is granted to reuse,
+redistribute, or ship them, and they are not part of any claim of original work.
+
+**The A+ Connect keyboard** — a fork of [HeliBoard](https://github.com/HeliBorg/HeliBoard)
+distributed under GPL-3.0. The fork's source is not vendored here: it is
+reproduced with `keyboard/patch-heliboard.py` from an upstream checkout, and it
+ships as a separate APK. Redistributing that APK requires complying with
+GPL-3.0, including making the corresponding source available.
+
+**Build outputs** — the AppImage and APK files attached to releases are compiled
+binaries. They are covered by the licenses above; the MIT grant applies to the
+source, not to OPPO's assets bundled into the AppImage's `assets/` directory.
+
+## Third-party components
+
+See [`CREDITS.md`](CREDITS.md) for the full table with licenses, including
+Electron (MIT), the `@yume-chan/adb` family (MIT), `dbus-next` (MIT), `qrcode`
+(MIT), Scrcpy (Apache-2.0), AndroidX / Jetpack Compose (Apache-2.0), and
+HeliBoard (GPL-3.0).

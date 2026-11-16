@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/asifahamed-ece/Aplus_Connect/security/advisories/new
+    about: Please report security problems privately, not as a public issue.
+  - name: Documentation and setup help
+    url: https://github.com/asifahamed-ece/Aplus_Connect/blob/main/README.md
+    about: Requirements, setup for both connection paths, and troubleshooting live in the README.

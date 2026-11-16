@@ -1,5 +1,10 @@
 # A+ Connect
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f7de1.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/asifahamed-ece/Aplus_Connect?label=release)](https://github.com/asifahamed-ece/Aplus_Connect/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20KDE-1793d1.svg)](#requirements)
+[![Electron](https://img.shields.io/badge/Electron-44-47848f.svg)](#requirements)
+
 A Linux desktop companion for OPPO / ColorOS phones — a Linux reimplementation
 of OPPO's O+ Connect. Drive your phone from a KDE desktop: mirror the screen,
 move files both ways, share the clipboard, and see notifications without
@@ -300,6 +305,10 @@ clipboard access to the default keyboard and nothing else.
 
 | Document | What it is |
 |---|---|
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Setup, architecture, checks, and pull-request expectations |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
+| [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Community standards |
 | [`AGENTS.md`](AGENTS.md) | Conventions and gotchas for agents working in this repo |
 | [`docs/companion/companion-status.md`](docs/companion/companion-status.md) | How each companion feature works, and its limits |
 | [`docs/companion/`](docs/companion/) | Keyboard fork, clipboard handoff, file access, spike results |
@@ -314,15 +323,35 @@ clipboard access to the default keyboard and nothing else.
 > a reverse-engineered "Panta" protocol. **None of that was built.** The shipped
 > app is Electron. They are kept in the archive for reference only.
 
+## Contributing
+
+Contributions are welcome — bug reports, device reports, documentation fixes,
+and code. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) (setup, the four-layer
+wiring pattern, and what verification is actually available), and note that the
+desktop app has no test runner or CI: changes are verified by running the app.
+
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security problems go
+through [`SECURITY.md`](SECURITY.md), never a public issue. Release history is
+in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## License
 
-MIT, as declared in `package.json`. See [`LICENSE`](LICENSE) for the full
-text. For open-source reuse and author attribution, see
-[`CREDITS.md`](CREDITS.md).
+**MIT** — the full text is in [`LICENSE`](LICENSE), and the machine-readable
+declaration is `"license": "MIT"` in `package.json`.
 
-The `assets/` directory contains resources extracted from OPPO's official O+
-Connect client and is not covered by this project's license. The keyboard fork
-under `keyboard/` is GPL-3.0 and is pulled in separately.
+Scope, stated plainly in [`NOTICE`](NOTICE):
+
+| Part of the repo | License |
+|---|---|
+| Electron app (`main.js`, `preload.js`, `src/`, `services/`, `scripts/`) | MIT |
+| Android companion app (`companion-android/`) | MIT |
+| Keyboard patch (`keyboard/patch-heliboard.py`) | MIT |
+| `assets/` — extracted from OPPO's O+ Connect client | Not licensed; OPPO's property, design reference only |
+| The A+ Connect keyboard APK (HeliBoard fork, not vendored) | GPL-3.0 |
+
+Third-party components and their licenses are listed in
+[`CREDITS.md`](CREDITS.md). If you reuse this project, keep the copyright notice
+and do not present OPPO's assets as original work.
 
 ## Acknowledgements
 
