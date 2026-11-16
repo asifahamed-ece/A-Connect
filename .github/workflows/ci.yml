@@ -74,6 +74,7 @@ jobs:
             exit 1
           fi
           echo "$CMDLINE_BIN" >> "$GITHUB_PATH"
+          export PATH="$CMDLINE_BIN:$PATH"
           sdkmanager --version
 
       - name: Install the SDK platform the app compiles against
