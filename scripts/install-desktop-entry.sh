@@ -41,8 +41,11 @@ for s in $SIZES; do
   install -Dm644 "$ICON_SRC/${s}x${s}.png" "$DATA_HOME/icons/hicolor/${s}x${s}/apps/$APP_ID.png"
 done
 
-# Prefer a system electron on PATH (as `npm start` does); fall back to npm.
-if command -v electron >/dev/null 2>&1; then
+# Prefer the standalone AppImage if installed; fall back to system electron
+# (as `npm start` does); fall back to npm.
+if [[ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/A-Plus-Connect.AppImage" ]]; then
+  EXEC="${XDG_BIN_HOME:-$HOME/.local/bin}/A-Plus-Connect.AppImage"
+elif command -v electron >/dev/null 2>&1; then
   EXEC="electron \"$APP_DIR\" --disable-vulkan"
 else
   EXEC="sh -c 'cd \"$APP_DIR\" && npm start'"
