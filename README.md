@@ -151,6 +151,7 @@ Download the pre-built APKs directly onto your phone from the [Latest Release](h
 |---|---|---|
 | **A+ Connect Companion** | [⬇️ Download `A-Plus-Connect-android.apk`](https://github.com/asifahamed-ece/Aplus_Connect/releases/latest/download/A-Plus-Connect-1.1.1-android.apk) | Core companion service for file transfers, notification mirroring, screen mirroring, and media controls. |
 | **A+ Connect Keyboard** | [⬇️ Download `A-Plus-Connect-Keyboard-android.apk`](https://github.com/asifahamed-ece/Aplus_Connect/releases/latest/download/A-Plus-Connect-Keyboard-android.apk) | Patched HeliBoard IME for seamless, background phone ↔ PC clipboard synchronization without tripping banking restrictions. |
+| **A+ Connect Desktop** | [⬇️ Download `A-Plus-Connect-x86_64.AppImage`](https://github.com/asifahamed-ece/Aplus_Connect/releases/latest/download/A-Plus-Connect-1.1.1-x86_64.AppImage) | Standalone desktop AppImage — run on any Linux desktop without building from source. |
 
 #### Setup steps:
 
