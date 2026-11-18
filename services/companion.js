@@ -725,7 +725,7 @@ class CompanionService extends EventEmitter {
         try { fs.mkdirSync(destDir, { recursive: true }); } catch {}
       }
 
-      let safeName = path.basename(name || 'transfer').replace(/[^a-zA-Z0-9._-]/g, '_');
+      let safeName = path.basename(name || 'transfer').replace(/[\/\\:*?"<>|\x00-\x1f\x7f]/g, '_');
       targetPath = path.join(destDir, safeName);
       let counter = 1;
       const ext = path.extname(safeName);
