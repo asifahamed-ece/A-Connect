@@ -47,9 +47,11 @@ credit in place and link back to the repository.
 | AndroidX / Jetpack Compose | Companion app UI | Apache-2.0 |
 | `notify-send` / `libnotify` | Desktop notification fallback | Various (system) |
 
+**Covered by this project's MIT license:**
+- `assets/` — original A+ Connect brand assets, icons, and screenshots
+- `keyboard/patch-heliboard.py` — the keyboard patch script
+
 **Not covered by this project's license:**
-- `assets/` — resources extracted from OPPO's official O+ Connect client (UI
-  design inspiration only)
 - `keyboard/` — the HeliBoard fork is GPL-3.0 and pulled in separately
 - `dist/` AppImage and APK builds are compiled binaries, not source
 
@@ -62,8 +64,7 @@ The only requirements are:
 
 1. Include the `LICENSE` text and copyright notice in copies or substantial
    portions of the software.
-2. Do not represent the OPPO-extracted `assets/` as original project work —
-   they remain OPPO's property and are used here only as design reference.
+2. Do not present third-party assets as original project work.
 3. If you redistribute the Keyboard fork, comply with GPL-3.0 (provide
    corresponding source).
 

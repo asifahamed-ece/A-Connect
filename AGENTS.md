@@ -55,7 +55,7 @@ paths are independent and can both be live at once.
 - `src/index.html`, `src/renderer.js`, `src/style.css` — renderer UI. Plain
   script (no bundler/framework); handlers are global functions called from
   inline `onclick=` attributes.
-- `assets/` — raw resources extracted from the official O+ Connect client;
+- `assets/` — original A+ Connect brand assets (icons, screenshots).
   `assets/icon.png` is used for both the window and the tray.
 
 To add a feature, wire all four layers: a `services/*.js` method → an
@@ -112,19 +112,17 @@ Keep this convention — the renderer only ever talks through `window.api`
 - All main→renderer pushes go through `sendToRenderer()` in `main.js`; it
   tolerates a destroyed/reloading window. Sending directly throws
   `Render frame was disposed`.
-- The repo is MIT per `package.json`, but there is still **no `LICENSE` file**.
-  The README states that plainly now; add one before a release.
-- `assets/` is extracted from OPPO's O+ Connect client and is not covered by the
-  project license. Don't ship it to third-party services as "our" code.
+- The repo is MIT per `package.json` with the full text in `LICENSE`.
+- `assets/` — original A+ Connect brand assets, covered by the MIT license.
 
 ## Docs that do not match the code
 
 The historical documents in `docs/archive/` (`development-plan.md`,
 `implementation-roadmap.md`, `project-documentation.md`,
 `protocol-specifications.md`, and `WEEKEND-SPRINT-SUMMARY.md`) describe an
-aspirational design or an early snapshot — an unimplemented Rust transport,
-Qt6/Kirigami UI, D-Bus service, and the reverse-engineered "Panta" protocol.
-**None of it is in this codebase**, and each file carries a banner saying so.
+early aspirational design — a Rust transport, a Qt6/Kirigami UI, a D-Bus
+service. **None of it is in this codebase**, and each file carries a banner
+saying so.
 
 For the current truth use `README.md` and
 `docs/companion/companion-status.md`. Do not implement against the historical

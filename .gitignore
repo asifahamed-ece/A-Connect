@@ -23,3 +23,8 @@ keyboard/heliboard/
 .kotlin/
 
 .playwright-mcp/
+
+# Ephemeral reverse-engineering scratch files — never commit.
+pf.json
+pfr.json
+chunks.txt

@@ -5,13 +5,13 @@
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20KDE-1793d1.svg)](#requirements)
 [![Electron](https://img.shields.io/badge/Electron-44-47848f.svg)](#requirements)
 
-A Linux desktop companion for OPPO / ColorOS phones — a Linux reimplementation
-of OPPO's O+ Connect. Drive your phone from a KDE desktop: mirror the screen,
+I wanted O+ Connect's features on my Linux PC — mirror your phone's screen,
 move files both ways, share the clipboard, and see notifications without
-picking the phone up.
+picking the phone up. A+ Connect is an independent open-source reimplementation
+of OPPO's O+ Connect client, built for the OPPO Reno 14 5G (ColorOS,
+Android 15/16).
 
-Built for the **OPPO Reno 14 5G (ColorOS, Android 15/16)** and developed on
-Linux. It talks to the phone two ways, and you can use either or both.
+It talks to the phone two ways, and you can use either or both.
 
 ## The two connection paths
 
@@ -30,18 +30,10 @@ over TLS. The phone never opens a listening port.
 
 ## Features
 
-- **Screen mirroring** — scrcpy 5.x with UHID input injection, which bypasses
-  ColorOS's shell touch filters, so taps and drags work.
-- **File transfer** — drag files onto the window to send them, or browse the
-  phone and pull files back. Multiple files can be selected and downloaded in
-  one batch; same-named files no longer overwrite each other.
 - **Companion file browser** — browse and search the phone's whole storage
   read-only, download single or multiple files, and push files to it.
 - **Clipboard sync** — bidirectional, background, no tap required on the
   companion path.
-- **Notification mirroring** — phone notifications appear in a desktop drawer
-  and in the app's history. Updates replace the existing bubble instead of
-  stacking duplicates.
 - **Media control** — the phone's current player is published as an MPRIS
   player, so the shell's media widget can pause, skip, and seek it.
 - **Pairing** — by QR code or address + one-time code, with certificate pinning.
@@ -121,7 +113,6 @@ if the modules are missing.
 ## Install and run
 
 ```bash
-git clone https://github.com/asifahamed-ece/Aplus_Connect.git
 cd "A+ Connect"
 npm install
 npm start
@@ -130,18 +121,6 @@ npm start
 `npm start` and `npm run dev` are the same command:
 `electron . --disable-vulkan`. The window needs a real X11/Wayland session; it
 will not run headless.
-
-### ADB path: one-time USB setup
-
-```bash
-# 1. Plug the phone in over USB
-# 2. Accept "USB debugging" on the phone
-./setup-usb.sh
-```
-
-The script enables wireless ADB, reads the phone's address, and connects. After
-that, `npm start` reconnects over Wi-Fi while both devices are on the same
-network.
 
 ### Companion path: no cable, no developer options
 
@@ -262,7 +241,7 @@ A+ Connect/
 ├── docs/
 │   ├── companion/              How the companion path works today
 │   └── superpowers/            Designs and plans for shipped work
-├── assets/                     Resources extracted from the O+ Connect client
+├── assets/                     Original A+ Connect brand assets
 └── setup-usb.sh                One-time wireless ADB setup
 ```
 
@@ -320,9 +299,8 @@ clipboard access to the default keyboard and nothing else.
 > **Historical documents.** Files archived under [`docs/archive/`](docs/archive/)
 > (`development-plan.md`, `implementation-roadmap.md`, `project-documentation.md`,
 > `protocol-specifications.md`, and `WEEKEND-SPRINT-SUMMARY.md`) describe an early
-> aspirational design — a Rust transport, a Qt6/Kirigami UI, a D-Bus service, and
-> a reverse-engineered "Panta" protocol. **None of that was built.** The shipped
-> app is Electron. They are kept in the archive for reference only.
+> aspirational design (a Rust transport, a Qt6/Kirigami UI, a D-Bus service). None
+> of that was built. The shipped app is Electron. They are kept for reference only.
 
 ## Contributing
 
@@ -347,12 +325,48 @@ Scope, stated plainly in [`NOTICE`](NOTICE):
 | Electron app (`main.js`, `preload.js`, `src/`, `services/`, `scripts/`) | MIT |
 | Android companion app (`companion-android/`) | MIT |
 | Keyboard patch (`keyboard/patch-heliboard.py`) | MIT |
-| `assets/` — extracted from OPPO's O+ Connect client | Not licensed; OPPO's property, design reference only |
+| `assets/` — original A+ Connect brand assets | MIT |
 | The A+ Connect keyboard APK (HeliBoard fork, not vendored) | GPL-3.0 |
 
 Third-party components and their licenses are listed in
 [`CREDITS.md`](CREDITS.md). If you reuse this project, keep the copyright notice
 and do not present OPPO's assets as original work.
+
+## Trademark Disclaimer
+
+A+ Connect is an independent open-source project and is not affiliated with,
+endorsed by, or sponsored by Guangdong OPPO Mobile Telecommunications Corp.,
+Ltd. "OPPO", "ColorOS", and "O+ Connect" are trademarks or registered
+trademarks of Guangdong OPPO Mobile Telecommunications Corp., Ltd. All other
+trademarks, service marks, and trade names are the property of their respective
+owners. References to these names and marks are made solely for device
+compatibility and identification purposes.
+
+## ADB Path Features
+
+A+ Connect also supports a wired ADB connection path for use cases where the
+companion app is not installed:
+
+- **Screen mirroring** — scrcpy 5.x with UHID input injection, which bypasses
+  ColorOS's shell touch filters, so taps and drags work.
+- **File transfer** — drag files onto the window to send them, or browse the
+  phone and pull files back. Multiple files can be selected and downloaded in
+  one batch; same-named files no longer overwrite each other.
+- **Notification mirroring** — phone notifications appear in a desktop drawer
+  and in the app's history. On the ADB path, text is a placeholder ("New
+  notification"); only the app name is real. The companion path carries real text.
+
+### ADB path: one-time USB setup
+
+```bash
+# 1. Plug the phone in over USB
+# 2. Accept "USB debugging" on the phone
+./setup-usb.sh
+```
+
+The script enables wireless ADB, reads the phone's address, and connects. After
+that, `npm start` reconnects over Wi-Fi while both devices are on the same
+network.
 
 ## Acknowledgements
 

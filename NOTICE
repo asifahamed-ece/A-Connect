@@ -12,10 +12,9 @@ The full text is in [`LICENSE`](LICENSE).
 
 ## Not covered by the MIT License
 
-**`assets/`** — icons, screenshots, and other resources extracted from OPPO's
-official O+ Connect client. They remain OPPO's property and are included only as
-design reference for this reimplementation. No license is granted to reuse,
-redistribute, or ship them, and they are not part of any claim of original work.
+**`assets/`** — icons, screenshots, and other resources under the A+ Connect
+brand. These are original project work, licensed under the MIT License along
+with the rest of the source. See [`LICENSE`](LICENSE) for full terms.
 
 **The A+ Connect keyboard** — a fork of [HeliBoard](https://github.com/HeliBorg/HeliBoard)
 distributed under GPL-3.0. The fork's source is not vendored here: it is
@@ -33,3 +32,13 @@ See [`CREDITS.md`](CREDITS.md) for the full table with licenses, including
 Electron (MIT), the `@yume-chan/adb` family (MIT), `dbus-next` (MIT), `qrcode`
 (MIT), Scrcpy (Apache-2.0), AndroidX / Jetpack Compose (Apache-2.0), and
 HeliBoard (GPL-3.0).
+
+## Trademark Disclaimer
+
+A+ Connect is an independent open-source project and is not affiliated with,
+endorsed by, or sponsored by Guangdong OPPO Mobile Telecommunications Corp.,
+Ltd. "OPPO", "ColorOS", and "O+ Connect" are trademarks or registered
+trademarks of Guangdong OPPO Mobile Telecommunications Corp., Ltd. All other
+trademarks, service marks, and trade names are the property of their respective
+owners. References to these names and marks are made solely for device
+compatibility and identification purposes.

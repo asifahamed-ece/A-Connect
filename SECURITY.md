@@ -49,8 +49,7 @@ Out of scope:
 - Malicious apps on the phone that already hold signature-level privileges.
 - Vulnerabilities in `adb`, `scrcpy`, Electron, or Android itself — report those
   upstream, though a heads-up is welcome.
-- The contents of `assets/` (extracted from OPPO's O+ Connect client) and the
-  GPL-3.0 keyboard fork's upstream code.
+- The GPL-3.0 keyboard fork's upstream code.
 
 ## What the app does with your data
 

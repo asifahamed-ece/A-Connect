@@ -140,6 +140,5 @@ agreed on before the code exists.
 ## License
 
 By contributing you agree that your contribution is licensed under the
-project's [MIT License](LICENSE). The `assets/` directory (extracted from OPPO's
-O+ Connect client) and the GPL-3.0 keyboard fork are not covered by it; see
-[`NOTICE`](NOTICE) and [`CREDITS.md`](CREDITS.md).
+project's [MIT License](LICENSE). The GPL-3.0 keyboard fork is not covered
+by it; see [`NOTICE`](NOTICE) and [`CREDITS.md`](CREDITS.md).
