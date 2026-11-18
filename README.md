@@ -8,7 +8,7 @@
 I wanted O+ Connect's features on my Linux PC — mirror your phone's screen,
 move files both ways, share the clipboard, and see notifications without
 picking the phone up. A+ Connect is an independent open-source reimplementation
-of OPPO's O+ Connect client, built for the OPPO Reno 14 5G (ColorOS,
+of OPPO's O+ Connect client, built for the OPPO Reno 14 5G (ColorOS 15/16/17,
 Android 15/16).
 
 It talks to the phone two ways, and you can use either or both.
