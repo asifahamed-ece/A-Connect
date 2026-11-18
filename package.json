@@ -10,6 +10,7 @@
     "dev": "electron . --disable-vulkan",
     "install-desktop": "bash scripts/install-desktop-entry.sh",
     "check:history": "node scripts/check-file-history.js",
+    "test": "for f in scripts/check-*.js scripts/protocol-check.js; do node $f || exit 1; done",
     "dist": "electron-builder --linux AppImage --publish never"
   },
   "dependencies": {

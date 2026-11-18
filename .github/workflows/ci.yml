@@ -44,7 +44,7 @@ jobs:
           node --check "${files[@]}"
 
       - name: File history and QR checks
-        run: npm run check:history
+        run: npm test
 
   android:
     name: Android / unit tests + debug APK
