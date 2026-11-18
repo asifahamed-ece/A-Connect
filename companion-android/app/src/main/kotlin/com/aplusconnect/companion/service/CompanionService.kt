@@ -1662,7 +1662,7 @@ class CompanionService : Service() {
             val running = instance
             if (running != null) {
                 running.fileThread.execute {
-                    running.sendFile(context, uri, transferId = "", onProgress = {}, onComplete = { _, _ -> })
+                    sendFile(context, uri, transferId = "", onProgress = {}, onComplete = { _, _ -> })
                 }
                 return
             }
@@ -1670,11 +1670,12 @@ class CompanionService : Service() {
             // background service can open the content:// URI after ShareReceiver
             // finishes. Without this, Android revokes the transient permission
             // and openInputStream throws SecurityException.
-            val intent = Intent(context, CompanionService::class.java)
-                .setAction(ACTION_SEND_FILE)
-                .setData(uri)
-                .setClipData(ClipData.newRawUri("shared_file", uri))
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val intent = Intent(context, CompanionService::class.java).apply {
+                action = ACTION_SEND_FILE
+                data = uri
+                clipData = ClipData.newRawUri("shared_file", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
