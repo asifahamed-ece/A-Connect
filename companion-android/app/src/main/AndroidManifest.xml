@@ -89,6 +89,25 @@
             android:taskAffinity=""
             android:theme="@style/Theme.APlusTransparent" />
 
+        <!-- Share-sheet target: "Send to PC via A+ Connect". Transparent and
+             noHistory so it never clutters recents; singleTask so repeated
+             shares land on the same instance. -->
+        <activity
+            android:name=".share.ShareReceiver"
+            android:exported="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.APlusTransparent"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".service.CompanionService"
             android:exported="false"

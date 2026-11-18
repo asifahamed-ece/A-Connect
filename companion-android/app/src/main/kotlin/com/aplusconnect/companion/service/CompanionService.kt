@@ -319,6 +319,13 @@ class CompanionService : Service() {
         if (intent?.action == ACTION_CANCEL_TRANSFER) {
             intent.getStringExtra(EXTRA_TRANSFER_ID)?.let { id -> fileThread.execute { cancelTransferHere(id) } }
         }
+
+        // A shared file from another app: hand it to the send thread so the
+        // socket write never touches the main thread.
+        intent?.getParcelableExtra<android.net.Uri>(EXTRA_FILE_URI)?.let { uri ->
+            fileThread.execute { sendFile(this@CompanionService, uri, transferId = "", onProgress = {}, onComplete = { _, _ -> }) }
+        }
+
         val text = intent?.getStringExtra(EXTRA_CLIPBOARD)
         if (text != null) {
             // The broadcast arrives on the main thread, and Android refuses a
@@ -1483,7 +1490,10 @@ class CompanionService : Service() {
         const val EXTRA_CLIPBOARD = "clipboard"
         const val ACTION_CONNECT = "com.aplusconnect.companion.CONNECT"
 
-        /** The notification says the computer wants to see this screen. */
+        /** A file the user shared from another app (share sheet → PC). */
+        const val ACTION_SEND_FILE = "com.aplusconnect.companion.SEND_FILE"
+
+        /** The mirror notification says the computer wants to see this screen. */
         const val ACTION_MIRROR = "com.aplusconnect.companion.MIRROR"
 
         /** The "Stop sharing" action on the foreground notification. */
@@ -1502,6 +1512,9 @@ class CompanionService : Service() {
         const val ACTION_CANCEL_TRANSFER = "com.aplusconnect.companion.CANCEL_TRANSFER"
         const val EXTRA_TRANSFER_ID = "transfer_id"
         const val CANCELLED = "Cancelled"
+
+        /** URI of a file to send to the PC, carried with ACTION_SEND_FILE. */
+        const val EXTRA_FILE_URI = "file_uri"
 
         /**
          * The user granted capture. Called by MainActivity, which is the only
@@ -1629,6 +1642,33 @@ class CompanionService : Service() {
             }
             val intent = Intent(context, CompanionService::class.java)
                 .putExtra(EXTRA_CLIPBOARD, text)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "could not start the service: ${e.message}")
+            }
+        }
+
+        /**
+         * Hands one shared file to the service, starting it if it is not
+         * running yet. Used by ShareReceiver so the file transfer runs on the
+         * send thread and outlives the transparent share activity.
+         */
+        fun deliverSendFile(context: Context, uri: android.net.Uri) {
+            val running = instance
+            if (running != null) {
+                running.fileThread.execute {
+                    running.sendFile(context, uri, transferId = "", onProgress = {}, onComplete = { _, _ -> })
+                }
+                return
+            }
+            val intent = Intent(context, CompanionService::class.java)
+                .setAction(ACTION_SEND_FILE)
+                .putExtra(EXTRA_FILE_URI, uri)
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
