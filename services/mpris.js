@@ -16,6 +16,7 @@
 const { EventEmitter } = require('events');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const dbus = require('dbus-next');
 
