@@ -191,21 +191,17 @@ class AdbService extends EventEmitter {
     if (this.isPolling) return;
     this.isPolling = true;
 
-    const check = async () => {
+    const tick = async () => {
+      // Never run a tick after stopPolling() has been called.
+      if (!this.isPolling) return;
       try {
         const devices = await this.getDevices();
         const active = devices.find(d => d.state === 'device');
         if (active) {
-          if (!this.connectedDevice || this.connectedDevice.id !== active.id) {
-            const info = await this.getDeviceInfo(active.id);
-            this.connectedDevice = info;
-            this.emit('device-connected', info);
-          } else {
-            // Update live telemetry (battery etc)
-            const info = await this.getDeviceInfo(active.id);
-            this.connectedDevice = info;
-            this.emit('telemetry-updated', info);
-          }
+          const isNewDevice = !this.connectedDevice || this.connectedDevice.id !== active.id;
+          const info = await this.getDeviceInfo(active.id);
+          this.connectedDevice = info;
+          this.emit(isNewDevice ? 'device-connected' : 'telemetry-updated', info);
         } else {
           if (this.connectedDevice) {
             const last = this.connectedDevice;
@@ -215,11 +211,17 @@ class AdbService extends EventEmitter {
         }
       } catch (e) {
         console.error('Polling error:', e);
+      } finally {
+        // Reschedule only after this tick fully completes, so two ticks never
+        // overlap and race on `connectedDevice`. A stalled or errored tick still
+        // re-schedules itself instead of dropping a cycle.
+        if (this.isPolling) {
+          this.pollInterval = setTimeout(tick, intervalMs);
+        }
       }
     };
 
-    check();
-    this.pollInterval = setInterval(check, intervalMs);
+    tick();
   }
 
   stopPolling() {
