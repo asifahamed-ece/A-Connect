@@ -1666,9 +1666,15 @@ class CompanionService : Service() {
                 }
                 return
             }
+            // Attach the URI to both data and clipData with a read grant so the
+            // background service can open the content:// URI after ShareReceiver
+            // finishes. Without this, Android revokes the transient permission
+            // and openInputStream throws SecurityException.
             val intent = Intent(context, CompanionService::class.java)
                 .setAction(ACTION_SEND_FILE)
-                .putExtra(EXTRA_FILE_URI, uri)
+                .setData(uri)
+                .setClipData(ClipData.newRawUri("shared_file", uri))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
