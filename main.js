@@ -33,6 +33,7 @@ const CompanionService = require('./services/companion');
 const MirrorService = require('./services/mirror');
 const h264 = require('./services/h264');
 const { MprisService } = require('./services/mpris');
+const { DesktopSendService } = require('./services/desktop-send');
 
 let mainWindow = null;
 let tray = null;
@@ -62,6 +63,8 @@ let mirrorInfo = { state: 'idle', reason: null, width: 0, height: 0, encoder: ''
 // (Caelestia, Waybar, playerctl) can show and control it. The app has no media
 // panel of its own on purpose.
 const mpris = new MprisService();
+
+const desktopSend = new DesktopSendService(companion);
 
 // Connect companion to clipboard sync
 clipboardSync.setCompanion(companion);
@@ -952,6 +955,7 @@ app.whenReady().then(() => {
   adb.startPolling(2500);
   companion.start();
   mpris.start().catch((e) => console.error('[mpris] start failed:', e.message));
+  desktopSend.start().catch((e) => console.error('[desktop-send] start failed:', e.message));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -969,6 +973,7 @@ app.on('before-quit', () => {
   clipboardSync.stop();
   notifications.stop();
   mpris.stop();
+  desktopSend.stop();
 });
 
 app.on('window-all-closed', () => {
