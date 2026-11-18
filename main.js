@@ -481,18 +481,22 @@ function setupServiceEvents() {
 
   companion.on('client-disconnected', (data) => {
     console.log(`[companion] disconnected phone: ${data.deviceId}`);
-    // A phone that is not on the control channel cannot be streaming to us;
-    // the video socket may linger for a moment, so end the session here.
-    if (mirror) stopMirror('link-lost', { tellPhone: false });
-    // Nothing is playing on a phone that is not there.
-    mpris.clear();
-    // The companion is gone. If a phone is still on USB, the ADB poller takes
-    // the notifications back.
-    adb.getDevices()
-      .then((devices) => {
-        if (devices && devices.length > 0) notifications.start(devices[0].id);
-      })
-      .catch(() => {});
+    // Only tear down shared resources when no other phone remains connected;
+    // the socket is already removed from clients before this event fires.
+    if (companion.connectedClients.length === 0) {
+      // A phone that is not on the control channel cannot be streaming to us;
+      // the video socket may linger for a moment, so end the session here.
+      if (mirror) stopMirror('link-lost', { tellPhone: false });
+      // Nothing is playing on a phone that is not there.
+      mpris.clear();
+      // The companion is gone. If a phone is still on USB, the ADB poller takes
+      // the notifications back.
+      adb.getDevices()
+        .then((devices) => {
+          if (devices && devices.length > 0) notifications.start(devices[0].id);
+        })
+        .catch(() => {});
+    }
     updateTrayMenu();
     sendToRenderer('event:companion-disconnected', data);
   });
