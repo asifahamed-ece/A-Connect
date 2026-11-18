@@ -28,6 +28,7 @@ function serviceWith(clients = []) {
   service.clients = new Set(clients);
   service.pairedDevices = {};
   service.paired = [];
+  service.outgoing = new Map();
   service.failedLists = 0;
   service.disconnects = [];
   service.on('client-paired', (device) => service.paired.push(device));
