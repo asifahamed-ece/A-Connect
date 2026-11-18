@@ -513,7 +513,10 @@ class CompanionService : Service() {
                 }
             },
             onClosed = { reason ->
-                if (reason.contains("auth-failed")) {
+                if (reason.contains("auth-failed")
+                    || reason.contains("fingerprint")
+                    || reason.contains("certificate")
+                    || reason.contains("cert")) {
                     // The computer does not know this phone any more: forget
                     // the secret so the next attempt pairs with the code.
                     settings.clearSecret()
