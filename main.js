@@ -81,7 +81,13 @@ let mirrorInfo = { state: 'idle', reason: null, width: 0, height: 0, encoder: ''
 // panel of its own on purpose.
 const mpris = new MprisService();
 
-const desktopSend = new DesktopSendService(companion);
+const desktopSend = new DesktopSendService(companion, {
+  // How the "Send to phone" entry starts the app when it is closed: the
+  // AppImage if we were launched from one, otherwise this Electron build.
+  launchCommand: process.env.APPIMAGE
+    ? `"${process.env.APPIMAGE}"`
+    : `"${process.execPath}" "${app.getAppPath()}" --disable-vulkan`,
+});
 
 // Connect companion to clipboard sync
 clipboardSync.setCompanion(companion);
