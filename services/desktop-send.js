@@ -16,10 +16,13 @@
  */
 
 const { exec } = require('child_process');
+const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
+
+const execAsync = promisify(exec);
 
 const dbus = require('dbus-next');
 const { Interface } = dbus.interface;
@@ -104,7 +107,7 @@ class DesktopSendService extends EventEmitter {
         return;
       }
 
-      this.installDesktopMenu();
+      await this.installDesktopMenu();
       console.log(`[desktop-send] publishing ${BUS_NAME}`);
     } catch (e) {
       // A desktop with no session bus simply does not get the send menu.
@@ -113,7 +116,7 @@ class DesktopSendService extends EventEmitter {
   }
 
   /** Installs the Dolphin service menu into both KDE menu locations. */
-  installDesktopMenu() {
+  async installDesktopMenu() {
     for (const dir of KDE_DIRS) {
       try {
         fs.mkdirSync(dir, { recursive: true });
@@ -122,7 +125,24 @@ class DesktopSendService extends EventEmitter {
         console.error(`[desktop-send] could not install ${dir}:`, e.message);
       }
     }
-    exec('kbuildsycoca6 2>/dev/null || kbuildsycoca5 2>/dev/null || true', () => {});
+
+    // Rebuild the KService cache so Dolphin discovers the new .desktop entry.
+    // kbuildsycoca6 (Plasma 6) first, kbuildsycoca5 (Plasma 5) fallback.
+    // Don't swallow the exit code/stderr: if sycoca fails the operator needs to know.
+    let lastErr = null;
+    for (const cmd of ['kbuildsycoca6', 'kbuildsycoca5']) {
+      try {
+        const { stderr, code } = await execAsync(`${cmd} 2>&1`);
+        if (code === 0) {
+          console.log(`[desktop-send] sycoca rebuilt via ${cmd}`);
+          return;
+        }
+        lastErr = new Error(`${cmd} exited with code ${code}: ${stderr.trim()}`);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    console.error(`[desktop-send] could not rebuild sycoca cache: ${lastErr && lastErr.message}`);
   }
 
   /** Best-effort desktop notification when no phone is connected to receive. */
