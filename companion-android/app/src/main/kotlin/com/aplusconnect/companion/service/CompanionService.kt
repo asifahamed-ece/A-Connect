@@ -1453,8 +1453,8 @@ class CompanionService : Service() {
         CompanionService.showTransferNotification(this, id, force)
     }
 
-    private fun finishTransferNotification(id: String, title: String, text: String, openUri: String? = null, mime: String? = null) {
-        CompanionService.finishTransferNotification(this, id, title, text, openUri, mime)
+    private fun finishTransferNotification(id: String, title: String, text: String, openUri: String? = null, mime: String? = null, icon: Int? = null) {
+        CompanionService.finishTransferNotification(this, id, title, text, openUri, mime, icon)
     }
 
     private fun transferNotificationId(id: String): Int = CompanionService.transferNotificationId(id)
@@ -1697,13 +1697,21 @@ class CompanionService : Service() {
             val transferWireId = "send_$id"
             var name = "file"
             var size = 0L
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val n = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                val s = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                if (cursor.moveToFirst()) {
-                    if (n != -1) cursor.getString(n)?.let { name = it }
-                    if (s != -1) size = cursor.getLong(s)
+            // This runs on a pool thread, so an uncaught provider error would
+            // take the whole process down - a share whose read grant was
+            // revoked must fail one transfer, not the app.
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val n = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val s = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (cursor.moveToFirst()) {
+                        if (n != -1) cursor.getString(n)?.let { name = it }
+                        if (s != -1) size = cursor.getLong(s)
+                    }
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "share-sheet send could not read $uri: ${e.message}")
+                return
             }
             CompanionService.sendFile(
                 context = context,
@@ -1797,10 +1805,14 @@ class CompanionService : Service() {
                 .build()
             try {
                 instance.getSystemService(NotificationManager::class.java)?.notify(transferNotificationId(id), notification)
-            } catch (_: SecurityException) {}
+            } catch (e: SecurityException) {
+                // The usual cause is a missing POST_NOTIFICATIONS grant; say so
+                // instead of failing blind.
+                Log.w(TAG, "transfer notification blocked: ${e.message}")
+            }
         }
 
-        private fun finishTransferNotification(instance: CompanionService, id: String, title: String, text: String, openUri: String? = null, mime: String? = null) {
+        private fun finishTransferNotification(instance: CompanionService, id: String, title: String, text: String, openUri: String? = null, mime: String? = null, icon: Int? = null) {
             instance.notifiedAt.remove(id)
             val manager = instance.getSystemService(NotificationManager::class.java) ?: return
             val tap = if (openUri != null) {
@@ -1812,13 +1824,15 @@ class CompanionService : Service() {
             val builder = Notification.Builder(instance, TRANSFER_CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(text)
-                .setSmallIcon(if (openUri != null) android.R.drawable.stat_sys_download_done else android.R.drawable.stat_notify_error)
+                .setSmallIcon(icon ?: if (openUri != null) android.R.drawable.stat_sys_download_done else android.R.drawable.stat_notify_error)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
             if (tap != null) builder.setContentIntent(tap)
             try {
                 manager.notify(transferNotificationId(id), builder.build())
-            } catch (_: SecurityException) {}
+            } catch (e: SecurityException) {
+                Log.w(TAG, "transfer notification blocked: ${e.message}")
+            }
         }
 
         private fun transferNotificationId(id: String): Int = TRANSFER_NOTIFICATION_BASE + (id.hashCode() and 0xFFFF)
@@ -1966,6 +1980,17 @@ class CompanionService : Service() {
                     inputStream.close()
 
                     active.sendFileDone(transferId)
+                    // The file is on the computer, so the ongoing "Sending ..."
+                    // has to become a real result. Without this it stays in the
+                    // shade for as long as the service lives.
+                    LiveTransfers.finish(transferId)
+                    CompanionService.finishTransferNotification(
+                        inst,
+                        transferId,
+                        "Sent $fileName",
+                        if (fileSize > 0) com.aplusconnect.companion.ui.humanBytes(fileSize) else "Sent to the computer",
+                        icon = android.R.drawable.stat_sys_upload_done,
+                    )
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         onProgress(1f)
                         onComplete(true, null)

@@ -385,6 +385,29 @@ private fun MainScreen(settings: CompanionSettings, appearance: SettingsAppearan
         else notify("The camera is needed to scan the QR code.", error = true, action = "Enter code") { showManual = true }
     }
 
+    // Android 13 and later drop every notification from an app that never asked
+    // for POST_NOTIFICATIONS. The service's notify() calls cannot tell: they
+    // are either swallowed as a SecurityException or simply never shown. The
+    // whole transfer story lives in notifications - progress, "Received ..."
+    // and the Cancel action - so ask once, on first run.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            // A second denial is permanent, so the snackbar is the last word.
+            notify("Allow notifications to follow transfers.", error = true, action = "Settings") {
+                openAppNotificationSettings(context)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     fun startSend(uri: Uri, existingId: Long? = null) {
         val id = existingId ?: System.nanoTime()
         val (name, size) = queryFile(context, uri)
@@ -896,6 +919,32 @@ private fun openNotificationAccess(context: Context) {
         context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (_: Exception) {
         context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+/**
+ * The app's own notification settings page.
+ *
+ * Not the same as openNotificationAccess(): that one lets the app read the
+ * phone's notifications for the computer. This one decides whether the app
+ * may show its own transfer notifications.
+ */
+private fun openAppNotificationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", context.packageName, null))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+            context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
     }
 }
 
