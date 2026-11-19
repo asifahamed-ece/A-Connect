@@ -21,10 +21,33 @@ const { execFile } = require('child_process');
 const { EventEmitter } = require('events');
 
 const dbus = require('dbus-next');
+const { Variant } = dbus;
 
 const BUS_NAME = 'org.freedesktop.Notifications';
 const OBJECT_PATH = '/org/freedesktop/Notifications';
 const INTERFACE = 'org.freedesktop.Notifications';
+
+/**
+ * The daemon's hints argument is `a{sv}`: every value must be a D-Bus variant.
+ * Plain numbers and booleans are rejected by dbus-next ("expected a Variant"),
+ * so wrap them here and let callers keep passing ordinary values.
+ */
+function toHints(hints) {
+  const out = {};
+  for (const [key, value] of Object.entries(hints || {})) {
+    if (value && typeof value === 'object' && typeof value.signature === 'string') {
+      out[key] = value; // already a Variant
+    } else if (typeof value === 'boolean') {
+      out[key] = new Variant('b', value);
+    } else if (typeof value === 'number') {
+      // KDE reads the progress hint "value" as an int32 percentage (0-100).
+      out[key] = new Variant('i', Math.trunc(value));
+    } else if (typeof value === 'string') {
+      out[key] = new Variant('s', value);
+    }
+  }
+  return out;
+}
 
 /** The plain popup, for a desktop with no daemon on the session bus. */
 function notifySend(args) {
@@ -71,6 +94,7 @@ class DesktopNotify extends EventEmitter {
       const proxy = await bus.getProxyObject(BUS_NAME, OBJECT_PATH);
       this.daemon = proxy.getInterface(INTERFACE);
       this.bindClosed();
+      this.bindActions();
       return true;
     } catch (e) {
       console.error(`[desktop-notify] no notification daemon: ${e.message}`);
@@ -106,8 +130,14 @@ class DesktopNotify extends EventEmitter {
    * Posts or updates one notification, keyed by our own stable key.
    *
    * The key is what makes the second post a replace rather than a copy.
+   *
+   * @param actions - D-Bus action pairs [key, label, ...] for buttons such as
+   *   ['cancel', 'Cancel']. The daemon emits 'action' on this instance when one
+   *   is clicked.
+   * @param hints - notification hints such as { value: <int32> } for a progress
+   *   bar, or { urgent: <boolean> }.
    */
-  async notify(key, { summary = '', body = '', icon } = {}) {
+  async notify(key, { summary = '', body = '', icon, actions = [], hints = {} } = {}) {
     const started = await this.start();
     if (!started || !this.daemon) {
       this.fallbackNotify({ summary, body });
@@ -122,8 +152,8 @@ class DesktopNotify extends EventEmitter {
         icon || this.icon,
         summary || '',
         body || '',
-        [],
-        {},
+        actions,
+        toHints(hints),
         this.timeout
       );
       if (typeof id === 'number' && id > 0) this.ids.set(key, id);
@@ -147,6 +177,24 @@ class DesktopNotify extends EventEmitter {
     } catch (e) {
       console.error(`[desktop-notify] could not close a notification: ${e.message}`);
       return false;
+    }
+  }
+
+  /** Emits 'action' when the user clicks a notification action button. */
+  async bindActions() {
+    if (this.actionsBound || !this.daemon) return;
+    this.actionsBound = true;
+    try {
+      this.daemon.on('ActionInvoked', (id, actionKey) => {
+        for (const [key, value] of this.ids) {
+          if (value === id) {
+            this.emit('action', { key, id, action: actionKey });
+            return;
+          }
+        }
+      });
+    } catch (e) {
+      console.error(`[desktop-notify] could not watch for actions: ${e.message}`);
     }
   }
 

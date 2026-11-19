@@ -34,6 +34,7 @@ const MirrorService = require('./services/mirror');
 const h264 = require('./services/h264');
 const { MprisService } = require('./services/mpris');
 const { DesktopSendService } = require('./services/desktop-send');
+const { DesktopNotify } = require('./services/desktop-notify');
 
 let mainWindow = null;
 let tray = null;
@@ -46,6 +47,22 @@ const fileTransfer = new FileTransferService();
 const clipboardSync = new ClipboardSyncService();
 const notifications = new NotificationService();
 const companion = new CompanionService();
+const desktopNotify = new DesktopNotify();
+
+/**
+ * Handle notification action clicks (e.g., Cancel button on transfer notifications).
+ */
+desktopNotify.on('action', ({ key, action }) => {
+  if (action === 'cancel') {
+    if (key.startsWith('send-')) {
+      const transferId = key.replace('send-', '');
+      companion.cancelFile(transferId);
+    } else if (key.startsWith('pull-')) {
+      const transferId = key.replace('pull-', '');
+      companion.cancelFile(transferId);
+    }
+  }
+});
 
 /**
  * The live screen mirroring session, if any.
@@ -587,6 +604,15 @@ function setupServiceEvents() {
       received: data.received,
       total: data.total,
     });
+
+    // Also show desktop notification with progress bar and cancel action
+    const percent = data.total > 0 ? Math.round((data.received / data.total) * 100) : 0;
+    desktopNotify.notify(`pull-${data.id}`, {
+      summary: `Receiving ${data.name || 'file'} from phone`,
+      body: `${percent}% completed`,
+      hints: { value: percent },
+      actions: ['cancel', 'Cancel'],
+    });
   });
 
   companion.on('file-transfer-done', (data) => {
@@ -602,6 +628,7 @@ function setupServiceEvents() {
         targetPath: data.path,
       });
       openLocalFile(data.path, data.name);
+      desktopNotify.close(`pull-${data.id}`);
       return;
     }
 
@@ -612,6 +639,7 @@ function setupServiceEvents() {
       filename: data.name,
       targetPath: data.path,
     });
+    desktopNotify.close(`pull-${data.id}`);
     try {
       execFile('notify-send', ['-a', 'A+ Connect', 'File Received', `${data.name} saved to Downloads`]);
     } catch {}
@@ -637,9 +665,19 @@ function setupServiceEvents() {
       received: data.received,
       total: data.total,
     });
+
+    // Also show desktop notification with progress bar and cancel action
+    const percent = data.total > 0 ? Math.round((data.received / data.total) * 100) : 0;
+    desktopNotify.notify(`send-${data.id}`, {
+      summary: `Sending ${data.name || 'file'} to phone`,
+      body: `${percent}% completed`,
+      hints: { value: percent },
+      actions: ['cancel', 'Cancel'],
+    });
   });
   companion.on('file-send-cancelled', (data) => {
     sendToRenderer('event:transfer-progress', { status: 'cancelled', id: data.id });
+    desktopNotify.close(`send-${data.id}`);
     if (data.by === 'phone') {
       sendToRenderer('event:toast', { message: `The phone cancelled ${data.name}`, kind: 'err' });
     }
@@ -652,10 +690,12 @@ function setupServiceEvents() {
       filename: data.name,
       error: data.error,
     });
+    desktopNotify.close(`send-${data.id}`);
     sendToRenderer('event:toast', { message: `${data.name} didn't reach the phone: ${data.error}`, kind: 'err' });
   });
   companion.on('file-transfer-cancelled', (data) => {
     sendToRenderer('event:transfer-progress', { status: 'cancelled', id: data.id });
+    desktopNotify.close(`pull-${data.id}`);
     if (data.by === 'phone') {
       sendToRenderer('event:toast', { message: `The phone cancelled ${data.name}`, kind: 'err' });
     }
@@ -671,6 +711,7 @@ function setupServiceEvents() {
       localFilePath: data.path,
       targetPath: 'Phone · Downloads',
     });
+    desktopNotify.close(`send-${data.id}`);
   });
 
   companion.on('file-transfer-error', (data) => {
