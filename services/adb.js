@@ -190,6 +190,10 @@ class AdbService extends EventEmitter {
   startPolling(intervalMs = 3000) {
     if (this.isPolling) return;
     this.isPolling = true;
+    // How many consecutive polls must fail before we consider the device gone.
+    // This prevents flapping when `adb devices` transiently omits the device.
+    const DISCONNECT_THRESHOLD = 3;
+    let missedPolls = 0;
 
     const tick = async () => {
       // Never run a tick after stopPolling() has been called.
@@ -198,12 +202,14 @@ class AdbService extends EventEmitter {
         const devices = await this.getDevices();
         const active = devices.find(d => d.state === 'device');
         if (active) {
+          missedPolls = 0;
           const isNewDevice = !this.connectedDevice || this.connectedDevice.id !== active.id;
           const info = await this.getDeviceInfo(active.id);
           this.connectedDevice = info;
           this.emit(isNewDevice ? 'device-connected' : 'telemetry-updated', info);
         } else {
-          if (this.connectedDevice) {
+          missedPolls += 1;
+          if (this.connectedDevice && missedPolls >= DISCONNECT_THRESHOLD) {
             const last = this.connectedDevice;
             this.connectedDevice = null;
             this.emit('device-disconnected', last);
@@ -211,6 +217,7 @@ class AdbService extends EventEmitter {
         }
       } catch (e) {
         console.error('Polling error:', e);
+        // Don't count errors as missed polls - they may be transient adb server issues
       } finally {
         // Reschedule only after this tick fully completes, so two ticks never
         // overlap and race on `connectedDevice`. A stalled or errored tick still
