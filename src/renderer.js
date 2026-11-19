@@ -1074,6 +1074,8 @@ function transferRow(t) {
     </div>`;
 }
 
+let transferSignature = '';
+
 /** The Files page lists only live transfers; finished ones are in History. */
 function renderTransfers() {
   const list = $('transfer-list');
@@ -1082,13 +1084,55 @@ function renderTransfers() {
 
   const section = $('transfers-section');
   if (section) section.hidden = items.length === 0;
-  if (list) list.innerHTML = items.map(transferRow).join('');
+
+  // Progress arrives many times a second. Rebuilding the markup on every tick
+  // would replace the Cancel button between mousedown and mouseup, so the click
+  // never lands - the row vanishes under the pointer and the transfer keeps
+  // going. Rebuild only when the rows or their states change; otherwise just
+  // move the numbers.
+  const signature = items.map((t) => `${t.id}:${t.status}`).join('|');
+  if (list && signature === transferSignature) {
+    items.forEach(updateTransferRow);
+  } else if (list) {
+    list.innerHTML = items.map(transferRow).join('');
+    transferSignature = signature;
+  }
 
   $('btn-cancel-all').hidden = activeCount === 0;
 
   const badge = $('badge-files');
   badge.hidden = activeCount === 0;
   badge.textContent = String(activeCount);
+}
+
+/** Repaints one live row without touching its buttons or focus. */
+function updateTransferRow(t) {
+  const list = $('transfer-list');
+  if (!list) return;
+  const row = [...list.children].find((el) => el.dataset.id === t.id);
+  if (!row) return;
+
+  const total = Number(t.total || t.size) || 0;
+  const received = Number(t.received) || 0;
+  const pct = t.status === 'active' && total > 0 && received > 0
+    ? Math.min(100, Math.round((received / total) * 100))
+    : null;
+  const toPhone = t.type !== 'pull';
+
+  const meta = row.querySelector('.transfer-meta');
+  if (meta) {
+    meta.textContent = pct !== null
+      ? `${formatBytes(received)} of ${formatBytes(total)} · ${pct}%`
+      : `${formatBytes(t.size)} · ${toPhone ? 'sending…' : 'receiving…'}`;
+  }
+
+  const bar = row.querySelector('.bar');
+  if (bar && pct !== null) {
+    bar.classList.add('is-determinate');
+    bar.setAttribute('aria-valuenow', String(pct));
+    const fill = bar.querySelector('span');
+    if (fill) fill.style.width = `${pct}%`;
+  }
 }
 
 function upsertTransfer(patch) {
