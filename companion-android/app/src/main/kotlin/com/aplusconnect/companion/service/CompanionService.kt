@@ -1662,7 +1662,7 @@ class CompanionService : Service() {
             val running = instance
             if (running != null) {
                 running.fileThread.execute {
-                    sendFile(context, uri, transferId = "", onProgress = {}, onComplete = { _, _ -> })
+                    deliverSendFileNow(context, uri)
                 }
                 return
             }
@@ -1685,6 +1685,52 @@ class CompanionService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "could not start the service: ${e.message}")
             }
+        }
+
+        /**
+         * Sends one shared file on the file thread with a stable transfer ID so
+         * the ongoing status-bar notification, cancel action, and transfer
+         * history all work for share-sheet sends (mirrors MainActivity.startSend).
+         */
+        private fun deliverSendFileNow(context: Context, uri: android.net.Uri) {
+            val id = System.nanoTime()
+            val transferWireId = "send_$id"
+            var name = "file"
+            var size = 0L
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val n = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                val s = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (cursor.moveToFirst()) {
+                    if (n != -1) cursor.getString(n)?.let { name = it }
+                    if (s != -1) size = cursor.getLong(s)
+                }
+            }
+            CompanionService.sendFile(
+                context = context,
+                uri = uri,
+                transferId = transferWireId,
+                onProgress = { p ->
+                    LiveTransfers.progress(transferWireId, (size * p.toLong()).coerceAtMost(size))
+                },
+                onComplete = { success, error ->
+                    if (success) {
+                        FileHistory(context).add(
+                            SharedFileEntry(
+                                id = "sent-$id",
+                                name = name,
+                                direction = Direction.Sent,
+                                sizeBytes = size,
+                                timestamp = System.currentTimeMillis(),
+                                uri = uri.toString(),
+                            )
+                        )
+                    } else if (error == CompanionService.CANCELLED) {
+                        // Cancelled transfers leave no history row.
+                    } else {
+                        Log.w(TAG, "share-sheet send failed for $name: $error")
+                    }
+                },
+            )
         }
 
         /** Manually re-establishes the connection to the computer. */
